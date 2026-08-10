@@ -1,0 +1,37 @@
+// Copyright (c) 2020-2022 Chris Richardson, Matthew Scroggs and Garth N. Wells
+// FEniCS Project
+// SPDX-License-Identifier:    MIT
+
+#pragma once
+
+#include "cell.h"
+#include "element-families.h"
+#include "finite-element.h"
+#include <concepts>
+
+namespace hellofem::basis::element {
+    /// @brief Create a Lagrange(-like) element on cell with given degree
+    /// @param[in] celltype The element cell type
+    /// @param[in] degree The degree of the element
+    /// @param[in] variant The variant of the element to be created
+    /// @param[in] discontinuous Controls whether the element is continuous or
+    /// discontinuous
+    /// @param[in] dof_ordering A mapping from the reference DOF order to a
+    /// new permuted order (empty for the default ordering)
+    /// @return A finite element
+    template <std::floating_point T>
+    FiniteElement<T> create_lagrange(cell::type celltype, int degree,
+        lagrange_variant variant, bool discontinuous,
+        std::vector<int> dof_ordering = {});
+
+    /// @brief Create an iso macro element on cell with given degree
+    /// @param[in] celltype The element cell type
+    /// @param[in] degree The degree of the element
+    /// @param[in] variant The variant of the element to be created
+    /// @param[in] discontinuous Controls whether the element is continuous or
+    /// discontinuous
+    /// @return A finite element
+    template <std::floating_point T>
+    FiniteElement<T> create_iso(cell::type celltype, int degree,
+        lagrange_variant variant, bool discontinuous);
+} // namespace hellofem::basis::element

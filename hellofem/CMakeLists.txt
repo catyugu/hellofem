@@ -4,10 +4,10 @@ file(GLOB_RECURSE HELLOFEM_HEADERS CONFIGURE_DEPENDS *.h *.hpp)
 
 add_library(hellofem STATIC ${HELLOFEM_SOURCES} ${HELLOFEM_HEADERS})
 
-# include 根：hellofem/ 目录（头文件按 <mod>/xxx.h 引用，如 basis/types.h、common/IndexMap.h）
+# include 根：hellofem/ 目录（头文件按 <mod>/xxx.h 引用)
 target_include_directories(hellofem PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-    ${CMAKE_BINARY_DIR}   # config.h
+    ${CMAKE_BINARY_DIR} # for config.h
 )
 
 # Eigen 头目录标记为 SYSTEM，避免 /W4 /WX 对 Eigen 头报警告。
