@@ -10,6 +10,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(HELLOFEM_BUILD_TESTS "build tests" ON)
 option(HELLOFEM_BUILD_TOOLS "build tools" ON)
 
+# ---- CMake 模块 / 依赖 / 目标宏 ----
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+set(CPM_SOURCE_CACHE "${CMAKE_SOURCE_DIR}/.cache/cpm" CACHE PATH "CPM cache to avoid repeated fetching")
+include(CPM) # cmake/CPM.cmake（vendor）
+include(Dependencies) # MPI + spdlog / Eigen(GitLab 5.0) / muparser / Catch2
+include(cmake/hellofemOptions.cmake)
+
 configure_file(${CMAKE_SOURCE_DIR}/cmake/config.h.in ${CMAKE_BINARY_DIR}/config.h)
 
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
@@ -18,17 +25,13 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
     message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
 endif()
 
-# Automatically detect CPU core number.
+# 自动探测 CPU 核数，设定并行编译任务数。
 cmake_host_system_information(RESULT CPU_NUMS QUERY NUMBER_OF_LOGICAL_CORES)
 message(STATUS "CPU NUMS on current device is:${CPU_NUMS}")
 math(EXPR JOBS "${CPU_NUMS} + ${CPU_NUMS} / 2")
 set(CMAKE_BUILD_PARALLEL_LEVEL ${JOBS} CACHE STRING "parallel compiling thread num")
-message(STATUS "Compiler default work jobs: ${CMKE_BUILD_PARALLEL_LEVEL}")
-
-include(cmake/hellofemOptions.cmake)
 
 add_subdirectory(hellofem)
-
 add_subdirectory(app)
 
 if(HELLOFEM_BUILD_TESTS)

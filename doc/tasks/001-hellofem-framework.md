@@ -45,15 +45,15 @@ hellofem/
 
 依赖方向（单向、无环）：`common ← graph ← mesh ← geometry`；`basis`(Eigen) 独立；`la`(common, Eigen)；`io`(common, mesh)；`fem`(common, graph, mesh, geometry, basis)；`app/mpfem` → 全部 + muparser + spdlog。
 
-构建：每模块静态库 `hellofem_<mod>`（alias `hellofem::<mod>`）+ 汇总目标 `hellofem`；复用 mpfem 的 `mpfem_add_library` 函数模式（改名 `hellofem_add_library`）。
+构建：**单库** `hellofem` 静态库（`hellofem/CMakeLists.txt` 用 GLOB 收集全部模块源文件）；模块以子目录组织头文件（`<mod>/xxx.h`），**不用 Targets.cmake 分库封装**（用户要求）。
 
 ## 4. 任务清单（分阶段，每阶段验收通过后再进入下一阶段）
 
 ### P0 脚手架：CMake + CPM + MPI
 
-- [ ] 根 CMake 重组：`cmake/CPM.cmake(最新)`、`Dependencies.cmake`（CPM 拉 spdlog / Eigen 5.0(GitLab) / muparser / Catch2；`find_package(MPI REQUIRED)`）、`Targets.cmake`（`hellofem_add_library`）
-- [ ] 建立模块空库骨架 `hellofem/{basis,common,graph,mesh,geometry,io,fem,la}/`，删 `foo.cpp` 骨架
-- **验收**：`cmake --build build` 绿；ctest 空跑绿；`tools/mpi_probe` 并入 MPI 检查
+- [x] 根 CMake 重组：`cmake/CPM.cmake(最新)`、`Dependencies.cmake`（CPM 拉 spdlog / Eigen 5.0(GitLab) / muparser / Catch2，静态构建；`find_package(MPI REQUIRED)`）
+- [x] 建立模块目录骨架 `hellofem/{basis,common,graph,mesh,geometry,io,fem,la}/`（**单库** `hellofem`，GLOB 收集，不用 Targets.cmake）；删 `foo.cpp` 骨架
+- **验收**：`cmake --build build` 绿；ctest（smoke 测试：spdlog+Eigen+MPI 链接）绿；`tools/mpi_probe`（mpiexec -n 4）并入 MPI 检查 —— ✅ 通过
 
 ### P1 hellofem::basis：抄写 basix
 
