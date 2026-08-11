@@ -159,7 +159,7 @@ TEST_CASE("DofMap: collapse of a scalar dofmap is the identity", "[fem]")
     auto c0 = collapsed.cell_dofs(0);
     REQUIRE(std::vector(c0.begin(), c0.end())
         == std::vector(dmap.cell_dofs(0).begin(),
-               dmap.cell_dofs(0).end()));
+            dmap.cell_dofs(0).end()));
 }
 
 TEST_CASE("DofMap: transpose_dofmap collects flat dof positions", "[fem]")

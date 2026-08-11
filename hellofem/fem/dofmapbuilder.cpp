@@ -85,8 +85,7 @@ namespace {
                                 * (im->size_local() + im->num_ghosts()));
                         if (d < D
                             and !topology.connectivity({int(D), int(i)},
-                                {int(d), et_index}))
-                        {
+                                {int(d), et_index})) {
                             throw std::runtime_error(std::format(
                                 "Missing needed connectivity. Cell type: {} to "
                                 "dim: {}, ent: {}",

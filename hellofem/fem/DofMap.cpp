@@ -75,7 +75,7 @@ namespace hellofem::fem {
                 = dofs_view.empty() ? 0 : dofs_view.back() + bs_view;
             std::vector<std::int32_t> old_to_new(array_size, -1);
             for (std::size_t new_idx = 0; new_idx < sub_imap_to_imap.size();
-                 ++new_idx) {
+                ++new_idx) {
                 for (int k = 0; k < bs_view; ++k) {
                     const std::int32_t old_idx
                         = sub_imap_to_imap[new_idx] * bs_view + k;

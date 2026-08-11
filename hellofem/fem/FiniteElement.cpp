@@ -79,21 +79,7 @@ namespace hellofem::fem {
         const basis::FiniteElement<T>& element,
         const std::optional<std::vector<std::size_t>>& value_shape,
         bool symmetric)
-        : _value_shape(value_shape.value_or(element.value_shape())),
-          _bs(_compute_block_size(value_shape, symmetric)),
-          _cell_type(mesh::cell_type_from_basix_type(element.cell_type())),
-          _space_dim(_bs * element.dim()),
-          _reference_value_shape(element.value_shape()),
-          _element(std::make_unique<basis::FiniteElement<T>>(element)),
-          _symmetric(symmetric),
-          _needs_dof_permutations(
-              !element.dof_transformations_are_identity()
-              and element.dof_transformations_are_permutations()),
-          _needs_dof_transformations(
-              !element.dof_transformations_are_identity()
-              and !element.dof_transformations_are_permutations()),
-          _entity_dofs(element.entity_dofs()),
-          _entity_closure_dofs(element.entity_closure_dofs())
+        : _value_shape(value_shape.value_or(element.value_shape())), _bs(_compute_block_size(value_shape, symmetric)), _cell_type(mesh::cell_type_from_basix_type(element.cell_type())), _space_dim(_bs * element.dim()), _reference_value_shape(element.value_shape()), _element(std::make_unique<basis::FiniteElement<T>>(element)), _symmetric(symmetric), _needs_dof_permutations(!element.dof_transformations_are_identity() and element.dof_transformations_are_permutations()), _needs_dof_transformations(!element.dof_transformations_are_identity() and !element.dof_transformations_are_permutations()), _entity_dofs(element.entity_dofs()), _entity_closure_dofs(element.entity_closure_dofs())
     {
         if (value_shape and !element.value_shape().empty()) {
             throw std::runtime_error("Blocked finite elements can be "
@@ -126,11 +112,7 @@ namespace hellofem::fem {
     template <std::floating_point T>
     FiniteElement<T>::FiniteElement(
         const std::vector<std::shared_ptr<const FiniteElement<T>>>& elements)
-        : _value_shape(std::nullopt), _bs(1),
-          _cell_type(elements.front()->cell_type()), _space_dim(-1),
-          _sub_elements(elements), _reference_value_shape(std::nullopt),
-          _symmetric(false), _needs_dof_permutations(false),
-          _needs_dof_transformations(false)
+        : _value_shape(std::nullopt), _bs(1), _cell_type(elements.front()->cell_type()), _space_dim(-1), _sub_elements(elements), _reference_value_shape(std::nullopt), _symmetric(false), _needs_dof_permutations(false), _needs_dof_transformations(false)
     {
         _signature = "Mixed element (";
 
@@ -178,17 +160,7 @@ namespace hellofem::fem {
         std::span<const geometry_type> points,
         std::array<std::size_t, 2> pshape,
         std::vector<std::size_t> value_shape, bool symmetric)
-        : _value_shape(value_shape),
-          _bs(_compute_block_size(value_shape, symmetric)),
-          _cell_type(cell_type),
-          _signature(std::format("Quadrature element {} {}", pshape[0], _bs)),
-          _space_dim(pshape[0] * _bs), _sub_elements({}),
-          _reference_value_shape(std::vector<std::size_t>()), _element(nullptr),
-          _symmetric(symmetric), _needs_dof_permutations(false),
-          _needs_dof_transformations(false),
-          _entity_dofs(mesh::cell_dim(cell_type) + 1),
-          _entity_closure_dofs(mesh::cell_dim(cell_type) + 1),
-          _points(std::vector<T>(points.begin(), points.end()), pshape)
+        : _value_shape(value_shape), _bs(_compute_block_size(value_shape, symmetric)), _cell_type(cell_type), _signature(std::format("Quadrature element {} {}", pshape[0], _bs)), _space_dim(pshape[0] * _bs), _sub_elements({}), _reference_value_shape(std::vector<std::size_t>()), _element(nullptr), _symmetric(symmetric), _needs_dof_permutations(false), _needs_dof_transformations(false), _entity_dofs(mesh::cell_dim(cell_type) + 1), _entity_closure_dofs(mesh::cell_dim(cell_type) + 1), _points(std::vector<T>(points.begin(), points.end()), pshape)
     {
         const int tdim = mesh::cell_dim(cell_type);
         for (int d = 0; d <= tdim; ++d) {
@@ -515,7 +487,7 @@ namespace hellofem::fem {
         bool scalar_element) const
     {
         if (!needs_dof_permutations())
-            return [](std::span<std::int32_t>, std::uint32_t) {};
+            return [](std::span<std::int32_t>, std::uint32_t) { };
 
         if (!_sub_elements.empty()) {
             if (_bs == 1) {
@@ -538,7 +510,7 @@ namespace hellofem::fem {
                         std::uint32_t cell_permutation) {
                         std::size_t start = 0;
                         for (std::size_t e = 0; e < sub_element_functions.size();
-                             ++e) {
+                            ++e) {
                             sub_element_functions[e](
                                 doflist.subspan(start, dims[e]),
                                 cell_permutation);

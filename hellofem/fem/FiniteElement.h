@@ -25,9 +25,9 @@ namespace hellofem::fem {
 
     /// DOF transformation type.
     enum class doftransform : std::uint8_t {
-        standard = 0,          ///< Standard
-        transpose = 1,         ///< Transpose
-        inverse = 2,           ///< Inverse
+        standard = 0, ///< Standard
+        transpose = 1, ///< Transpose
+        inverse = 2, ///< Inverse
         inverse_transpose = 3, ///< Transpose inverse
     };
 
@@ -216,7 +216,7 @@ namespace hellofem::fem {
         {
             if (!needs_dof_transformations()) {
                 return [](std::span<U>, std::span<const std::uint32_t>,
-                    std::int32_t, int) {};
+                           std::int32_t, int) { };
             }
 
             if (!_sub_elements.empty()) {
@@ -305,7 +305,7 @@ namespace hellofem::fem {
         {
             if (!needs_dof_transformations()) {
                 return [](std::span<U>, std::span<const std::uint32_t>,
-                    std::int32_t, int) {};
+                           std::int32_t, int) { };
             }
             else if (!_sub_elements.empty()) {
                 if (!_reference_value_shape) // Mixed element
@@ -316,8 +316,8 @@ namespace hellofem::fem {
                     std::vector<int> dims;
                     for (std::size_t i = 0; i < _sub_elements.size(); ++i) {
                         sub_element_fns.push_back(_sub_elements[i]
-                                                      ->template dof_transformation_right_fn<U>(
-                                                          ttype));
+                                ->template dof_transformation_right_fn<U>(
+                                    ttype));
                         dims.push_back(_sub_elements[i]->space_dimension());
                     }
 

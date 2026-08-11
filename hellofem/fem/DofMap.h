@@ -46,16 +46,12 @@ namespace hellofem::fem {
         /// @param[in] bs Block size of the dofmap entries.
         template <typename E, typename U>
             requires std::is_convertible_v<std::remove_cvref_t<E>,
-                     fem::ElementDofLayout>
-                and std::is_convertible_v<std::remove_cvref_t<U>,
-                    std::vector<std::int32_t>>
+                         fem::ElementDofLayout>
+                         and std::is_convertible_v<std::remove_cvref_t<U>,
+                             std::vector<std::int32_t>>
         DofMap(E&& element, std::shared_ptr<const common::IndexMap> index_map,
             int index_map_bs, U&& dofmap, int bs)
-            : index_map(std::move(index_map)), _index_map_bs(index_map_bs),
-              _element_dof_layout(element), _dofmap(std::forward<U>(dofmap)),
-              _bs(bs),
-              _shape1(_element_dof_layout.num_dofs()
-                  * _element_dof_layout.block_size() / _bs)
+            : index_map(std::move(index_map)), _index_map_bs(index_map_bs), _element_dof_layout(element), _dofmap(std::forward<U>(dofmap)), _bs(bs), _shape1(_element_dof_layout.num_dofs() * _element_dof_layout.block_size() / _bs)
         {
         }
 

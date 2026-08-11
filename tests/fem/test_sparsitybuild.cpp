@@ -1,8 +1,8 @@
 // hellofem::fem — sparsitybuild unit tests
 // SPDX-License-Identifier: MIT
 
-#include "fem/DofMap.h"
 #include "fem/CoordinateElement.h"
+#include "fem/DofMap.h"
 #include "fem/dofmapbuilder.h"
 #include "fem/sparsitybuild.h"
 

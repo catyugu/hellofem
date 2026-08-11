@@ -123,7 +123,7 @@ namespace hellofem::la {
         for (std::int32_t i = 0; i < num_rows; ++i) {
             row.clear();
             for (std::int64_t k = cache_offsets[i]; k < cache_offsets[i + 1];
-                 ++k) {
+                ++k) {
                 if (std::int32_t c = cache_cols[k]; last_seen[c] != i) {
                     last_seen[c] = i;
                     row.push_back(c);

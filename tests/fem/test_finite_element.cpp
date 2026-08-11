@@ -1,8 +1,8 @@
 // hellofem::fem — FiniteElement wrapper unit tests
 // SPDX-License-Identifier: MIT
 
-#include "fem/FiniteElement.h"
 #include "basis/finite-element.h"
+#include "fem/FiniteElement.h"
 #include "mesh/cell_types.h"
 
 #include <catch2/catch_approx.hpp>
