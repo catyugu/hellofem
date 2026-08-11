@@ -1572,7 +1572,6 @@ namespace MDSPAN_IMPL_STANDARD_NAMESPACE {
                     return false;
             }
             return a <= std::numeric_limits<T>::max() / b;
-            return true;
         }
 #endif
     } // namespace detail

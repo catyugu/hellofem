@@ -18,6 +18,11 @@ target_compile_options(hellofem_options INTERFACE
     /utf-8
     /bigobj
     /Zc:__cplusplus
+    /wd4305
+    /wd4267
+    /wd4244
+    /wd4146
+    /wd4127
     >
 )
 

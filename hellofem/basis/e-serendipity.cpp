@@ -694,7 +694,7 @@ namespace {
 
         if (variant == element::dpc_variant::simplex_equispaced
             or variant == element::dpc_variant::simplex_gll) {
-            lattice::type latticetype;
+            lattice::type latticetype = lattice::type::equispaced;
             lattice::simplex_method latticesm = lattice::simplex_method::isaac;
             if (variant == element::dpc_variant::simplex_equispaced)
                 latticetype = lattice::type::equispaced;
@@ -718,7 +718,7 @@ namespace {
         }
         else if (variant == element::dpc_variant::horizontal_equispaced
             or variant == element::dpc_variant::horizontal_gll) {
-            lattice::type latticetype;
+            lattice::type latticetype = lattice::type::equispaced;
             if (variant == element::dpc_variant::horizontal_equispaced)
                 latticetype = lattice::type::equispaced;
             else if (variant == element::dpc_variant::horizontal_gll)
@@ -773,7 +773,7 @@ namespace {
         }
         else if (variant == element::dpc_variant::diagonal_equispaced
             or variant == element::dpc_variant::diagonal_gll) {
-            lattice::type latticetype;
+            lattice::type latticetype = lattice::type::equispaced;
             lattice::simplex_method latticesm = lattice::simplex_method::isaac;
             if (variant == element::dpc_variant::diagonal_equispaced)
                 latticetype = lattice::type::equispaced;
