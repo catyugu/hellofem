@@ -8,10 +8,10 @@
 
 // hellofem 模块占位符号：证明模块静态库可链接。
 namespace hellofem::common {
-const char* module_id();
+    const char* module_id();
 }
 namespace hellofem::la {
-const char* module_id();
+    const char* module_id();
 }
 
 TEST_CASE("smoke: deps + module static libs link", "[smoke]")
