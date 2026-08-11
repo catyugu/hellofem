@@ -10,3 +10,7 @@ add_test(NAME test_finite_element COMMAND test_finite_element)
 add_executable(test_dofmap test_dofmap.cpp)
 target_link_libraries(test_dofmap PRIVATE hellofem Catch2::Catch2WithMain)
 add_test(NAME test_dofmap COMMAND test_dofmap)
+
+add_executable(test_sparsitybuild test_sparsitybuild.cpp)
+target_link_libraries(test_sparsitybuild PRIVATE hellofem Catch2::Catch2WithMain)
+add_test(NAME test_sparsitybuild COMMAND test_sparsitybuild)
