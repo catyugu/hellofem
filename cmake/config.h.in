@@ -1,6 +1,8 @@
 #include <string_view>
 
 // clang-format off
+#define HELLOFEM_VERSION "@PROJECT_VERSION@"
+
 namespace hellofem::config {
 
     constexpr inline std::string_view PROJECT_NAME = "@PROJECT_NAME@";
