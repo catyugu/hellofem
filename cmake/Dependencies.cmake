@@ -1,25 +1,18 @@
 # =============================================================================
 # Dependencies.cmake - 全部外部依赖引入
 #
-# - MPI：必需依赖（find_package(MPI REQUIRED)，无单进程回退）
-# - spdlog / Eigen(GitLab 5.0) / muparser / Catch2：全部经 CPM 引入
-#   （学 mpfem 的 cmake/Dependencies.cmake 范式）
+# 全部经 CPM 引入（学 mpfem 的 cmake/Dependencies.cmake 范式）：
+#   spdlog / Eigen(GitLab 5.0) / muparser / Catch2 / oneTBB / amgcl
+# 无 MPI（单进程多线程，并行由 oneTBB 提供）。
 # =============================================================================
 
 include(CPM)
 
-# 依赖以静态库构建，避免运行时 DLL 查找问题（spdlog/Catch2/muparser）。
+# 依赖以静态库构建，避免运行时 DLL 查找问题（spdlog/Catch2/muparser/TBB）。
 set(BUILD_SHARED_LIBS OFF)
 
 # ---------------------------------------------------------------------------
-# 1. MPI（必需）
-# ---------------------------------------------------------------------------
-# MS-MPI 位于 conda env 的 Library 时，配置需传
-#   -DCMAKE_PREFIX_PATH=<conda-env>/Library
-find_package(MPI REQUIRED)
-
-# ---------------------------------------------------------------------------
-# 2. spdlog（日志）
+# 1. spdlog（日志）
 # ---------------------------------------------------------------------------
 CPMAddPackage(
     NAME spdlog
@@ -34,7 +27,7 @@ CPMAddPackage(
 )
 
 # ---------------------------------------------------------------------------
-# 3. Eigen 5.0（GitLab，用户确认该仓库有 5.0.x）
+# 2. Eigen 5.0（GitLab，用户确认该仓库有 5.0.x）
 # ---------------------------------------------------------------------------
 CPMAddPackage(
     NAME Eigen
@@ -50,7 +43,7 @@ CPMAddPackage(
 # Eigen 5.0 中 Eigen3::Eigen 是 ALIAS target，无法在此 set_target_properties。
 
 # ---------------------------------------------------------------------------
-# 4. muparser（表达式解析，应用层使用）
+# 3. muparser（表达式解析，应用层使用）
 # ---------------------------------------------------------------------------
 CPMAddPackage(
     NAME muparser
@@ -64,7 +57,7 @@ CPMAddPackage(
 )
 
 # ---------------------------------------------------------------------------
-# 5. Catch2（内部库测试）
+# 4. Catch2（内部库测试）
 # ---------------------------------------------------------------------------
 CPMAddPackage(
     NAME Catch2
@@ -74,4 +67,33 @@ CPMAddPackage(
     "CATCH_BUILD_TESTING OFF"
     "CATCH_BUILD_EXAMPLES OFF"
     "CATCH_INSTALL_DOCS OFF"
+)
+
+# ---------------------------------------------------------------------------
+# 5. oneTBB（多线程并行，替代 MPI 的并行能力）
+# ---------------------------------------------------------------------------
+CPMAddPackage(
+    NAME oneTBB
+    GITHUB_REPOSITORY oneapi-src/oneTBB
+    GIT_TAG v2023.1.0
+    OPTIONS
+    "TBB_TEST OFF"
+    "TBB_EXAMPLES OFF"
+    "TBB_BENCH OFF"
+    "TBB_STRICT OFF"
+    "TBB_ENABLE_IPO OFF"
+    "TBB_BUILD_STATIC ON"
+    "TBB_BUILD_SHARED OFF"
+    "TBB_NO_COPY_GENERATOR ON"
+)
+
+# ---------------------------------------------------------------------------
+# 6. amgcl（header-only AMG 预条件器；la 模块 Phase 6 使用）
+#    CPM 下 AMGCL_MASTER_PROJECT=OFF，不构建其 tests/examples；Boost/MPI 均为
+#    可选查找，缺失时 amgcl 自动定义 AMGCL_NO_BOOST。
+# ---------------------------------------------------------------------------
+CPMAddPackage(
+    NAME amgcl
+    GITHUB_REPOSITORY ddemidov/amgcl
+    GIT_TAG 1.5.0
 )

@@ -14,7 +14,7 @@ option(HELLOFEM_BUILD_TOOLS "build tools" ON)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 set(CPM_SOURCE_CACHE "${CMAKE_SOURCE_DIR}/.cache/cpm" CACHE PATH "CPM cache to avoid repeated fetching")
 include(CPM) # cmake/CPM.cmake（vendor）
-include(Dependencies) # MPI + spdlog / Eigen(GitLab 5.0) / muparser / Catch2
+include(Dependencies) # 全部外部依赖经 CPM 引入（无 MPI）
 include(cmake/hellofemOptions.cmake)
 
 configure_file(${CMAKE_SOURCE_DIR}/cmake/config.h.in ${CMAKE_BINARY_DIR}/config.h)

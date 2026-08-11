@@ -22,7 +22,7 @@ if(TARGET Eigen3::Eigen)
     endif()
 endif()
 
-target_link_libraries(hellofem PUBLIC hellofem_options spdlog::spdlog MPI::MPI_CXX)
+target_link_libraries(hellofem PUBLIC hellofem_options spdlog::spdlog TBB::tbb)
 
 target_compile_options(hellofem PRIVATE
     $<$<CXX_COMPILER_FRONTEND_VARIANT:GNU>:-Werror>
