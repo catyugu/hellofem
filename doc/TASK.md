@@ -1,6 +1,6 @@
 # TASK
 
-学习并抄写：<https://github.com/FEniCS/basix/tree/main/cpp/basix> 的 cpp 全部内容（作为有限元基底定义子模块），<https://github.com/FEniCS/dolfinx/tree/main/cpp/dolfinx> 中的 common, geometry, graph, mesh, io模块（需要为mphtxt网格格式进行扩展），但是将所有对 boost 等外部的依赖替换掉，命名空间替换到 hellofem，消除项目元信息等对我们的库没用的内容。剪裁注释，但是内容和原始文件中的license内容应该予以保留。然后，尝试进行 <https://github.com/catyugu/mpfem> 的复现。
+学习并抄写：<https://github.com/FEniCS/basix/tree/main/cpp/basix> 的 cpp 全部内容（作为有限元基底定义子模块），<https://github.com/FEniCS/dolfinx/tree/main/cpp/dolfinx> 中的 common, geometry, graph, mesh, io模块（需要为mphtxt网格格式进行扩展），但是将所有对 boost 等外部的依赖替换掉，命名空间替换到 hellofem，消除项目元信息等对我们的库没用的内容。剪裁注释，进行适当改造（例如改进算法，简化代码，减少向后兼容的接口等）以避免违反协议之虞（我并不希望我的库强制被开源，因此我希望避免被 LGPL 这种糟糕的许可证污染）。然后，尝试进行 <https://github.com/catyugu/mpfem> 的复现。
 要求：
 
 1. 同时支持稀疏矩阵的预条件迭代求解（包括 AMG、DDM 等较高级算法）以及无矩阵法的装配迭代求解
@@ -13,3 +13,4 @@
 8. 案例的模型解析不应另写 XML，而是直接利用 COMSOL 的 Java 建模脚本
 9. 请自己新造案例并跑出 COMSOL 结果，可以利用 <https://github.com/catyugu/autocomsol>，首先写一个 Java 建模脚本，产生 .mph 文件，然后从 .mph 计算结果，再导出供解析用的更干净的 Java 脚本以及 .mphtxt 格式的网格。我们的程序应该吃进倒两手后的干净的 Java 脚本和网格，输出格式和 COMSOL 一致的文件供比对之用。这个处理工序应该用单个脚本封装
 10. 进行结果对比的脚本可能需要重新写过（为了更好的通用性）
+11. 作为参考的库可下载到 `.cache/ref` 中

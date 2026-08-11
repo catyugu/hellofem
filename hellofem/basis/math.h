@@ -1,9 +1,3 @@
-// Copyright (C) 2021-2024 Igor Baratta and Garth N. Wells
-//
-// This file is part of DOLFINx (https://www.fenicsproject.org)
-//
-// SPDX-License-Identifier:    LGPL-3.0-or-later
-
 #pragma once
 
 #include "mdspan.hpp"
@@ -195,8 +189,6 @@ namespace hellofem::basis::math {
         std::size_t dim = A.second[0];
         assert(dim == A.second[1]);
 
-        // The row-major buffer is fed to the column-major factorisation, so the
-        // LU decomposition of A^t is computed (LAPACK dgetrf semantics).
         bool singular = false;
         std::vector<std::size_t> perm
             = impl::lu_pivots(A.first.data(), dim, singular);
@@ -263,9 +255,6 @@ namespace hellofem::basis::math {
         const std::size_t ndofs = wcoeffs.extent(0);
         const std::size_t psize = wcoeffs.extent(1);
 
-        // Classical Gram-Schmidt: after normalising row i, its projection onto
-        // every later row is subtracted (a matrix-vector product and a rank-1
-        // update, both via math::dot).
         std::vector<T> a_vec;
         std::vector<T> update;
         for (std::size_t i = start; i < ndofs; ++i) {
