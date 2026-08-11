@@ -24,6 +24,17 @@ endif()
 
 target_link_libraries(hellofem PUBLIC hellofem_options spdlog::spdlog TBB::tbb)
 
+# amgcl 为 header-only。不链接 amgcl::amgcl（其 INTERFACE 会把 OpenMP 编译
+# 选项 (-Xclang -fopenmp) 传播进来，clang-cl 下报错），只取其头目录标记为
+# SYSTEM（避免 /W4 /WX 对 amgcl 头报警告），并自行定义 AMGCL_NO_BOOST。
+if(TARGET amgcl::amgcl)
+    get_target_property(_amgcl_incs amgcl::amgcl INTERFACE_INCLUDE_DIRECTORIES)
+    if(_amgcl_incs)
+        target_include_directories(hellofem SYSTEM PUBLIC ${_amgcl_incs})
+    endif()
+    target_compile_definitions(hellofem PUBLIC AMGCL_NO_BOOST)
+endif()
+
 target_compile_options(hellofem PRIVATE
     $<$<CXX_COMPILER_FRONTEND_VARIANT:GNU>:-Werror>
 )
