@@ -92,6 +92,12 @@ namespace hellofem::la {
         /// Read-only access to the data.
         const container_type& array() const { return _x; }
 
+        /// Mutable access to the entry at (block) index `i`.
+        value_type& operator[](std::size_t i) { return _x[i]; }
+
+        /// Read-only access to the entry at (block) index `i`.
+        const value_type& operator[](std::size_t i) const { return _x[i]; }
+
         /// Fill all entries with `v`.
         void set(value_type v) { std::ranges::fill(_x, v); }
 

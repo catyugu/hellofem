@@ -163,7 +163,7 @@ namespace hellofem::la {
                 q.set(0);
                 _A.mult(x, q);
                 for (std::size_t i = 0; i < n; ++i)
-                    r.array()[i] -= q.array()[i];
+                    r[i] -= q[i];
             }
 
             _apply_preconditioner(r, z);
@@ -181,8 +181,8 @@ namespace hellofem::la {
                 const T alpha = rho / pq;
 
                 for (std::size_t i = 0; i < n; ++i) {
-                    x.array()[i] += alpha * p.array()[i];
-                    r.array()[i] -= alpha * q.array()[i];
+                    x[i] += alpha * p[i];
+                    r[i] -= alpha * q[i];
                 }
 
                 if (std::sqrt(squared_norm(r)) <= tol)
@@ -193,7 +193,7 @@ namespace hellofem::la {
                 const T beta = rho_new / rho;
                 rho = rho_new;
                 for (std::size_t i = 0; i < n; ++i)
-                    p.array()[i] = z.array()[i] + beta * p.array()[i];
+                    p[i] = z[i] + beta * p[i];
             }
 
             spdlog::warn("CG did not converge in {} iterations.", _max_iter);
@@ -213,7 +213,7 @@ namespace hellofem::la {
                 ax.set(0);
                 _A.mult(x, ax);
                 for (std::size_t i = 0; i < n; ++i)
-                    r.array()[i] -= ax.array()[i];
+                    r[i] -= ax[i];
             }
 
             // Preconditioned operator: w = A P v
@@ -240,7 +240,7 @@ namespace hellofem::la {
                 V.emplace_back(b.index_map(), b.bs());
                 V[0].set(0);
                 for (std::size_t i = 0; i < n; ++i)
-                    V[0].array()[i] = r.array()[i] / beta;
+                    V[0][i] = r[i] / beta;
 
                 // Hessenberg and Givens rotations
                 std::vector<std::vector<T>> H(m + 1, std::vector<T>(m, 0));
@@ -259,11 +259,11 @@ namespace hellofem::la {
                     for (int j = 0; j <= k; ++j) {
                         H[j][k] = inner_product(w, V[j]);
                         for (std::size_t i = 0; i < n; ++i)
-                            w.array()[i] -= H[j][k] * V[j].array()[i];
+                            w[i] -= H[j][k] * V[j][i];
                     }
                     H[k + 1][k] = std::sqrt(squared_norm(w));
                     for (std::size_t i = 0; i < n; ++i)
-                        V[k + 1].array()[i] = w.array()[i] / H[k + 1][k];
+                        V[k + 1][i] = w[i] / H[k + 1][k];
 
                     // Apply previous Givens rotations
                     for (int j = 0; j < k; ++j) {
@@ -308,12 +308,12 @@ namespace hellofem::la {
                 tmp.set(0);
                 for (int j = 0; j <= k; ++j)
                     for (std::size_t i = 0; i < n; ++i)
-                        tmp.array()[i] += V[j].array()[i] * y[j];
+                        tmp[i] += V[j][i] * y[j];
                 Vector<T> z(b.index_map(), b.bs());
                 z.set(0);
                 _apply_preconditioner(tmp, z);
                 for (std::size_t i = 0; i < n; ++i)
-                    x.array()[i] += z.array()[i];
+                    x[i] += z[i];
 
                 // Recompute the residual for the restart
                 r = b;
@@ -321,7 +321,7 @@ namespace hellofem::la {
                 ax.set(0);
                 _A.mult(x, ax);
                 for (std::size_t i = 0; i < n; ++i)
-                    r.array()[i] -= ax.array()[i];
+                    r[i] -= ax[i];
             }
 
             spdlog::warn("GMRES did not converge in {} iterations.",
@@ -337,7 +337,7 @@ namespace hellofem::la {
                 _P->apply(x, y);
             else
                 for (std::size_t i = 0; i < x.array().size(); ++i)
-                    y.array()[i] = x.array()[i];
+                    y[i] = x[i];
         }
 
         // The operator

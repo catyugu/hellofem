@@ -33,7 +33,6 @@
 #include <vector>
 
 using namespace hellofem;
-using Catch::Approx;
 
 namespace {
 
@@ -212,7 +211,7 @@ TEST_CASE("Poisson: -Delta u = f with homogeneous Dirichlet", "[fem]")
         }
         // P1 on a regular mesh converges O(h^2); the error should shrink
         // by ~4x when n doubles.
-        REQUIRE(max_err < 0.15 / (n / 4));
+        REQUIRE(max_err < 0.15 / ((float)n / 4));
         REQUIRE(max_err > 0.0);
     }
 }

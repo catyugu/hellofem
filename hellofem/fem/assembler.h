@@ -238,7 +238,7 @@ namespace hellofem::fem {
                                                        + (bs1 * j + k1)]
                                                 * g[col];
                                     }
-                                b.array()[row] -= acc;
+                                b[row] -= acc;
                             }
                         return 0;
                     },
