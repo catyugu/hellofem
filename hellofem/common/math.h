@@ -10,9 +10,6 @@
 #include <cassert>
 #include <cmath>
 #include <concepts>
-#ifndef _WIN32
-#include <cstdint>
-#endif
 #include <format>
 #include <stdexcept>
 
