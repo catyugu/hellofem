@@ -40,9 +40,9 @@ namespace hellofem::graph {
         /// offset equals the data length.
         template <typename U, typename V>
             requires std::is_convertible_v<std::remove_cvref_t<U>,
-                                           std::vector<LinkData>>
-                     and std::is_convertible_v<std::remove_cvref_t<V>,
-                                               std::vector<std::int32_t>>
+                         std::vector<LinkData>>
+                         and std::is_convertible_v<std::remove_cvref_t<V>,
+                             std::vector<std::int32_t>>
         AdjacencyList(U&& data, V&& offsets)
             : _array(std::forward<U>(data)), _offsets(std::forward<V>(offsets))
         {
@@ -54,14 +54,13 @@ namespace hellofem::graph {
         /// Same as above, with per-node data attached.
         template <typename U, typename V, typename W>
             requires std::is_convertible_v<std::remove_cvref_t<U>,
-                                           std::vector<LinkData>>
-                     and std::is_convertible_v<std::remove_cvref_t<V>,
-                                               std::vector<std::int32_t>>
-                     and std::is_convertible_v<std::remove_cvref_t<W>,
-                                               std::vector<NodeData>>
+                         std::vector<LinkData>>
+                         and std::is_convertible_v<std::remove_cvref_t<V>,
+                             std::vector<std::int32_t>>
+                         and std::is_convertible_v<std::remove_cvref_t<W>,
+                             std::vector<NodeData>>
         AdjacencyList(U&& data, V&& offsets, W&& node_data)
-            : _array(std::forward<U>(data)), _offsets(std::forward<V>(offsets)),
-              _node_data(std::forward<W>(node_data))
+            : _array(std::forward<U>(data)), _offsets(std::forward<V>(offsets)), _node_data(std::forward<W>(node_data))
         {
             if (!_node_data.has_value()
                 or _node_data->size() != _offsets.size() - 1)
@@ -118,7 +117,7 @@ namespace hellofem::graph {
         {
             auto it = std::next(_offsets.begin(), node);
             return std::span<LinkData>(std::next(_array.begin(), *it),
-                                       std::next(_array.begin(), *(it + 1)));
+                std::next(_array.begin(), *(it + 1)));
         }
 
         /// Outgoing links for a node (const).
@@ -150,7 +149,7 @@ namespace hellofem::graph {
         {
             std::string s
                 = std::format("<AdjacencyList> with {} nodes\n",
-                              this->num_nodes());
+                    this->num_nodes());
             for (std::size_t e = 0; e < _offsets.size() - 1; ++e) {
                 std::format_to(std::back_inserter(s), "  {}: [", e);
                 for (auto link : this->links(e))

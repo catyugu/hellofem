@@ -22,7 +22,7 @@ namespace hellofem::common {
 
         /// Register a timing for later summary.
         void register_timing(std::string_view task,
-                             std::chrono::duration<double, std::ratio<1>> wall);
+            std::chrono::duration<double, std::ratio<1>> wall);
 
         /// Summary of timings and tasks as a Table.
         Table timing_table() const;
@@ -33,8 +33,8 @@ namespace hellofem::common {
 
         /// All logged elapsed times: task -> (count, total wall time).
         std::map<std::string,
-                 std::pair<int, std::chrono::duration<double, std::ratio<1>>>,
-                 std::less<>>
+            std::pair<int, std::chrono::duration<double, std::ratio<1>>>,
+            std::less<>>
         timings() const;
 
     private:
@@ -47,8 +47,8 @@ namespace hellofem::common {
 
         // task -> (num_timings, total_wall_time)
         std::map<std::string,
-                 std::pair<int, std::chrono::duration<double, std::ratio<1>>>,
-                 std::less<>>
+            std::pair<int, std::chrono::duration<double, std::ratio<1>>>,
+            std::less<>>
             _timings;
     };
 

@@ -18,8 +18,8 @@ using namespace hellofem::graph;
 
 TEST_CASE("AdjacencyList construction and access")
 {
-    std::vector<std::int32_t> data{1, 2, 0, 3, 2};
-    std::vector<std::int32_t> offsets{0, 2, 4, 5};
+    std::vector<std::int32_t> data {1, 2, 0, 3, 2};
+    std::vector<std::int32_t> offsets {0, 2, 4, 5};
     AdjacencyList<std::int32_t> list(data, offsets);
     REQUIRE(list.num_nodes() == 3);
     REQUIRE(list.num_links(0) == 2);
@@ -37,7 +37,7 @@ TEST_CASE("AdjacencyList construction and access")
 
 TEST_CASE("regular_adjacency_list")
 {
-    std::vector<std::int32_t> data{0, 1, 1, 2, 2, 0};
+    std::vector<std::int32_t> data {0, 1, 1, 2, 2, 0};
     auto list = regular_adjacency_list(data, 2);
     REQUIRE(list.num_nodes() == 3);
     REQUIRE(list.num_links(0) == 2);
@@ -66,13 +66,13 @@ TEST_CASE("reorder_rcm reduces bandwidth on a path graph")
     // perm is a permutation of [0, n)
     std::vector<std::int32_t> sorted = perm;
     std::sort(sorted.begin(), sorted.end());
-    REQUIRE(sorted == std::vector<std::int32_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+    REQUIRE(sorted == std::vector<std::int32_t> {0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
 }
 
 TEST_CASE("partition_graph is single-process trivial")
 {
-    std::vector<std::int64_t> data{1, 0, 2, 0, 3, 1};
-    std::vector<std::int32_t> offsets{0, 2, 4, 6};
+    std::vector<std::int64_t> data {1, 0, 2, 0, 3, 1};
+    std::vector<std::int32_t> offsets {0, 2, 4, 6};
     AdjacencyList<std::int64_t> graph(data, offsets);
     auto part = partition_graph(1, graph, false);
     REQUIRE(part.num_nodes() == 3);
@@ -82,20 +82,20 @@ TEST_CASE("partition_graph is single-process trivial")
 
 TEST_CASE("build::compute_local_to_global and local_to_local")
 {
-    std::vector<std::int64_t> g{10, 20, 30};
-    std::vector<std::int32_t> l{0, 1, 2};
+    std::vector<std::int64_t> g {10, 20, 30};
+    std::vector<std::int32_t> l {0, 1, 2};
     REQUIRE(build::compute_local_to_global(g, l)
-            == std::vector<std::int64_t>({10, 20, 30}));
+        == std::vector<std::int64_t>({10, 20, 30}));
 
     // local0 indices map to global {10, 20, 30}; local1 the same global set
     // in a permuted order.
-    std::vector<std::int64_t> l1{30, 10, 20};
+    std::vector<std::int64_t> l1 {30, 10, 20};
     auto l0l1 = build::compute_local_to_local(g, l1);
     REQUIRE(l0l1 == std::vector<std::int32_t>({1, 2, 0}));
 
     // build::distribute is a passthrough: 3 cells, 1 node each
     auto [cells, src, orig, ghosts] = build::distribute(
-        std::span<const std::int64_t>(g), std::array<std::size_t, 2>{3, 1},
+        std::span<const std::int64_t>(g), std::array<std::size_t, 2> {3, 1},
         AdjacencyList<std::int32_t>(1));
     REQUIRE(cells == std::vector<std::int64_t>({10, 20, 30}));
     REQUIRE(orig == std::vector<std::int64_t>({0, 1, 2}));

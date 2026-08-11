@@ -13,7 +13,7 @@ namespace hellofem::common {
     /// parts and return the part with the given `index`. Part `i` ends where
     /// part `i + 1` begins.
     constexpr std::array<std::int64_t, 2> local_range(int index, std::int64_t N,
-                                                      int size)
+        int size)
     {
         assert(index >= 0);
         assert(N >= 0);

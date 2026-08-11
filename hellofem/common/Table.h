@@ -22,7 +22,9 @@ namespace hellofem {
         /// Reduction flavour (min/max/average) — retained for API parity with
         /// the timings interface, though a single-process library never
         /// aggregates across ranks.
-        enum class Reduction : std::uint8_t { average, max, min };
+        enum class Reduction : std::uint8_t { average,
+            max,
+            min };
 
         Table(std::string title = "", bool right_justify = true);
 
@@ -43,7 +45,7 @@ namespace hellofem {
 
         /// Set table entry.
         void set(std::string_view row, std::string_view col,
-                 std::variant<std::string, int, double> value);
+            std::variant<std::string, int, double> value);
 
         /// Get table entry; throws if the entry does not exist.
         std::variant<std::string, int, double>
@@ -61,7 +63,7 @@ namespace hellofem {
 
         // Table entry values
         std::map<std::pair<std::string, std::string>,
-                 std::variant<std::string, int, double>>
+            std::variant<std::string, int, double>>
             _values;
 
         // Right-justify the table entries

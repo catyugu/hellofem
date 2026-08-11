@@ -10,7 +10,9 @@
 #include <cassert>
 #include <cmath>
 #include <concepts>
+#ifndef _WIN32
 #include <cstdint>
+#endif
 #include <format>
 #include <stdexcept>
 
@@ -19,13 +21,13 @@ namespace hellofem::math {
     /// Cross product of two length-3 vectors.
     template <typename U, typename V>
         requires scalar<typename U::value_type>
-                 && std::same_as<typename U::value_type, typename V::value_type>
+        && std::same_as<typename U::value_type, typename V::value_type>
     constexpr std::array<typename U::value_type, 3> cross(const U& u, const V& v)
     {
         assert(u.size() == 3);
         assert(v.size() == 3);
         return {u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
-                u[0] * v[1] - u[1] * v[0]};
+            u[0] * v[1] - u[1] * v[0]};
     }
 
     /// Kahan's difference of products a*d - b*c with fused multiply-adds
@@ -67,7 +69,7 @@ namespace hellofem::math {
         default:
             throw std::runtime_error(
                 std::format("math::det is not implemented for {}x{} matrices.",
-                            A.extent(0), A.extent(1)));
+                    A.extent(0), A.extent(1)));
         }
     }
 
@@ -75,14 +77,14 @@ namespace hellofem::math {
     /// Does not check invertibility.
     template <typename U, typename V>
         requires MDSpanRank2<U> && MDSpanRank2<V>
-                 && std::floating_point<typename U::value_type>
+        && std::floating_point<typename U::value_type>
     void inv(U A, V B)
     {
         using value_type = typename U::value_type;
         const std::size_t nrows = A.extent(0);
         switch (nrows) {
         case 1:
-            B(0, 0) = value_type{1} / A(0, 0);
+            B(0, 0) = value_type {1} / A(0, 0);
             break;
         case 2: {
             value_type idet = 1. / det(A);
@@ -108,31 +110,31 @@ namespace hellofem::math {
             B(1, 0) = -w1 * idet;
             B(2, 0) = w2 * idet;
             B(0, 1) = difference_of_products(A(0, 2), A(0, 1), A(2, 2), A(2, 1))
-                      * idet;
+                * idet;
             B(0, 2) = difference_of_products(A(0, 1), A(0, 2), A(1, 1), A(1, 2))
-                      * idet;
+                * idet;
             B(1, 1) = difference_of_products(A(0, 0), A(0, 2), A(2, 0), A(2, 2))
-                      * idet;
+                * idet;
             B(1, 2) = difference_of_products(A(1, 0), A(0, 0), A(1, 2), A(0, 2))
-                      * idet;
+                * idet;
             B(2, 1) = difference_of_products(A(2, 0), A(0, 0), A(2, 1), A(0, 1))
-                      * idet;
+                * idet;
             B(2, 2) = difference_of_products(A(0, 0), A(1, 0), A(0, 1), A(1, 1))
-                      * idet;
+                * idet;
             break;
         }
         default:
             throw std::runtime_error(
                 std::format("math::inv is not implemented for {}x{} matrices.",
-                            A.extent(0), A.extent(1)));
+                    A.extent(0), A.extent(1)));
         }
     }
 
     /// Accumulate C += A * B (or, when `transpose` is set, C += A^T * B^T).
     template <typename U, typename V, typename P>
         requires MDSpanRank2<U> && MDSpanRank2<V> && MDSpanRank2<P>
-                 && scalar<typename U::value_type> && scalar<typename V::value_type>
-                 && scalar<typename P::value_type>
+        && scalar<typename U::value_type> && scalar<typename V::value_type>
+        && scalar<typename P::value_type>
     constexpr void dot(U A, V B, P C, bool transpose = false)
     {
         if (transpose) {
@@ -155,7 +157,7 @@ namespace hellofem::math {
     /// P * A = I. A is 3x2, 3x1 or 2x1.
     template <typename U, typename V>
         requires MDSpanRank2<U> && MDSpanRank2<V>
-                 && std::floating_point<typename U::value_type>
+        && std::floating_point<typename U::value_type>
     void pinv(U A, V P)
     {
         assert(A.extent(0) > A.extent(1));
@@ -197,7 +199,7 @@ namespace hellofem::math {
         else {
             throw std::runtime_error(
                 std::format("math::pinv is not implemented for {}x{} matrices.",
-                            A.extent(0), A.extent(1)));
+                    A.extent(0), A.extent(1)));
         }
     }
 

@@ -11,8 +11,7 @@
 using namespace hellofem::common;
 
 IndexMap::IndexMap(std::int64_t offset, std::int32_t local_size)
-    : _local_range({offset, offset + local_size}),
-      _size_global(offset + local_size)
+    : _local_range({offset, offset + local_size}), _size_global(offset + local_size)
 {
     assert(local_size >= 0);
 }
@@ -40,7 +39,7 @@ std::span<const std::int64_t> IndexMap::ghosts() const noexcept
 }
 
 void IndexMap::local_to_global(std::span<const std::int32_t> local,
-                               std::span<std::int64_t> global) const
+    std::span<std::int64_t> global) const
 {
     assert(local.size() == global.size());
     std::ranges::transform(local, global.begin(), [this](auto i) {
@@ -49,7 +48,7 @@ void IndexMap::local_to_global(std::span<const std::int32_t> local,
 }
 
 void IndexMap::global_to_local(std::span<const std::int64_t> global,
-                               std::span<std::int32_t> local) const
+    std::span<std::int32_t> local) const
 {
     assert(global.size() == local.size());
     for (std::size_t i = 0; i < global.size(); ++i) {
@@ -81,8 +80,8 @@ std::vector<std::int32_t> IndexMap::shared_indices() const
 
 std::pair<IndexMap, std::vector<std::int32_t>>
 hellofem::common::create_sub_index_map(const IndexMap& imap,
-                                       std::span<const std::int32_t> indices,
-                                       IndexMapOrder)
+    std::span<const std::int32_t> indices,
+    IndexMapOrder)
 {
     // Single-process semantics mirror a one-rank MPI_Exscan: the submap is
     // a contiguous renumbering of the selected owned indices starting at

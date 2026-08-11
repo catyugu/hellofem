@@ -3,8 +3,8 @@
 
 #include "partition.h"
 
-#include "../common/Timer.h"
-#include "../common/log.h"
+#include "common/Timer.h"
+#include "spdlog/spdlog.h"
 
 #include <algorithm>
 #include <cassert>
@@ -20,7 +20,7 @@ using namespace hellofem::graph;
 
 AdjacencyList<std::int32_t>
 graph::partition_graph(int nparts, const AdjacencyList<std::int64_t>& local_graph,
-                       bool)
+    bool)
 {
     common::Timer t("Partition graph (single-process)");
     spdlog::debug("Partitioning graph across {} partitions", nparts);
@@ -34,9 +34,9 @@ graph::partition_graph(int nparts, const AdjacencyList<std::int64_t>& local_grap
 }
 
 std::tuple<AdjacencyList<std::int64_t>, std::vector<int>,
-           std::vector<std::int64_t>, std::vector<int>>
+    std::vector<std::int64_t>, std::vector<int>>
 graph::build::distribute(const AdjacencyList<std::int64_t>& list,
-                         const AdjacencyList<std::int32_t>&)
+    const AdjacencyList<std::int32_t>&)
 {
     // No redistribution: everything already lives on this (only) process.
     std::vector<int> src(list.num_nodes(), 0);
@@ -46,10 +46,10 @@ graph::build::distribute(const AdjacencyList<std::int64_t>& list,
 }
 
 std::tuple<std::vector<std::int64_t>, std::vector<int>,
-           std::vector<std::int64_t>, std::vector<int>>
+    std::vector<std::int64_t>, std::vector<int>>
 graph::build::distribute(std::span<const std::int64_t> list,
-                         std::array<std::size_t, 2> shape,
-                         const AdjacencyList<std::int32_t>&)
+    std::array<std::size_t, 2> shape,
+    const AdjacencyList<std::int32_t>&)
 {
     std::vector<std::int64_t> cells(list.begin(), list.end());
     std::vector<int> src(shape[0], 0);
@@ -60,8 +60,8 @@ graph::build::distribute(std::span<const std::int64_t> list,
 
 std::vector<std::int64_t>
 graph::build::compute_ghost_indices(std::span<const std::int64_t>,
-                                    std::span<const std::int64_t>,
-                                    std::span<const int>, int)
+    std::span<const std::int64_t>,
+    std::span<const int>, int)
 {
     // No ghost indices in a single-process world.
     return {};
@@ -69,7 +69,7 @@ graph::build::compute_ghost_indices(std::span<const std::int64_t>,
 
 std::vector<std::int64_t>
 graph::build::compute_local_to_global(std::span<const std::int64_t> global,
-                                      std::span<const std::int32_t> local)
+    std::span<const std::int32_t> local)
 {
     common::Timer t("Compute local-to-global links");
 
@@ -89,7 +89,7 @@ graph::build::compute_local_to_global(std::span<const std::int64_t> global,
 
 std::vector<std::int32_t>
 graph::build::compute_local_to_local(std::span<const std::int64_t> local0_to_global,
-                                     std::span<const std::int64_t> local1_to_global)
+    std::span<const std::int64_t> local1_to_global)
 {
     common::Timer t("Compute local-to-local map");
     assert(local0_to_global.size() == local1_to_global.size());
@@ -104,14 +104,14 @@ graph::build::compute_local_to_local(std::span<const std::int64_t> local0_to_glo
     std::vector<std::int32_t> local0_to_local1;
     local0_to_local1.reserve(local0_to_global.size());
     std::ranges::transform(local0_to_global,
-                           std::back_inserter(local0_to_local1),
-                           [&global_to_local1](auto g) {
-                               auto it = std::ranges::lower_bound(
-                                   global_to_local1, g, std::ranges::less(),
-                                   [](auto e) { return e.first; });
-                               assert(it != global_to_local1.end()
-                                      and it->first == g);
-                               return it->second;
-                           });
+        std::back_inserter(local0_to_local1),
+        [&global_to_local1](auto g) {
+            auto it = std::ranges::lower_bound(
+                global_to_local1, g, std::ranges::less(),
+                [](auto e) { return e.first; });
+            assert(it != global_to_local1.end()
+                and it->first == g);
+            return it->second;
+        });
     return local0_to_local1;
 }

@@ -19,8 +19,8 @@ namespace hellofem {
     }
 
     std::map<std::string,
-             std::pair<int, std::chrono::duration<double, std::ratio<1>>>,
-             std::less<>>
+        std::pair<int, std::chrono::duration<double, std::ratio<1>>>,
+        std::less<>>
     timings()
     {
         return common::TimeLogger::instance().timings();

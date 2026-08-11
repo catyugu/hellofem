@@ -3,7 +3,7 @@
 
 #include "TimeLogger.h"
 
-#include "log.h"
+#include "spdlog/spdlog.h"
 
 #include <format>
 #include <stdexcept>
@@ -13,7 +13,7 @@ using namespace hellofem::common;
 
 TimeLogger& TimeLogger::instance()
 {
-    static TimeLogger _instance{};
+    static TimeLogger _instance {};
     return _instance;
 }
 
@@ -54,8 +54,8 @@ TimeLogger::timing(std::string_view task) const
 }
 
 std::map<std::string,
-         std::pair<int, std::chrono::duration<double, std::ratio<1>>>,
-         std::less<>>
+    std::pair<int, std::chrono::duration<double, std::ratio<1>>>,
+    std::less<>>
 TimeLogger::timings() const
 {
     return _timings;

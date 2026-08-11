@@ -15,18 +15,19 @@
 // `md` / `mdex` aliases at the hellofem root so every module can reach them
 // through enclosing-namespace lookup.
 namespace hellofem {
+    // NOLINTBEGIN
     namespace md = MDSPAN_IMPL_STANDARD_NAMESPACE;
     namespace mdex
         = MDSPAN_IMPL_STANDARD_NAMESPACE::MDSPAN_IMPL_PROPOSED_NAMESPACE;
-
+    // NOLINTEND
     /// A scalar is a floating-point type or a complex type over one.
     template <class T>
-    struct is_custom_scalar : std::false_type {};
+    struct is_custom_scalar : std::false_type { };
 
     template <class T>
     concept scalar = std::floating_point<T>
-                     || std::is_same_v<T, std::complex<typename T::value_type>>
-                     || is_custom_scalar<T>::value;
+        || std::is_same_v<T, std::complex<typename T::value_type>>
+        || is_custom_scalar<T>::value;
 
     /// Underlying value type of a scalar (unwraps std::complex).
     template <scalar T, typename = void>

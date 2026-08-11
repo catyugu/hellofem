@@ -9,7 +9,6 @@
 #include <concepts>
 #include <cstdint>
 #include <functional>
-#include <iterator>
 #include <limits>
 #include <numeric>
 #include <optional>
@@ -29,18 +28,18 @@ namespace hellofem {
         {
             using uT = std::make_unsigned_t<T>;
             static_assert(std::numeric_limits<uT>::digits
-                          == std::numeric_limits<T>::digits + 1);
+                == std::numeric_limits<T>::digits + 1);
             return std::bit_cast<uT>(e) ^ (uT(1) << (sizeof(T) * 8 - 1));
         }
     };
 
-    inline constexpr _unsigned_projection unsigned_projection{};
+    inline constexpr _unsigned_projection unsigned_projection {};
 
     /// LSD radix sort over a random-access range, sorting by `proj(element)`.
     /// `BITS` is the number of bits handled per pass (bucket count 2^BITS).
     /// Stable: elements equal under `proj` keep their relative order.
     template <int BITS = 8, typename P = std::identity,
-              std::ranges::random_access_range R>
+        std::ranges::random_access_range R>
     constexpr void radix_sort(R&& range, P proj = {})
     {
         using T = std::ranges::range_value_t<R>;
@@ -65,7 +64,7 @@ namespace hellofem {
 
         // First pass histogram doubles as the pass-0 bucket counters, so the
         // leading pass needs no extra traversal.
-        std::array<uI, bucket_size> counter{};
+        std::array<uI, bucket_size> counter {};
         std::array<uI, bucket_size> offset;
 
         uI max_value = 0;
@@ -101,7 +100,7 @@ namespace hellofem {
 
             // Exclusive prefix sum gives the insertion cursor per bucket.
             std::exclusive_scan(counter.begin(), counter.end(), offset.begin(),
-                                uI(0));
+                uI(0));
             for (auto c : current) {
                 uI bucket = (proj(c) & mask) >> mask_offset;
                 next[offset[bucket]++] = c;
@@ -121,9 +120,9 @@ namespace hellofem {
     /// (column 0 most significant). Stable.
     template <typename T, int BITS = 16>
     std::vector<std::int32_t> sort_by_perm(std::span<const T> x,
-                                           std::size_t shape1,
-                                           std::optional<std::size_t> ncols
-                                           = std::nullopt)
+        std::size_t shape1,
+        std::optional<std::size_t> ncols
+        = std::nullopt)
     {
         static_assert(std::is_integral_v<T>, "Integral required.");
 

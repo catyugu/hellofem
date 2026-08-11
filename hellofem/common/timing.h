@@ -22,8 +22,8 @@ namespace hellofem {
 
     /// All logged elapsed times: task -> (count, total wall time).
     std::map<std::string,
-             std::pair<int, std::chrono::duration<double, std::ratio<1>>>,
-             std::less<>>
+        std::pair<int, std::chrono::duration<double, std::ratio<1>>>,
+        std::less<>>
     timings();
 
 } // namespace hellofem

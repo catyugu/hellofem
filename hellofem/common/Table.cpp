@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <format>
 #include <iterator>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -33,7 +32,7 @@ namespace hellofem {
     }
 
     void Table::set(std::string_view row, std::string_view col,
-                    std::variant<std::string, int, double> value)
+        std::variant<std::string, int, double> value)
     {
         if (std::find(_rows.begin(), _rows.end(), row) == _rows.end())
             _rows.emplace_back(row);
@@ -86,22 +85,22 @@ namespace hellofem {
         for (std::size_t j = 0; j < _cols.size(); j++) {
             if (_right_justify)
                 std::format_to(std::back_inserter(s), "  {:>{}}", _cols[j],
-                               col_sizes[j + 1]);
+                    col_sizes[j + 1]);
             else
                 std::format_to(std::back_inserter(s), "  {:<{}}", _cols[j],
-                               col_sizes[j + 1]);
+                    col_sizes[j + 1]);
         }
         s += "\n" + std::string(row_size, '-');
         for (std::size_t i = 0; i < _rows.size(); i++) {
             std::format_to(std::back_inserter(s), "\n{:<{}}  |", _rows[i],
-                           col_sizes[0]);
+                col_sizes[0]);
             for (std::size_t j = 0; j < _cols.size(); j++) {
                 if (_right_justify)
                     std::format_to(std::back_inserter(s), "  {:>{}}",
-                                   tvalues[i][j], col_sizes[j + 1]);
+                        tvalues[i][j], col_sizes[j + 1]);
                 else
                     std::format_to(std::back_inserter(s), "  {:<{}}",
-                                   tvalues[i][j], col_sizes[j + 1]);
+                        tvalues[i][j], col_sizes[j + 1]);
             }
         }
 

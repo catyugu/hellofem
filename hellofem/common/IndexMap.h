@@ -77,12 +77,12 @@ namespace hellofem::common {
 
         /// Compute global indices for an array of local indices.
         void local_to_global(std::span<const std::int32_t> local,
-                             std::span<std::int64_t> global) const;
+            std::span<std::int64_t> global) const;
 
         /// Compute local indices for an array of global indices. Returns -1
         /// for global indices not owned by this process.
         void global_to_local(std::span<const std::int64_t> global,
-                             std::span<std::int32_t> local) const;
+            std::span<std::int32_t> local) const;
 
         /// Global index for every local index (0, 1, 2, ...).
         std::vector<std::int64_t> global_indices() const;

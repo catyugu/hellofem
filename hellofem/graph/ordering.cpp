@@ -3,7 +3,7 @@
 
 #include "ordering.h"
 
-#include "../common/Timer.h"
+#include "common/Timer.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -18,7 +18,7 @@ namespace {
     // Level structure of `graph` rooted at node `s`: nodes grouped by BFS
     // distance from `s`.
     AdjacencyList<int> create_level_structure(const AdjacencyList<int>& graph,
-                                              int s)
+        int s)
     {
         common::Timer t("Graph: create_level_structure");
 
@@ -26,7 +26,7 @@ namespace {
         labelled[s] = true;
 
         int l = 0;
-        std::vector<int> level_offsets{0};
+        std::vector<int> level_offsets {0};
         level_offsets.reserve(graph.offsets().size());
         std::vector<int> level_structure = {s};
         level_structure.reserve(graph.array().size());
@@ -45,14 +45,14 @@ namespace {
         }
 
         return AdjacencyList(std::move(level_structure),
-                             std::move(level_offsets));
+            std::move(level_offsets));
     }
 
     // RCM reordering of the unlabelled part of the graph. `rlabel` holds -1
     // for nodes not yet assigned an ordering.
     std::vector<std::int32_t>
     rcm_reorder_unlabelled(const AdjacencyList<std::int32_t>& graph,
-                           std::span<const std::int32_t> rlabel)
+        std::span<const std::int32_t> rlabel)
     {
         common::Timer timer("Reverse Cuthill-McKee ordering");
 
