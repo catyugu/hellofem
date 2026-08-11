@@ -1,5 +1,6 @@
 add_subdirectory(basis)
 add_subdirectory(common)
+add_subdirectory(geometry)
 add_subdirectory(graph)
 add_subdirectory(fem)
 add_subdirectory(la)
