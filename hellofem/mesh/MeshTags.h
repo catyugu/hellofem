@@ -94,6 +94,9 @@ namespace hellofem::mesh {
         /// Topological dimension of the tagged entities.
         int dim() const { return _dim; }
 
+        /// Number of tagged entities.
+        std::size_t size() const { return _indices.size(); }
+
         /// Associated topology.
         std::shared_ptr<const Topology> topology() const { return _topology; }
 

@@ -45,4 +45,40 @@ namespace hellofem::mesh {
         return entities1;
     }
 
+    std::vector<std::int32_t>
+    exterior_facet_indices(const Topology& topology, int facet_type_idx)
+    {
+        const int tdim = topology.dim();
+        if (facet_type_idx < 0
+            or static_cast<std::size_t>(facet_type_idx)
+                >= topology.entity_types(tdim - 1).size())
+            throw std::runtime_error("Invalid facet type index.");
+
+        auto f_to_c
+            = topology.connectivity({tdim - 1, facet_type_idx}, {tdim, 0});
+        if (!f_to_c)
+            throw std::runtime_error(
+                "Facet-to-cell connectivity has not been computed.");
+
+        // A facet is exterior when exactly one cell is attached to it.
+        // In the single-process build all facets are owned.
+        std::vector<std::int32_t> facets;
+        for (std::int32_t f = 0; f < f_to_c->num_nodes(); ++f)
+            if (f_to_c->num_links(f) == 1)
+                facets.push_back(f);
+
+        return facets;
+    }
+
+    std::vector<std::int32_t>
+    exterior_facet_indices(const Topology& topology)
+    {
+        const int tdim = topology.dim();
+        if (topology.entity_types(tdim - 1).size() > 1)
+            throw std::runtime_error("Multiple facet types in mesh. Call "
+                                     "exterior_facet_indices with a facet type index.");
+
+        return exterior_facet_indices(topology, 0);
+    }
+
 } // namespace hellofem::mesh
