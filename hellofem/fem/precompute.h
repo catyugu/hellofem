@@ -42,9 +42,19 @@ namespace hellofem::fem {
         /// num_points)`, row `c` at `c * num_points`.
         std::span<const T> coeffs;
 
+        /// Physical gradients of the coefficients at the quadrature
+        /// points, `(num_coeffs, num_points, gdim)`. Only filled by
+        /// `make_expression_kernel`; empty for `make_cell_kernel`.
+        std::span<const T> dcoeffs;
+
         /// Concatenated constant values in form order. The weak form
         /// knows its own constant count.
         const T* constants;
+
+        /// Physical coordinates of the quadrature points,
+        /// `(num_points, gdim)`, row `p` at `p * gdim`. Only filled by
+        /// `make_expression_kernel`; empty for `make_cell_kernel`.
+        std::span<const T> X;
 
         /// Number of quadrature points.
         int num_points;
@@ -112,6 +122,10 @@ namespace hellofem::fem {
         /// Basis values of coefficient `c`, `(num_points, space_dim_c)`.
         std::span<const T> coeff_phi(int c) const { return cphi[c]; }
 
+        /// Reference gradients of coefficient `c`,
+        /// `(num_points, space_dim_c, tdim)`.
+        std::span<const T> coeff_dphi(int c) const { return cdphi[c]; }
+
         /// Offset of coefficient `c` in the packed coefficient array.
         int coeff_offset(int c) const { return offsets[c]; }
 
@@ -157,6 +171,9 @@ namespace hellofem::fem {
         // Coefficient basis values at quadrature points
         std::vector<std::vector<T>> cphi;
 
+        // Coefficient reference gradients at quadrature points
+        std::vector<std::vector<T>> cdphi;
+
         // Cumulative space dimensions of the coefficients
         std::vector<int> offsets;
 
@@ -184,5 +201,157 @@ namespace hellofem::fem {
     template <std::floating_point T>
     kernel_t<T> make_cell_kernel(const PrecomputeData<T>& pre,
         cell_kernel_weak_fn_t<T> weak_fn);
+
+    /// Wrap an expression writer into a dolfinx-style `kernel_t`.
+    ///
+    /// Unlike `make_cell_kernel`, the returned kernel fills the output
+    /// buffer `Ae` with the value of an expression at each quadrature
+    /// point (one value per point, `num_points * value_size` entries)
+    /// rather than accumulating an element tensor. The writer receives
+    /// the friendly data with the physical point coordinates filled in
+    /// `data.X`, physical coefficient values in `data.coeffs`, their
+    /// gradients in `data.dcoeffs`, and physical test/trial gradients
+    /// in `data.dphi0`/`data.dphi1`.
+    ///
+    /// @tparam Fn Writer type; any callable `void(T*, const
+    /// CellKernelData<T>&)`.
+    /// @param[in] pre Precomputed reference data.
+    /// @param[in] writer The expression writer.
+    /// @return An expression kernel.
+    template <std::floating_point T, typename Fn>
+    kernel_t<T> make_expression_kernel(const PrecomputeData<T>& pre, Fn writer)
+    {
+        const int nq = pre.num_points();
+        const int tdim = pre.tdim();
+        const int ndofs0 = pre.num_dofs0();
+        const int ndofs1 = pre.num_dofs1();
+        const int ncoeffs = pre.num_coeffs();
+        const int ngeom = pre.num_geom_dofs();
+
+        // Per-cell scratch buffers, allocated once.
+        constexpr int gdim = 3;
+        std::vector<T> cdofs(static_cast<std::size_t>(ngeom) * gdim);
+        std::vector<T> J(static_cast<std::size_t>(gdim) * tdim);
+        std::vector<T> K(static_cast<std::size_t>(tdim) * gdim);
+        std::vector<T> detJ(nq);
+        std::vector<T> Jwork(2 * gdim * tdim);
+        std::vector<T> dphi0_phys(static_cast<std::size_t>(nq) * ndofs0 * tdim);
+        std::vector<T> dphi1_phys(static_cast<std::size_t>(nq) * ndofs1 * tdim);
+        std::vector<T> coeffs_phys(static_cast<std::size_t>(ncoeffs) * nq);
+        std::vector<T> dcoeffs_phys(
+            static_cast<std::size_t>(ncoeffs) * nq * gdim);
+        std::vector<T> X_phys(static_cast<std::size_t>(nq) * gdim);
+
+        return [&pre, writer = std::move(writer), nq, tdim, ndofs0, ndofs1,
+                   ncoeffs, ngeom, cdofs, J, K, detJ, Jwork, dphi0_phys,
+                   dphi1_phys, coeffs_phys, dcoeffs_phys, X_phys](
+                   T* Ae, const T* coeffs, const T* constants,
+                   const double* cds, const int*, const std::uint8_t*, void*) mutable {
+            const std::size_t nq_ = static_cast<std::size_t>(nq);
+            const std::size_t nd_ = static_cast<std::size_t>(ngeom);
+            constexpr int gdim = 3;
+
+            // Gather the cell geometry nodes: (ngeom, gdim).
+            for (int j = 0; j < ngeom; ++j)
+                for (int k = 0; k < gdim; ++k)
+                    cdofs[j * gdim + k] = cds[j * gdim + k];
+
+            for (int p = 0; p < nq; ++p) {
+                // Jacobian and its inverse/determinant at the point.
+                std::fill(J.begin(), J.end(), 0);
+                for (int i = 0; i < gdim; ++i)
+                    for (int k = 0; k < tdim; ++k) {
+                        T acc = 0;
+                        for (int j = 0; j < ngeom; ++j)
+                            acc += pre.coord_dphi_ref()[((p * nd_ + j)) * tdim + k]
+                                * cdofs[j * gdim + i];
+                        J[i * tdim + k] = acc;
+                    }
+
+                md::mdspan<T, md::dextents<std::size_t, 2>> Jm(J.data(), gdim, tdim);
+                md::mdspan<T, md::dextents<std::size_t, 2>> Km(K.data(), tdim, gdim);
+                if (tdim == gdim)
+                    math::inv(Jm, Km);
+                else
+                    math::pinv(Jm, Km);
+
+                if (tdim == gdim)
+                    detJ[p] = std::abs(math::det(Jm));
+                else
+                    detJ[p] = std::abs(
+                        CoordinateElement<T>::compute_jacobian_determinant(
+                            Jm, std::span(Jwork.data(), Jwork.size())));
+
+                // Physical coordinates: X[p] = sum_j coord_phi[p][j] * cdofs[j].
+                for (int i = 0; i < gdim; ++i) {
+                    T acc = 0;
+                    for (int j = 0; j < ngeom; ++j)
+                        acc += pre.coord_phi()[p * ngeom + j] * cdofs[j * gdim + i];
+                    X_phys[p * gdim + i] = acc;
+                }
+
+                // Physical gradients of test/trial basis: dphi * K.
+                for (int i = 0; i < ndofs0; ++i)
+                    for (int c = 0; c < tdim; ++c) {
+                        T acc = 0;
+                        for (int j = 0; j < tdim; ++j)
+                            acc += pre.test_dphi_ref()[((p * ndofs0 + i)) * tdim + j]
+                                * K[j * gdim + c];
+                        dphi0_phys[(p * ndofs0 + i) * tdim + c] = acc;
+                    }
+                for (int i = 0; i < ndofs1; ++i)
+                    for (int c = 0; c < tdim; ++c) {
+                        T acc = 0;
+                        for (int j = 0; j < tdim; ++j)
+                            acc += pre.trial_dphi_ref()[((p * ndofs1 + i)) * tdim + j]
+                                * K[j * gdim + c];
+                        dphi1_phys[(p * ndofs1 + i) * tdim + c] = acc;
+                    }
+
+                // Coefficient values at the point.
+                for (int c = 0; c < ncoeffs; ++c) {
+                    const int offset = pre.coeff_offset(c);
+                    const std::size_t csize = pre.coeff_phi(c).size() / nq_;
+                    T acc = 0;
+                    for (std::size_t i = 0; i < csize; ++i)
+                        acc += pre.coeff_phi(c)[p * csize + i] * coeffs[offset + i];
+                    coeffs_phys[c * nq_ + p] = acc;
+                }
+
+                // Physical coefficient gradients: dcoeffs = dphi_ref * K.
+                for (int c = 0; c < ncoeffs; ++c) {
+                    const int offset = pre.coeff_offset(c);
+                    const auto cdphi = pre.coeff_dphi(c);
+                    const std::size_t csize_ref = cdphi.size() / (nq_ * tdim);
+                    for (int q = 0; q < gdim; ++q) {
+                        T gacc = 0;
+                        for (int j = 0; j < tdim; ++j)
+                            for (std::size_t i = 0; i < csize_ref; ++i)
+                                gacc += cdphi[(p * csize_ref + i) * tdim + j]
+                                    * K[j * gdim + q] * coeffs[offset + i];
+                        dcoeffs_phys[(c * nq_ + p) * gdim + q] = gacc;
+                    }
+                }
+            }
+
+            // Build the friendly data view and invoke the writer.
+            CellKernelData<T> data;
+            data.phi0 = pre.test_phi();
+            data.dphi0 = dphi0_phys;
+            data.phi1 = pre.trial_phi();
+            data.dphi1 = dphi1_phys;
+            data.w = pre.weights();
+            data.detJ = detJ;
+            data.coeffs = coeffs_phys;
+            data.dcoeffs = dcoeffs_phys;
+            data.constants = constants;
+            data.X = X_phys;
+            data.num_points = nq;
+            data.num_dofs0 = ndofs0;
+            data.num_dofs1 = ndofs1;
+            data.tdim = tdim;
+            writer(Ae, data);
+        };
+    }
 
 } // namespace hellofem::fem

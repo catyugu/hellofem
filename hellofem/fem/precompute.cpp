@@ -111,6 +111,7 @@ namespace hellofem::fem {
             std::vector<T> phi, dphi;
             _tabulate_scalar_basis(*ce, Xq, xshape, phi, dphi);
             cphi.push_back(std::move(phi));
+            cdphi.push_back(std::move(dphi));
         }
         offsets.push_back(0);
         for (const auto* ce : coeff_elements)

@@ -42,3 +42,7 @@ add_test(NAME test_interpolate COMMAND test_interpolate)
 add_executable(test_eval test_eval.cpp)
 target_link_libraries(test_eval PRIVATE hellofem Catch2::Catch2WithMain)
 add_test(NAME test_eval COMMAND test_eval)
+
+add_executable(test_expression test_expression.cpp)
+target_link_libraries(test_expression PRIVATE hellofem Catch2::Catch2WithMain)
+add_test(NAME test_expression COMMAND test_expression)
