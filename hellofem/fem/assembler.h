@@ -22,7 +22,7 @@
 
 namespace hellofem::fem {
 
-    /// Assemble the cell integrals of a linear form into a vector.
+    /// Assemble the cell and facet integrals of a linear form into a vector.
     /// @param[in,out] b The vector to accumulate into.
     /// @param[in] L The linear form.
     template <typename V, std::floating_point T>
@@ -48,15 +48,31 @@ namespace hellofem::fem {
                 // Preallocate scratch.
                 const auto x_dofmap = L.mesh()->geometry().dofmaps().front();
                 const std::size_t ngeom = x_dofmap.extent(1);
-                std::vector<T> be_b(static_cast<std::size_t>(dofmap.bs())
-                    * dofmap.map().extent(1));
-                std::vector<T> cdofs_b(3 * ngeom);
+                std::vector<T> be_b(static_cast<std::size_t>(2)
+                    * dofmap.bs() * dofmap.map().extent(1));
+                std::vector<T> cdofs_b(static_cast<std::size_t>(6) * ngeom);
                 std::span<const std::uint32_t> empty_cell_info;
 
-                impl::assemble_cells_vector(P0, barr, L.mesh()->geometry(),
-                    cells, dofmap, kernel, std::span<const T>(constants),
-                    coeffs.data(), cstride, empty_cell_info, std::span(be_b),
-                    std::span(cdofs_b));
+                switch (type) {
+                case IntegralType::cell:
+                    impl::assemble_cells_vector(P0, barr, L.mesh()->geometry(),
+                        cells, dofmap, kernel, std::span<const T>(constants),
+                        coeffs.data(), cstride, empty_cell_info, std::span(be_b),
+                        std::span(cdofs_b));
+                    break;
+                case IntegralType::exterior_facet:
+                    impl::assemble_entities_vector(P0, barr, L.mesh()->geometry(),
+                        cells, dofmap, kernel, std::span<const T>(constants),
+                        coeffs.data(), cstride, empty_cell_info, std::span(be_b),
+                        std::span(cdofs_b));
+                    break;
+                case IntegralType::interior_facet:
+                    impl::assemble_interior_facets_vector(P0, barr,
+                        L.mesh()->geometry(), cells, dofmap, kernel,
+                        std::span<const T>(constants), coeffs.data(), cstride,
+                        empty_cell_info, std::span(be_b), std::span(cdofs_b));
+                    break;
+                }
             }
         }
     }
@@ -92,18 +108,36 @@ namespace hellofem::fem {
 
                 const auto x_dofmap = a.mesh()->geometry().dofmaps().front();
                 const std::size_t ngeom = x_dofmap.extent(1);
-                std::vector<T> Ab(static_cast<std::size_t>(dofmap0.bs())
-                    * dofmap0.map().extent(1)
+                std::vector<T> Ab(static_cast<std::size_t>(4)
+                    * dofmap0.bs() * dofmap0.map().extent(1)
                     * static_cast<std::size_t>(dofmap1.bs())
                     * dofmap1.map().extent(1));
-                std::vector<T> cdofs_b(3 * ngeom);
+                std::vector<T> cdofs_b(static_cast<std::size_t>(6) * ngeom);
                 std::span<const std::uint32_t> empty_cell_info;
 
-                impl::assemble_cells_matrix<false>(mat_add,
-                    a.mesh()->geometry(), cells, dofmap0, P0, dofmap1, P1T,
-                    bc0, bc1, kernel, coeffs.data(), cstride,
-                    std::span<const T>(constants), empty_cell_info,
-                    empty_cell_info, std::span(Ab), std::span(cdofs_b));
+                switch (type) {
+                case IntegralType::cell:
+                    impl::assemble_cells_matrix<false>(mat_add,
+                        a.mesh()->geometry(), cells, dofmap0, P0, dofmap1, P1T,
+                        bc0, bc1, kernel, coeffs.data(), cstride,
+                        std::span<const T>(constants), empty_cell_info,
+                        empty_cell_info, std::span(Ab), std::span(cdofs_b));
+                    break;
+                case IntegralType::exterior_facet:
+                    impl::assemble_entities_matrix<false>(mat_add,
+                        a.mesh()->geometry(), cells, dofmap0, P0, dofmap1, P1T,
+                        bc0, bc1, kernel, coeffs.data(), cstride,
+                        std::span<const T>(constants), empty_cell_info,
+                        empty_cell_info, std::span(Ab), std::span(cdofs_b));
+                    break;
+                case IntegralType::interior_facet:
+                    impl::assemble_interior_facets_matrix<false>(mat_add,
+                        a.mesh()->geometry(), cells, dofmap0, P0, dofmap1, P1T,
+                        bc0, bc1, kernel, coeffs.data(), cstride,
+                        std::span<const T>(constants), empty_cell_info,
+                        empty_cell_info, std::span(Ab), std::span(cdofs_b));
+                    break;
+                }
             }
         }
     }
@@ -278,10 +312,26 @@ namespace hellofem::fem {
                 auto cells = M.domain(type, idx, 0);
                 const auto x_dofmap = M.mesh()->geometry().dofmaps().front();
                 const std::size_t ngeom = x_dofmap.extent(1);
-                std::vector<T> cdofs_b(3 * ngeom);
-                value += impl::assemble_cells_scalar(M.mesh()->geometry(),
-                    cells, kernel, constants, coeffs.data(), cstride,
-                    cdofs_b);
+                std::vector<T> cdofs_b(static_cast<std::size_t>(6) * ngeom);
+
+                switch (type) {
+                case IntegralType::cell:
+                    value += impl::assemble_cells_scalar(M.mesh()->geometry(),
+                        cells, kernel, std::span<const T>(constants),
+                        coeffs.data(), cstride, std::span(cdofs_b));
+                    break;
+                case IntegralType::exterior_facet:
+                    value += impl::assemble_entities_scalar(M.mesh()->geometry(),
+                        cells, kernel, std::span<const T>(constants),
+                        coeffs.data(), cstride, std::span(cdofs_b));
+                    break;
+                case IntegralType::interior_facet:
+                    value += impl::assemble_interior_facets_scalar(
+                        M.mesh()->geometry(), cells, kernel,
+                        std::span<const T>(constants), coeffs.data(), cstride,
+                        std::span(cdofs_b));
+                    break;
+                }
             }
         }
         return value;

@@ -46,3 +46,7 @@ add_test(NAME test_eval COMMAND test_eval)
 add_executable(test_expression test_expression.cpp)
 target_link_libraries(test_expression PRIVATE hellofem Catch2::Catch2WithMain)
 add_test(NAME test_expression COMMAND test_expression)
+
+add_executable(test_facet_assembly test_facet_assembly.cpp)
+target_link_libraries(test_facet_assembly PRIVATE hellofem Catch2::Catch2WithMain)
+add_test(NAME test_facet_assembly COMMAND test_facet_assembly)
