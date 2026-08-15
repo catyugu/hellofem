@@ -22,7 +22,7 @@ namespace hellofem::fem::impl {
     /// Execute the kernel over cells and accumulate into a vector array.
     template <std::floating_point T>
     void assemble_cells_vector(
-        std::function<void(std::span<T>, std::span<const std::uint32_t>,
+        const std::function<void(std::span<T>, std::span<const std::uint32_t>,
             std::int32_t, int)>& P0,
         std::span<T> b, const mesh::Geometry<T>& geometry,
         std::span<const std::int32_t> cells, const DofMap& dofmap,
@@ -66,7 +66,7 @@ namespace hellofem::fem::impl {
     /// local_facet)` and accumulate into a vector array.
     template <std::floating_point T>
     void assemble_entities_vector(
-        std::function<void(std::span<T>, std::span<const std::uint32_t>,
+        const std::function<void(std::span<T>, std::span<const std::uint32_t>,
             std::int32_t, int)>& P0,
         std::span<T> b, const mesh::Geometry<T>& geometry,
         std::span<const std::int32_t> entities, const DofMap& dofmap,
@@ -114,7 +114,7 @@ namespace hellofem::fem::impl {
     /// cell-, lf-)` and accumulate into a vector array.
     template <std::floating_point T>
     void assemble_interior_facets_vector(
-        std::function<void(std::span<T>, std::span<const std::uint32_t>,
+        const std::function<void(std::span<T>, std::span<const std::uint32_t>,
             std::int32_t, int)>& P0,
         std::span<T> b, const mesh::Geometry<T>& geometry,
         std::span<const std::int32_t> facets, const DofMap& dofmap,

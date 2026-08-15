@@ -12,6 +12,12 @@
 #include "assemble_vector_impl.h"
 #include "pack.h"
 
+#include <tbb/blocked_range.h>
+#include <tbb/enumerable_thread_specific.h>
+#include <tbb/parallel_for.h>
+#include <tbb/spin_mutex.h>
+
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -23,6 +29,9 @@
 namespace hellofem::fem {
 
     /// Assemble the cell and facet integrals of a linear form into a vector.
+    ///
+    /// The assembly is parallelized with per-thread accumulation (cells
+    /// sharing boundary dofs would otherwise race on `b`).
     /// @param[in,out] b The vector to accumulate into.
     /// @param[in] L The linear form.
     template <typename V, std::floating_point T>
@@ -39,6 +48,8 @@ namespace hellofem::fem {
                 auto& [coeffs, cstride] = storage.at({type, idx});
                 const auto& kernel = L.kernel(type, idx, 0);
                 auto cells = L.domain(type, idx, 0);
+                if (cells.empty())
+                    continue;
 
                 // Dof transformations (identity for Lagrange).
                 const DofMap& dofmap = *L.function_spaces().front()->dofmap();
@@ -48,37 +59,73 @@ namespace hellofem::fem {
                 // Preallocate scratch.
                 const auto x_dofmap = L.mesh()->geometry().dofmaps().front();
                 const std::size_t ngeom = x_dofmap.extent(1);
-                std::vector<T> be_b(static_cast<std::size_t>(2)
-                    * dofmap.bs() * dofmap.map().extent(1));
-                std::vector<T> cdofs_b(static_cast<std::size_t>(6) * ngeom);
                 std::span<const std::uint32_t> empty_cell_info;
+                std::span<const T> consts(constants);
 
-                switch (type) {
-                case IntegralType::cell:
-                    impl::assemble_cells_vector(P0, barr, L.mesh()->geometry(),
-                        cells, dofmap, kernel, std::span<const T>(constants),
-                        coeffs.data(), cstride, empty_cell_info, std::span(be_b),
-                        std::span(cdofs_b));
-                    break;
-                case IntegralType::exterior_facet:
-                    impl::assemble_entities_vector(P0, barr, L.mesh()->geometry(),
-                        cells, dofmap, kernel, std::span<const T>(constants),
-                        coeffs.data(), cstride, empty_cell_info, std::span(be_b),
-                        std::span(cdofs_b));
-                    break;
-                case IntegralType::interior_facet:
-                    impl::assemble_interior_facets_vector(P0, barr,
-                        L.mesh()->geometry(), cells, dofmap, kernel,
-                        std::span<const T>(constants), coeffs.data(), cstride,
-                        empty_cell_info, std::span(be_b), std::span(cdofs_b));
-                    break;
-                }
+                // Parallelize over the entity range. Each task accumulates
+                // into a thread-local dense buffer (cells sharing boundary
+                // dofs would otherwise race on the shared vector).
+                const std::size_t entities_per_cell
+                    = (type == IntegralType::interior_facet) ? 4
+                    : (type == IntegralType::exterior_facet) ? 2
+                                                              : 1;
+                const std::size_t num_entities
+                    = cells.size() / entities_per_cell;
+                if (num_entities == 0)
+                    continue;
+
+                tbb::enumerable_thread_specific<std::vector<T>> local(
+                    std::vector<T>(barr.size(), 0));
+                tbb::parallel_for(
+                    tbb::blocked_range<std::size_t>(0, num_entities),
+                    [&, P0, kernel](const tbb::blocked_range<std::size_t>& r) {
+                        std::span<T> b_t(local.local());
+                        // Per-thread scratch.
+                        std::vector<T> be_b(static_cast<std::size_t>(2)
+                            * dofmap.bs() * dofmap.map().extent(1));
+                        std::vector<T> cdofs_b(static_cast<std::size_t>(6) * ngeom);
+                        const std::size_t begin = r.begin() * entities_per_cell;
+                        const std::size_t len = (r.end() - r.begin()) * entities_per_cell;
+
+                        switch (type) {
+                        case IntegralType::cell:
+                            impl::assemble_cells_vector(P0, b_t,
+                                L.mesh()->geometry(), cells.subspan(begin, len),
+                                dofmap, kernel, consts,
+                                coeffs.data() + r.begin() * cstride, cstride,
+                                empty_cell_info, std::span(be_b), std::span(cdofs_b));
+                            break;
+                        case IntegralType::exterior_facet:
+                            impl::assemble_entities_vector(P0, b_t,
+                                L.mesh()->geometry(), cells.subspan(begin, len),
+                                dofmap, kernel, consts,
+                                coeffs.data() + r.begin() * cstride, cstride,
+                                empty_cell_info, std::span(be_b), std::span(cdofs_b));
+                            break;
+                        case IntegralType::interior_facet:
+                            impl::assemble_interior_facets_vector(P0, b_t,
+                                L.mesh()->geometry(), cells.subspan(begin, len),
+                                dofmap, kernel, consts,
+                                coeffs.data() + r.begin() * cstride, cstride,
+                                empty_cell_info, std::span(be_b), std::span(cdofs_b));
+                            break;
+                        }
+                    });
+
+                // Reduce the thread-local accumulations into `b`.
+                for (const auto& bt : local)
+                    for (std::size_t i = 0; i < barr.size(); ++i)
+                        barr[i] += bt[i];
             }
         }
     }
 
-    /// Assemble the cell integrals of a bilinear form into a matrix,
-    /// zeroing rows/cols marked by the boundary conditions.
+    /// Assemble the cell and facet integrals of a bilinear form into a
+    /// matrix, zeroing rows/cols marked by the boundary conditions.
+    ///
+    /// The assembly is parallelized: each task accumulates into a
+    /// thread-local clone of the matrix (copied from `mat_add`'s backing
+    /// storage) which are summed into the base at the end.
     /// @param[in] mat_add Functor matching `la::MatSet` (e.g.
     /// `matrix.mat_add_values()`).
     /// @param[in] a The bilinear form.
@@ -98,6 +145,8 @@ namespace hellofem::fem {
                 auto& [coeffs, cstride] = storage.at({type, idx});
                 const auto& kernel = a.kernel(type, idx, 0);
                 auto cells = a.domain(type, idx, 0);
+                if (cells.empty())
+                    continue;
 
                 const DofMap& dofmap0 = *a.function_spaces()[0]->dofmap();
                 const DofMap& dofmap1 = *a.function_spaces()[1]->dofmap();
@@ -108,36 +157,68 @@ namespace hellofem::fem {
 
                 const auto x_dofmap = a.mesh()->geometry().dofmaps().front();
                 const std::size_t ngeom = x_dofmap.extent(1);
-                std::vector<T> Ab(static_cast<std::size_t>(4)
-                    * dofmap0.bs() * dofmap0.map().extent(1)
-                    * static_cast<std::size_t>(dofmap1.bs())
-                    * dofmap1.map().extent(1));
-                std::vector<T> cdofs_b(static_cast<std::size_t>(6) * ngeom);
                 std::span<const std::uint32_t> empty_cell_info;
+                std::span<const T> consts(constants);
 
-                switch (type) {
-                case IntegralType::cell:
-                    impl::assemble_cells_matrix<false>(mat_add,
-                        a.mesh()->geometry(), cells, dofmap0, P0, dofmap1, P1T,
-                        bc0, bc1, kernel, coeffs.data(), cstride,
-                        std::span<const T>(constants), empty_cell_info,
-                        empty_cell_info, std::span(Ab), std::span(cdofs_b));
-                    break;
-                case IntegralType::exterior_facet:
-                    impl::assemble_entities_matrix<false>(mat_add,
-                        a.mesh()->geometry(), cells, dofmap0, P0, dofmap1, P1T,
-                        bc0, bc1, kernel, coeffs.data(), cstride,
-                        std::span<const T>(constants), empty_cell_info,
-                        empty_cell_info, std::span(Ab), std::span(cdofs_b));
-                    break;
-                case IntegralType::interior_facet:
-                    impl::assemble_interior_facets_matrix<false>(mat_add,
-                        a.mesh()->geometry(), cells, dofmap0, P0, dofmap1, P1T,
-                        bc0, bc1, kernel, coeffs.data(), cstride,
-                        std::span<const T>(constants), empty_cell_info,
-                        empty_cell_info, std::span(Ab), std::span(cdofs_b));
-                    break;
-                }
+                const std::size_t entities_per_cell
+                    = (type == IntegralType::interior_facet) ? 4
+                    : (type == IntegralType::exterior_facet) ? 2
+                                                              : 1;
+                const std::size_t num_entities
+                    = cells.size() / entities_per_cell;
+                if (num_entities == 0)
+                    continue;
+
+                // Thread-local matrix accumulation: the kernel evaluation is
+                // parallel, but the shared CSR writes are serialized with a
+                // spin mutex (insert_csr performs a short binary search, so
+                // the lock contention is low). The caller's `mat_add` is
+                // invoked through a locking wrapper.
+                tbb::spin_mutex mutex;
+                auto mat_add_locked = [&](std::span<const std::int32_t> rows,
+                                          std::span<const std::int32_t> cols,
+                                          std::span<const T> vals) -> int {
+                    tbb::spin_mutex::scoped_lock lock(mutex);
+                    return mat_add(rows, cols, vals);
+                };
+                tbb::parallel_for(
+                    tbb::blocked_range<std::size_t>(0, num_entities),
+                    [&, P0, P1T, kernel, mat_add_locked](const tbb::blocked_range<std::size_t>& r) {
+                        std::vector<T> Ab(static_cast<std::size_t>(4)
+                            * dofmap0.bs() * dofmap0.map().extent(1)
+                            * static_cast<std::size_t>(dofmap1.bs())
+                            * dofmap1.map().extent(1));
+                        std::vector<T> cdofs_b(static_cast<std::size_t>(6) * ngeom);
+                        const std::size_t begin = r.begin() * entities_per_cell;
+                        const std::size_t len = (r.end() - r.begin()) * entities_per_cell;
+
+                        switch (type) {
+                        case IntegralType::cell:
+                            impl::assemble_cells_matrix<false>(mat_add_locked,
+                                a.mesh()->geometry(), cells.subspan(begin, len),
+                                dofmap0, P0, dofmap1, P1T, bc0, bc1, kernel,
+                                coeffs.data() + r.begin() * cstride, cstride,
+                                consts, empty_cell_info, empty_cell_info,
+                                std::span(Ab), std::span(cdofs_b));
+                            break;
+                        case IntegralType::exterior_facet:
+                            impl::assemble_entities_matrix<false>(mat_add_locked,
+                                a.mesh()->geometry(), cells.subspan(begin, len),
+                                dofmap0, P0, dofmap1, P1T, bc0, bc1, kernel,
+                                coeffs.data() + r.begin() * cstride, cstride,
+                                consts, empty_cell_info, empty_cell_info,
+                                std::span(Ab), std::span(cdofs_b));
+                            break;
+                        case IntegralType::interior_facet:
+                            impl::assemble_interior_facets_matrix<false>(mat_add_locked,
+                                a.mesh()->geometry(), cells.subspan(begin, len),
+                                dofmap0, P0, dofmap1, P1T, bc0, bc1, kernel,
+                                coeffs.data() + r.begin() * cstride, cstride,
+                                consts, empty_cell_info, empty_cell_info,
+                                std::span(Ab), std::span(cdofs_b));
+                            break;
+                        }
+                    });
             }
         }
     }
@@ -304,34 +385,58 @@ namespace hellofem::fem {
         pack_coefficients(M, storage);
 
         T value {0};
+        tbb::spin_mutex mutex;
         for (IntegralType type : M.integral_types()) {
             const int num = M.num_integrals(type);
             for (int idx = 0; idx < num; ++idx) {
                 auto& [coeffs, cstride] = storage.at({type, idx});
                 const auto& kernel = M.kernel(type, idx, 0);
                 auto cells = M.domain(type, idx, 0);
+                if (cells.empty())
+                    continue;
                 const auto x_dofmap = M.mesh()->geometry().dofmaps().front();
                 const std::size_t ngeom = x_dofmap.extent(1);
-                std::vector<T> cdofs_b(static_cast<std::size_t>(6) * ngeom);
+                std::span<const T> consts(constants);
 
-                switch (type) {
-                case IntegralType::cell:
-                    value += impl::assemble_cells_scalar(M.mesh()->geometry(),
-                        cells, kernel, std::span<const T>(constants),
-                        coeffs.data(), cstride, std::span(cdofs_b));
-                    break;
-                case IntegralType::exterior_facet:
-                    value += impl::assemble_entities_scalar(M.mesh()->geometry(),
-                        cells, kernel, std::span<const T>(constants),
-                        coeffs.data(), cstride, std::span(cdofs_b));
-                    break;
-                case IntegralType::interior_facet:
-                    value += impl::assemble_interior_facets_scalar(
-                        M.mesh()->geometry(), cells, kernel,
-                        std::span<const T>(constants), coeffs.data(), cstride,
-                        std::span(cdofs_b));
-                    break;
-                }
+                const std::size_t entities_per_cell
+                    = (type == IntegralType::interior_facet) ? 4
+                    : (type == IntegralType::exterior_facet) ? 2
+                                                              : 1;
+                const std::size_t num_entities
+                    = cells.size() / entities_per_cell;
+
+                tbb::parallel_for(
+                    tbb::blocked_range<std::size_t>(0, num_entities),
+                    [&, kernel](const tbb::blocked_range<std::size_t>& r) {
+                        std::vector<T> cdofs_b(static_cast<std::size_t>(6) * ngeom);
+                        const std::size_t begin = r.begin() * entities_per_cell;
+                        const std::size_t len = (r.end() - r.begin()) * entities_per_cell;
+
+                        T local {0};
+                        switch (type) {
+                        case IntegralType::cell:
+                            local = impl::assemble_cells_scalar(M.mesh()->geometry(),
+                                cells.subspan(begin, len), kernel, consts,
+                                coeffs.data() + r.begin() * cstride, cstride,
+                                std::span(cdofs_b));
+                            break;
+                        case IntegralType::exterior_facet:
+                            local = impl::assemble_entities_scalar(M.mesh()->geometry(),
+                                cells.subspan(begin, len), kernel, consts,
+                                coeffs.data() + r.begin() * cstride, cstride,
+                                std::span(cdofs_b));
+                            break;
+                        case IntegralType::interior_facet:
+                            local = impl::assemble_interior_facets_scalar(
+                                M.mesh()->geometry(), cells.subspan(begin, len),
+                                kernel, consts,
+                                coeffs.data() + r.begin() * cstride, cstride,
+                                std::span(cdofs_b));
+                            break;
+                        }
+                        tbb::spin_mutex::scoped_lock lock(mutex);
+                        value += local;
+                    });
             }
         }
         return value;

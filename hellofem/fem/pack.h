@@ -95,10 +95,16 @@ namespace hellofem::fem {
                 std::span<const std::int32_t> entities
                     = form.domain(type, idx, 0);
 
-                // Cells per entity and flattened entries per entity.
+                // Cells per entity and flattened entries per entity. Cell
+                // integrals store one cell per entity; exterior facets
+                // store (cell, local_facet) pairs; interior facets store
+                // (cell+, lf+, cell-, lf-) quadruples.
                 const int cells_per_entity
                     = (type == IntegralType::interior_facet) ? 2 : 1;
-                const int entries_per_entity = 2 * cells_per_entity;
+                const int entries_per_entity
+                    = (type == IntegralType::cell) ? 1
+                    : (type == IntegralType::exterior_facet) ? 2
+                                                             : 4;
                 const std::size_t num_entities
                     = entities.size() / entries_per_entity;
                 const int stride = cells_per_entity * total;
