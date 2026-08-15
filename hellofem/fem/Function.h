@@ -63,6 +63,35 @@ namespace hellofem::fem {
         /// coefficients).
         void interpolate(const Function<T>& u);
 
+        /// Evaluate the function at a set of physical points.
+        ///
+        /// @param[in] x Point coordinates, flattened row-major with shape
+        /// `(num_points, gdim)`.
+        /// @param[in] xshape Shape of `x`.
+        /// @param[in] cells For each point, the index of the cell that
+        /// contains it (negative entries are skipped).
+        /// @param[in,out] u Values, flattened row-major with shape
+        /// `(num_points, value_size)`, zeroed before accumulation.
+        /// @param[in] ushape Shape of `u`.
+        /// @param[in] tol Newton tolerance for pull-back (non-affine
+        /// geometry only).
+        /// @param[in] maxit Newton iteration limit for pull-back.
+        void eval(std::span<const T> x, std::array<std::size_t, 2> xshape,
+            std::span<const std::int32_t> cells, std::span<T> u,
+            std::array<std::size_t, 2> ushape, double tol = 1e-12,
+            int maxit = 20) const;
+
+        /// Evaluate the function at arbitrary physical points, locating
+        /// the containing cell automatically (single-process).
+        ///
+        /// @param[in] x Point coordinates, flattened row-major with shape
+        /// `(num_points, gdim)`.
+        /// @param[in] xshape Shape of `x`.
+        /// @return Values, flattened row-major with shape
+        /// `(num_points, value_size)`.
+        std::pair<std::vector<T>, std::array<std::size_t, 2>>
+        eval(std::span<const T> x, std::array<std::size_t, 2> xshape) const;
+
         /// Name.
         std::string name = "u";
 

@@ -38,3 +38,7 @@ add_test(NAME test_poisson COMMAND test_poisson)
 add_executable(test_interpolate test_interpolate.cpp)
 target_link_libraries(test_interpolate PRIVATE hellofem Catch2::Catch2WithMain)
 add_test(NAME test_interpolate COMMAND test_interpolate)
+
+add_executable(test_eval test_eval.cpp)
+target_link_libraries(test_eval PRIVATE hellofem Catch2::Catch2WithMain)
+add_test(NAME test_eval COMMAND test_eval)
