@@ -7,6 +7,10 @@
 #include "SparsityPattern.h"
 #include "common/IndexMap.h"
 
+#include <tbb/blocked_range.h>
+#include <tbb/enumerable_thread_specific.h>
+#include <tbb/parallel_for.h>
+
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -133,42 +137,61 @@ namespace hellofem::la {
         /// Sparse matrix-vector product `y += A x` for a blocked CSR
         /// matrix. Block entries are stored row-major: element at
         /// row-offset `k0`, column-offset `k1` of block `j` is at
-        /// `values[j*bs0*bs1 + k0*bs1 + k1]`.
+        /// `values[j*bs0*bs1 + k0*bs1 + k1]`. Parallelized over rows with
+        /// oneTBB (each row writes a distinct `y` entry).
         template <typename T>
         void spmv(std::span<const T> values,
             std::span<const std::int64_t> row_ptr,
             std::span<const std::int32_t> indices, std::span<const T> x,
             std::span<T> y, int bs0, int bs1)
         {
+            const std::size_t nrows = row_ptr.size() - 1;
             for (int k0 = 0; k0 < bs0; ++k0) {
-                for (std::size_t i = 0; i < row_ptr.size() - 1; ++i) {
-                    T vi {0};
-                    for (std::int64_t j = row_ptr[i]; j < row_ptr[i + 1]; ++j) {
-                        for (int k1 = 0; k1 < bs1; ++k1)
-                            vi += values[j * bs0 * bs1 + k0 * bs1 + k1]
-                                * x[indices[j] * bs1 + k1];
-                    }
-                    y[i * bs0 + k0] += vi;
-                }
+                tbb::parallel_for(
+                    tbb::blocked_range<std::size_t>(0, nrows),
+                    [&](const tbb::blocked_range<std::size_t>& r) {
+                        for (std::size_t i = r.begin(); i < r.end(); ++i) {
+                            T vi {0};
+                            for (std::int64_t j = row_ptr[i]; j < row_ptr[i + 1]; ++j) {
+                                for (int k1 = 0; k1 < bs1; ++k1)
+                                    vi += values[j * bs0 * bs1 + k0 * bs1 + k1]
+                                        * x[indices[j] * bs1 + k1];
+                            }
+                            y[i * bs0 + k0] += vi;
+                        }
+                    });
             }
         }
 
-        /// Sparse matrix-vector transpose product `y += A^T x`.
+        /// Sparse matrix-vector transpose product `y += A^T x`. Parallelized
+        /// with per-thread accumulation because distinct input rows scatter
+        /// to shared output columns.
         template <typename T>
         void spmvT(std::span<const T> values,
             std::span<const std::int64_t> row_ptr,
             std::span<const std::int32_t> indices, std::span<const T> x,
             std::span<T> y, int bs0, int bs1)
         {
+            const std::size_t nrows = row_ptr.size() - 1;
             for (int k0 = 0; k0 < bs0; ++k0) {
-                for (std::size_t i = 0; i < row_ptr.size() - 1; ++i) {
-                    const T xval = x[i * bs0 + k0];
-                    for (std::int64_t j = row_ptr[i]; j < row_ptr[i + 1]; ++j) {
-                        for (int k1 = 0; k1 < bs1; ++k1)
-                            y[indices[j] * bs1 + k1]
-                                += values[j * bs0 * bs1 + k0 * bs1 + k1] * xval;
-                    }
-                }
+                tbb::enumerable_thread_specific<std::vector<T>> local(
+                    std::vector<T>(y.size(), 0));
+                tbb::parallel_for(
+                    tbb::blocked_range<std::size_t>(0, nrows),
+                    [&](const tbb::blocked_range<std::size_t>& r) {
+                        std::span<T> yl(local.local());
+                        for (std::size_t i = r.begin(); i < r.end(); ++i) {
+                            const T xval = x[i * bs0 + k0];
+                            for (std::int64_t j = row_ptr[i]; j < row_ptr[i + 1]; ++j) {
+                                for (int k1 = 0; k1 < bs1; ++k1)
+                                    yl[indices[j] * bs1 + k1]
+                                        += values[j * bs0 * bs1 + k0 * bs1 + k1] * xval;
+                            }
+                        }
+                    });
+                for (const auto& yl : local)
+                    for (std::size_t i = 0; i < y.size(); ++i)
+                        y[i] += yl[i];
             }
         }
 
@@ -200,16 +223,55 @@ namespace hellofem::la {
         /// Build a matrix from a finalized sparsity pattern, with all
         /// values initialized to zero.
         /// @param[in] pattern The finalized pattern.
-        /// @param[in] mode Block layout mode (compact; expanded deferred).
+        /// @param[in] mode Block layout mode. `compact` stores blocks
+        /// (bs0 x bs1) per nonzero entry; `expanded` stores the scalar
+        /// expansion (each block becomes bs0*bs1 entries, the block size
+        /// reduced to {1,1} and the index maps sized by the physical dof
+        /// count).
         explicit MatrixCSR(const SparsityPattern& pattern,
             BlockMode mode = BlockMode::compact)
             : _index_maps({pattern.index_map(0), pattern.index_map(1)}), _block_mode(mode), _bs({pattern.block_size(0), pattern.block_size(1)})
         {
-            if (mode == BlockMode::expanded)
-                throw std::runtime_error(
-                    "MatrixCSR expanded block mode is not yet implemented.");
-
             auto [edges, offsets] = pattern.graph();
+
+            if (mode == BlockMode::expanded) {
+                const std::int32_t nrows = _index_maps[0]->size_local();
+                const std::int32_t ncols = _index_maps[1]->size_local();
+                const std::int32_t bs0 = _bs[0], bs1 = _bs[1];
+                // Scalar-sized index maps and block size.
+                _index_maps[0] = std::make_shared<common::IndexMap>(0, nrows * bs0);
+                _index_maps[1] = std::make_shared<common::IndexMap>(0, ncols * bs1);
+                _bs = {1, 1};
+
+                // Expand each block row r into bs0 scalar rows; each block
+                // column c into bs1 scalar columns.
+                const std::int32_t nnz = static_cast<std::int32_t>(edges.size());
+                std::vector<std::int32_t> cols_b;
+                cols_b.reserve(static_cast<std::size_t>(nnz) * bs0 * bs1);
+                std::vector<std::int64_t> row_ptr_b(
+                    static_cast<std::size_t>(nrows * bs0) + 1, 0);
+                std::int64_t acc = 0;
+                for (std::int32_t r = 0; r < nrows; ++r) {
+                    const std::int32_t num_blk
+                        = static_cast<std::int32_t>(offsets[r + 1] - offsets[r]);
+                    for (int i0 = 0; i0 < bs0; ++i0) {
+                        row_ptr_b[static_cast<std::size_t>(r * bs0 + i0) + 1] = acc
+                            + static_cast<std::int64_t>(num_blk) * bs1;
+                        acc += static_cast<std::int64_t>(num_blk) * bs1;
+                    }
+                    for (std::int64_t j = offsets[r]; j < offsets[r + 1]; ++j) {
+                        const std::int32_t c = edges[static_cast<std::size_t>(j)];
+                        for (int i0 = 0; i0 < bs0; ++i0)
+                            for (int i1 = 0; i1 < bs1; ++i1)
+                                cols_b.push_back(c * bs1 + i1);
+                    }
+                }
+                _cols.assign(cols_b.begin(), cols_b.end());
+                _row_ptr.assign(row_ptr_b.begin(), row_ptr_b.end());
+                _data.assign(static_cast<std::size_t>(_row_ptr.back()), 0);
+                return;
+            }
+
             _cols.assign(edges.begin(), edges.end());
             _row_ptr.assign(offsets.begin(), offsets.end());
             _data.assign(
@@ -221,6 +283,10 @@ namespace hellofem::la {
 
         /// Move constructor
         MatrixCSR(MatrixCSR&& A) = default;
+
+        /// Default constructor: an empty matrix with null index maps (used
+        /// internally by `to_scalar`).
+        MatrixCSR() = default;
 
         /// Copy assignment
         MatrixCSR& operator=(const MatrixCSR& A) = default;
@@ -361,6 +427,71 @@ namespace hellofem::la {
             }
 
             return dense;
+        }
+
+        /// A scalar (bs == {1,1}) copy of the matrix with each block
+        /// expanded into bs0 x bs1 scalar entries.
+        ///
+        /// The result owns fresh index maps sized by the physical
+        /// (expanded) dof counts, so it is usable directly by scalar
+        /// preconditioners (Jacobi, ILU, AMG, Schwarz) and solvers.
+        MatrixCSR<value_type, Container, ColContainer, RowPtrContainer>
+        to_scalar() const
+        {
+            const std::int32_t nrows = num_owned_rows();
+            const std::int32_t ncols = _index_maps[1]->size_local();
+            const std::int32_t bs0 = _bs[0], bs1 = _bs[1];
+            if (bs0 == 1 and bs1 == 1)
+                return *this;
+
+            MatrixCSR S;
+            S._index_maps[0] = std::make_shared<common::IndexMap>(0, nrows * bs0);
+            S._index_maps[1] = std::make_shared<common::IndexMap>(0, ncols * bs1);
+            S._block_mode = BlockMode::compact;
+            S._bs = {1, 1};
+
+            // Expand the block CSR to a scalar CSR: each block row r
+            // becomes bs0 scalar rows, each block column c becomes bs1
+            // scalar columns. Scalar row (r, i0) carries, for every block
+            // column j of block row r, the columns {c_j*bs1 .. c_j*bs1+bs1}.
+            const std::size_t nnz = _cols.size();
+            S._cols.reserve(nnz * static_cast<std::size_t>(bs0 * bs1));
+            S._row_ptr.resize(static_cast<std::size_t>(nrows * bs0) + 1, 0);
+            std::int64_t acc = 0;
+            for (std::int32_t r = 0; r < nrows; ++r) {
+                const std::int32_t num_blk
+                    = static_cast<std::int32_t>(_row_ptr[r + 1] - _row_ptr[r]);
+                for (int i0 = 0; i0 < bs0; ++i0) {
+                    S._row_ptr[static_cast<std::size_t>(r * bs0 + i0) + 1]
+                        = acc + static_cast<std::int64_t>(num_blk) * bs1;
+                    acc += static_cast<std::int64_t>(num_blk) * bs1;
+                }
+                for (int i0 = 0; i0 < bs0; ++i0)
+                    for (std::int64_t j = _row_ptr[r]; j < _row_ptr[r + 1]; ++j)
+                        for (int i1 = 0; i1 < bs1; ++i1)
+                            S._cols.push_back(
+                                _cols[static_cast<std::size_t>(j)] * bs1 + i1);
+            }
+            S._data.assign(static_cast<std::size_t>(S._row_ptr.back()), 0);
+
+            // Copy values block by block into the scalar layout. Scalar
+            // row (r, i0), block j occupies the bs1 slots at
+            // base + (j - row_ptr[r]) * bs1.
+            for (std::int32_t r = 0; r < nrows; ++r)
+                for (std::int64_t j = _row_ptr[r]; j < _row_ptr[r + 1]; ++j)
+                    for (int i0 = 0; i0 < bs0; ++i0)
+                        for (int i1 = 0; i1 < bs1; ++i1) {
+                            const std::int64_t base
+                                = S._row_ptr[static_cast<std::size_t>(r * bs0 + i0)];
+                            const std::int64_t pos
+                                = base
+                                + (j - _row_ptr[r]) * static_cast<std::int64_t>(bs1)
+                                + i1;
+                            S._data[static_cast<std::size_t>(pos)]
+                                = _data[static_cast<std::size_t>(j * bs0 * bs1
+                                    + i0 * bs1 + i1)];
+                        }
+            return S;
         }
 
         /// Index map for the given dimension (0 = rows, 1 = columns).

@@ -385,6 +385,48 @@ TEST_CASE("JFNK matrix-free Newton solves nonlinear Poisson", "[nls]")
     REQUIRE(solver.krylov_iterations() > 0);
 }
 
+// End-to-end: matrix-free JFNK with a matrix-based preconditioner (the
+// Jacobian is assembled each step purely to synthesize the preconditioner;
+// the matvec stays finite-difference).
+TEST_CASE("JFNK matrix-free with matrix-based preconditioner", "[nls]")
+{
+    NlPoisson nl(8);
+    la::Vector<double> x(nl.V->dofmap()->index_map,
+        nl.V->dofmap()->index_map_bs());
+    nl.set_initial_guess(x);
+    la::Vector<double> b(nl.V->dofmap()->index_map,
+        nl.V->dofmap()->index_map_bs());
+    la::MatrixCSR<double> J = nl.make_matrix();
+
+    nls::NewtonSolver<double> solver;
+    solver.set_residual(
+        [&](const la::Vector<double>& xx, la::Vector<double>& bb) {
+            nl.residual(xx, bb);
+        },
+        b);
+    // Provide a Jacobian assembler; in matrix-free mode it is used only
+    // for preconditioning (the FD operator remains the matvec).
+    solver.set_jacobian(
+        [&](const la::Vector<double>& xx, la::MatrixCSR<double>& Jmat) {
+            nl.jacobian(xx, Jmat);
+        },
+        J);
+    solver.max_it = 20;
+    solver.rtol = 1e-8;
+    solver.atol = 1e-12;
+    solver.linear_solver = "gmres";
+    solver.preconditioner_type = "ilu";
+
+    const auto [iters, converged] = solver.solve(x);
+    REQUIRE(converged);
+    REQUIRE(iters > 0);
+
+    double maxu = 0.0;
+    for (const double xi : x.array())
+        maxu = std::max(maxu, std::abs(xi));
+    REQUIRE(maxu < 1e-6);
+}
+
 // End-to-end: assembled-Jacobian Newton solves the same problem and agrees
 // with the matrix-free path.
 TEST_CASE("Assembled-Jacobian Newton matches matrix-free", "[nls]")

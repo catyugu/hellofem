@@ -123,9 +123,16 @@ namespace hellofem::nls {
         int linear_max_iter = 1000;
 
         /// Preconditioner synthesized from the assembled Jacobian each
-        /// step ("none", "jacobi", "amg"). Ignored in matrix-free mode
-        /// (use `set_preconditioner` there).
+        /// step ("none", "jacobi", "amg", "ilu", "schwarz"). In assembled
+        /// mode it preconditions the assembled system; in matrix-free mode
+        /// it preconditions the finite-difference Jacobian-vector product
+        /// (requires a `jacobian_fn` and `use_matrix_preconditioner`).
         std::string preconditioner_type = "none";
+
+        /// In matrix-free (JFNK) mode, assemble the Jacobian each step for
+        /// preconditioner synthesis only (the matvec stays matrix-free).
+        /// Only effective when a `jacobian_fn` was set. Default true.
+        bool use_matrix_preconditioner = true;
 
         /// Solve `F(x) = 0` from the initial guess `x`.
         /// @param[in,out] x Initial guess on entry, solution on exit.
@@ -174,6 +181,8 @@ namespace hellofem::nls {
                 // Configure the inner Krylov solve.
                 la::KrylovSolver<T> ks;
                 if (_fnJ) {
+                    // Assembled mode: build the Jacobian matrix and use it
+                    // as both the operator and the preconditioner source.
                     ks.set_operator(*_Jmat); // copies; enables synth. precond
                     if (preconditioner_type != "none")
                         ks.set_preconditioner_type(preconditioner_type);
@@ -181,6 +190,16 @@ namespace hellofem::nls {
                 else {
                     // JFNK: finite-difference Jacobian-vector product.
                     ks.set_operator(_fd_operator(x, *_b));
+                    // Matrix-based preconditioning: if a Jacobian
+                    // assembler was provided, use the assembled matrix
+                    // only for preconditioner synthesis (the matvec stays
+                    // matrix-free). A preconditioner for matrix-free JFNK
+                    // is otherwise only available via the user callback.
+                    if (_fnJ and preconditioner_type != "none"
+                        and use_matrix_preconditioner) {
+                        ks.set_matrix(*_Jmat);
+                        ks.set_preconditioner_type(preconditioner_type);
+                    }
                 }
                 if (_fnP) {
                     std::shared_ptr<const la::Preconditioner<T>> P;

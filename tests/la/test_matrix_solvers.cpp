@@ -280,13 +280,15 @@ TEST_CASE("GMRES: solves a non-symmetric system", "[la]")
         REQUIRE(std::abs(x.array()[i] - xstar.array()[i]) < 1e-8);
 }
 
-TEST_CASE("MatrixCSR: expanded block mode throws", "[la]")
+TEST_CASE("MatrixCSR: expanded block mode gives a scalar matrix", "[la]")
 {
-    la::SparsityPattern pattern(imap(2));
+    la::SparsityPattern pattern(imap(2), 2);
     std::vector<std::int32_t> diag = {0, 1};
     pattern.insert_diagonal(diag);
     pattern.finalize();
     la::MatrixCSR<double> A(pattern);
     REQUIRE_NOTHROW(A); // compact mode is fine
-    REQUIRE_THROWS(la::MatrixCSR<double>(pattern, la::BlockMode::expanded));
+    la::MatrixCSR<double> B(pattern, la::BlockMode::expanded);
+    REQUIRE(B.block_size() == std::array<int, 2> {1, 1});
+    REQUIRE(B.num_owned_rows() == 4);
 }

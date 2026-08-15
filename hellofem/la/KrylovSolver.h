@@ -5,6 +5,7 @@
 
 #include "LinearOperator.h"
 #include "preconditioner.h"
+#include "schwarz.h"
 
 #include <algorithm>
 #include <cmath>
@@ -48,6 +49,7 @@ namespace hellofem::la {
         enum class SolverType {
             cg, ///< Conjugate gradients (SPD systems)
             gmres, ///< Restarted GMRES (general systems)
+            bicgstab, ///< BiCGSTAB (general/non-symmetric systems)
         };
 
         /// Default constructor
@@ -58,10 +60,18 @@ namespace hellofem::la {
 
         /// Set the operator from an assembled matrix. The matrix is
         /// copied so that `set_preconditioner_type` can synthesize a
-        /// Jacobi/AMG preconditioner from it.
+        /// Jacobi/AMG/ILU/Schwarz preconditioner from it.
         void set_operator(const MatrixCSR<T>& A)
         {
             _A = A.as_operator();
+            _matrix = std::make_shared<const MatrixCSR<T>>(A);
+        }
+
+        /// Register a matrix for preconditioner synthesis without changing
+        /// the operator (used for matrix-free solves with a matrix-based
+        /// preconditioner, e.g. JFNK with an assembled Jacobian).
+        void set_matrix(const MatrixCSR<T>& A)
+        {
             _matrix = std::make_shared<const MatrixCSR<T>>(A);
         }
 
@@ -80,20 +90,22 @@ namespace hellofem::la {
         }
 
         /// Configure the solver type by name.
-        /// @param[in] type "cg" or "gmres".
+        /// @param[in] type "cg", "gmres" or "bicgstab".
         void set_solver_type(std::string_view type)
         {
             if (type == "cg")
                 _type = SolverType::cg;
             else if (type == "gmres")
                 _type = SolverType::gmres;
+            else if (type == "bicgstab")
+                _type = SolverType::bicgstab;
             else
                 throw std::runtime_error("Unknown solver type.");
         }
 
         /// Configure the preconditioner by name.
-        /// @param[in] type "none", "jacobi" or "amg". The latter two
-        /// require a matrix registered via `set_operator(MatrixCSR)`.
+        /// @param[in] type "none", "jacobi", "ilu" or "amg". The latter
+        /// three require a matrix registered via `set_operator(MatrixCSR)`.
         void set_preconditioner_type(std::string_view type)
         {
             if (type == "none")
@@ -109,6 +121,18 @@ namespace hellofem::la {
                     throw std::runtime_error("AMG preconditioner requires a "
                                              "matrix (set_operator).");
                 _P = std::make_shared<AmgPreconditioner<T>>(*_matrix);
+            }
+            else if (type == "ilu") {
+                if (!_matrix)
+                    throw std::runtime_error("ILU preconditioner requires a "
+                                             "matrix (set_operator).");
+                _P = std::make_shared<IluPreconditioner<T>>(*_matrix);
+            }
+            else if (type == "schwarz") {
+                if (!_matrix)
+                    throw std::runtime_error("Schwarz preconditioner requires "
+                                             "a matrix (set_operator).");
+                _P = std::make_shared<SchwarzPreconditioner<T>>(*_matrix, 2, 1);
             }
             else
                 throw std::runtime_error("Unknown preconditioner type.");
@@ -139,11 +163,13 @@ namespace hellofem::la {
         /// iteration count reached is returned (no exception).
         int solve(Vector<T>& x, const Vector<T>& b, bool transpose = false) const
         {
-            (void)transpose; // CG/GMRES do not use the transpose
-            if (_type == SolverType::cg) {
+            (void)transpose; // CG/GMRES/BiCGSTAB do not use the transpose
+            switch (_type) {
+            case SolverType::cg:
                 return _cg(x, b);
-            }
-            else {
+            case SolverType::bicgstab:
+                return _bicgstab(x, b);
+            default:
                 return _gmres(x, b);
             }
         }
@@ -278,7 +304,9 @@ namespace hellofem::la {
                     const T h_k = std::abs(H[k][k]);
                     const T h_k1 = std::abs(H[k + 1][k]);
                     if (h_k1 == 0) {
-                        k++;
+                        // The Krylov space is invariant: the system is
+                        // already triangular. Keep `k` at the converged
+                        // column for the back-substitution.
                         break;
                     }
                     const T denom = std::sqrt(h_k * h_k + h_k1 * h_k1);
@@ -290,8 +318,10 @@ namespace hellofem::la {
                     gs[k + 1] = -s[k] * gs[k];
                     gs[k] = c[k] * gs[k];
 
-                    if (std::abs(gs[k + 1]) <= tol)
+                    if (std::abs(gs[k + 1]) <= tol) {
+                        ++total_iter; // this column counts as an iteration
                         break;
+                    }
                 }
 
                 // Back-substitute the upper triangular system to get y
@@ -329,10 +359,127 @@ namespace hellofem::la {
             return _max_iter;
         }
 
+        /// Right-preconditioned BiCGSTAB.
+        int _bicgstab(Vector<T>& x, const Vector<T>& b) const
+        {
+            const std::size_t n = b.array().size();
+            const auto tol = std::max(static_cast<decltype(squared_norm(b))>(_atol),
+                static_cast<decltype(squared_norm(b))>(_rtol)
+                    * std::sqrt(squared_norm(b)));
+
+            // Residual r0 = b - A x0.
+            Vector<T> r(b.index_map(), b.bs());
+            r = b;
+            if (_use_initial_guess) {
+                Vector<T> ax(b.index_map(), b.bs());
+                ax.set(0);
+                _A.mult(x, ax);
+                for (std::size_t i = 0; i < n; ++i)
+                    r[i] -= ax[i];
+            }
+            if (std::sqrt(squared_norm(r)) <= tol)
+                return 0;
+
+            // Shadow residual rhat is fixed for the whole iteration.
+            Vector<T> rhat(b.index_map(), b.bs());
+            rhat = r;
+
+            Vector<T> p(b.index_map(), b.bs());
+            p.set(0);
+            Vector<T> v(b.index_map(), b.bs());
+            Vector<T> s(b.index_map(), b.bs());
+            Vector<T> t(b.index_map(), b.bs());
+            Vector<T> z(b.index_map(), b.bs());
+
+            T rho_old {1};
+            T alpha {1};
+            T omega {1};
+
+            for (int k = 0; k < _max_iter; ++k) {
+                const T rho = inner_product(rhat, r);
+                if (std::abs(static_cast<double>(rho)) == 0)
+                    break; // breakdown: shadow residual orthogonal
+
+                const T beta = (rho / rho_old) * (alpha / omega);
+                // p = r + beta (p - omega v)
+                for (std::size_t i = 0; i < n; ++i)
+                    p[i] = r[i] + beta * (p[i] - omega * v[i]);
+
+                // v = A P p
+                v.set(0);
+                _apply_preconditioner(p, z);
+                {
+                    Vector<T> ap(b.index_map(), b.bs());
+                    ap.set(0);
+                    _A.mult(z, ap);
+                    v = ap;
+                }
+
+                const T rv = inner_product(rhat, v);
+                if (std::abs(static_cast<double>(rv)) == 0)
+                    break;
+                alpha = rho / rv;
+
+                // s = r - alpha v
+                for (std::size_t i = 0; i < n; ++i)
+                    s[i] = r[i] - alpha * v[i];
+
+                if (std::sqrt(squared_norm(s)) <= tol) {
+                    // x += alpha P p, done.
+                    Vector<T> y(b.index_map(), b.bs());
+                    y.set(0);
+                    _apply_preconditioner(p, y);
+                    for (std::size_t i = 0; i < n; ++i)
+                        x[i] += alpha * y[i];
+                    return k + 1;
+                }
+
+                // t = A P s
+                t.set(0);
+                _apply_preconditioner(s, z);
+                {
+                    Vector<T> ap(b.index_map(), b.bs());
+                    ap.set(0);
+                    _A.mult(z, ap);
+                    t = ap;
+                }
+
+                const T ts = inner_product(t, s);
+                const T tt = inner_product(t, t);
+                if (std::abs(static_cast<double>(tt)) == 0)
+                    break;
+                omega = ts / tt;
+
+                // x += alpha P p + omega P s
+                Vector<T> y(b.index_map(), b.bs());
+                y.set(0);
+                _apply_preconditioner(p, z);
+                for (std::size_t i = 0; i < n; ++i)
+                    x[i] += alpha * z[i];
+                y.set(0);
+                _apply_preconditioner(s, z);
+                for (std::size_t i = 0; i < n; ++i)
+                    x[i] += omega * z[i];
+
+                // r = s - omega t
+                for (std::size_t i = 0; i < n; ++i)
+                    r[i] = s[i] - omega * t[i];
+
+                if (std::sqrt(squared_norm(r)) <= tol)
+                    return k + 1;
+                if (std::abs(static_cast<double>(omega)) == 0)
+                    break; // breakdown
+
+                rho_old = rho;
+            }
+
+            spdlog::warn("BiCGSTAB did not converge in {} iterations.", _max_iter);
+            return _max_iter;
+        }
+
         /// Apply the preconditioner to `x`, storing `y = P x`. If no
         /// preconditioner is set, `y = x`.
-        void _apply_preconditioner(const Vector<T>& x, Vector<T>& y) const
-        {
+        void _apply_preconditioner(const Vector<T>& x, Vector<T>& y) const        {
             if (_P)
                 _P->apply(x, y);
             else
