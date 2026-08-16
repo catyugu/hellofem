@@ -16,3 +16,7 @@ target_link_libraries(app_test_mesh_loader PRIVATE mpfem Catch2::Catch2WithMain)
 target_compile_definitions(app_test_mesh_loader PRIVATE
     HELLOFEM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME app_test_mesh_loader COMMAND app_test_mesh_loader)
+
+add_executable(app_test_physics test_physics.cpp)
+target_link_libraries(app_test_physics PRIVATE mpfem Catch2::Catch2WithMain)
+add_test(NAME app_test_physics COMMAND app_test_physics)
