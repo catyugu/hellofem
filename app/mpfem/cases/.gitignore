@@ -1,0 +1,11 @@
+# COMSOL pipeline artifacts (regenerated per run)
+app/mpfem/cases/*/*.class
+app/mpfem/cases/*/*.mph
+app/mpfem/cases/*/*.mph.status
+app/mpfem/cases/*/*.mph.recovery
+app/mpfem/cases/*/batch.log
+app/mpfem/cases/*/full.out
+app/mpfem/cases/*/result.txt
+app/mpfem/cases/*/mesh.mphtxt
+app/mpfem/cases/*/generated_model.java
+app/mpfem/cases/*/probe.java
