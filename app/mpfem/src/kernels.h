@@ -19,6 +19,11 @@ namespace hellofem::app::kernels {
     // ---- Scalar load: Ae_i = Σ_q w detJ f φi ----
     void load_scalar(double* Ae, const CellKernelData<double>& d);
 
+    // ---- Joule heating load (scalar): Ae_i = Σ_q w detJ σ|∇V|² φi ----
+    // Coeffs [σ, V]: σ from d.coeffs[0], ∇V from d.dcoeffs[1] (physical
+    // coefficient gradient).
+    void joule_heat_load(double* Ae, const CellKernelData<double>& d);
+
     // ---- Convection Robin (facet): Ae_ij = Σ_q w detJ h φi φj ----
     void convection_mass(double* Ae, const FacetKernelData<double>& d);
 
@@ -29,8 +34,9 @@ namespace hellofem::app::kernels {
     // Block structure: dof a component i, dof b component j.
     void elasticity(double* Ae, const CellKernelData<double>& d);
 
-    // ---- Thermal strain load (vector, vdim=3): Ae_i = Σ_q w detJ B^T σ_th ----
-    // d.coeffs carries the 6 Voigt stress components per point.
-    void thermal_strain_load(double* Ae, const CellKernelData<double>& d);
+    // ---- Thermal expansion load (vector, vdim=3): Ae_i = Σ_q w detJ B^T σ_th ----
+    // Coeffs [T, α, E, ν] per point; constants[0] = reference temperature.
+    // σ_th (Voigt) = αΔT(2μ+3λ)·[1,1,1,0,0,0] with ΔT = T - T_ref.
+    void thermal_expansion_load(double* Ae, const CellKernelData<double>& d);
 
 } // namespace hellofem::app::kernels

@@ -43,8 +43,8 @@ namespace hellofem::fem {
         std::span<const T> coeffs;
 
         /// Physical gradients of the coefficients at the quadrature
-        /// points, `(num_coeffs, num_points, gdim)`. Only filled by
-        /// `make_expression_kernel`; empty for `make_cell_kernel`.
+        /// points, `(num_coeffs, num_points, gdim)`. Filled by both
+        /// `make_cell_kernel` and `make_expression_kernel`.
         std::span<const T> dcoeffs;
 
         /// Concatenated constant values in form order. The weak form

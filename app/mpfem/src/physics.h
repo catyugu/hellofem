@@ -10,6 +10,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -81,14 +82,9 @@ namespace hellofem::app {
 
         void solve_steady() override;
 
-        /// Joule heating source Q = sigma |grad V|^2 (cell property for
-        /// assembly of the heat RHS).
-        std::shared_ptr<CellProperty> joule_heat() { return joule_; }
-
     private:
         std::shared_ptr<CellProperty> sigma_;
         std::map<int, double> voltages_;
-        std::shared_ptr<CellProperty> joule_;
     };
 
     /// Heat transfer: rho cp dT/dt - div(k grad T) = Q.
@@ -102,6 +98,10 @@ namespace hellofem::app {
         void set_conductivity(std::shared_ptr<CellProperty> k) { k_ = k; }
         void set_thermal_mass(std::shared_ptr<CellProperty> rho_cp) { rho_cp_ = rho_cp; }
         void set_source(std::shared_ptr<CellProperty> Q) { Q_ = Q; }
+        /// Joule heating source from the electric solution: adds
+        /// ∫σ|∇V|² φ to the heat RHS.
+        void set_joule_source(std::shared_ptr<const fem::Function<double>> V,
+            std::shared_ptr<CellProperty> sigma);
         /// Robin BC: h (T - Tinf) on boundary id.
         void add_convection(int boundary_id, double h, double Tinf);
         void add_temperature_bc(int boundary_id, double value) { temps_[boundary_id] = value; }
@@ -113,6 +113,8 @@ namespace hellofem::app {
 
     private:
         std::shared_ptr<CellProperty> k_, rho_cp_, Q_;
+        std::shared_ptr<const fem::Function<double>> joule_V_;
+        std::shared_ptr<CellProperty> joule_sigma_;
         std::map<int, double> temps_;
         struct Convection { int id; double h; double Tinf; };
         std::vector<Convection> convections_;
@@ -126,14 +128,23 @@ namespace hellofem::app {
             std::shared_ptr<const mesh::MeshTags<int>> cell_tags, int order);
 
         void set_elastic(std::shared_ptr<CellProperty> E, std::shared_ptr<CellProperty> nu) { E_ = E; nu_ = nu; }
-        /// Set the thermal strain load: sigma_th (Voigt, 6 comps) per cell.
-        void set_thermal_strain(std::shared_ptr<CellProperty> sigma_th) { sigma_th_ = sigma_th; }
+        /// Set the thermal expansion load: σ_th = C : ε_th computed from
+        /// T (Function), α (per-domain) and E,ν (from set_elastic) with
+        /// reference temperature T_ref.
+        void set_thermal_expansion(std::shared_ptr<const fem::Function<double>> T,
+            std::shared_ptr<CellProperty> alpha, double T_ref);
         void add_fixed_bc(int boundary_id) { fixed_.insert(boundary_id); }
 
         void solve_steady() override;
 
     private:
-        std::shared_ptr<CellProperty> E_, nu_, sigma_th_;
+        std::shared_ptr<CellProperty> E_, nu_;
+        struct Thermal {
+            std::shared_ptr<const fem::Function<double>> T;
+            std::shared_ptr<CellProperty> alpha;
+            double Tref = 0.0;
+        };
+        std::optional<Thermal> thermal_;
         std::set<int> fixed_;
     };
 

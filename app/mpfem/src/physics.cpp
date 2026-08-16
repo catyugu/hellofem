@@ -25,6 +25,7 @@
 #include <cmath>
 #include <numeric>
 
+
 namespace hellofem::app {
 namespace {
 
@@ -48,8 +49,10 @@ namespace {
                 : std::optional<std::vector<std::size_t>> {
                       std::vector<std::size_t> {
                           static_cast<std::size_t>(value_dim)}});
-        auto coord = mesh->geometry().cmaps().front();
-        auto layout = coord.create_dof_layout();
+        // The FunctionSpace dofmap is built from the ELEMENT's own dof
+        // layout so a blocked (vector) element yields a bs=3 DofMap
+        // (the coordinate layout is scalar bs=1).
+        auto layout = fe->create_dof_layout();
         auto [imap, bs, dofmaps] = fem::build_dofmap_data(*mesh->topology(),
             {layout}, nullptr);
         auto dmap = std::make_shared<fem::DofMap>(layout,
@@ -79,13 +82,20 @@ namespace {
     }
 
     /// Locate the dofs on the given boundary facets (dimension tdim-1).
+    /// Ensures the facet entities and the (facet, cell) connectivities
+    /// exist (mphtxt meshes start with only the (tdim, 0) connectivity).
     std::vector<std::int32_t> boundary_dofs(const mesh::Mesh<double>& mesh,
         const fem::DofMap& dmap, std::span<const std::int32_t> facets)
     {
         if (facets.empty())
             return {};
+        const int tdim = mesh.topology()->dim();
+        auto topo = mesh.topology_mutable();
+        topo->create_entities(tdim - 1);
+        topo->create_connectivity(tdim - 1, tdim);
+        topo->create_connectivity(tdim, tdim - 1);
         return fem::DirichletBC<double>::locate_dofs_topological(
-            *mesh.topology(), dmap, mesh.topology()->dim() - 1, facets);
+            *mesh.topology(), dmap, tdim - 1, facets);
     }
 
     /// Flattened `(cell, local_facet)` pairs for the boundary facets with
@@ -302,6 +312,14 @@ void HeatTransferSolver::add_convection(int boundary_id, double h, double Tinf)
     convections_.push_back({boundary_id, h, Tinf});
 }
 
+void HeatTransferSolver::set_joule_source(
+    std::shared_ptr<const fem::Function<double>> V,
+    std::shared_ptr<CellProperty> sigma)
+{
+    joule_V_ = std::move(V);
+    joule_sigma_ = std::move(sigma);
+}
+
 void HeatTransferSolver::solve_steady()
 {
     auto cells = all_cells(*V_->dofmap());
@@ -407,6 +425,25 @@ void HeatTransferSolver::solve_steady()
         fem::assemble_vector(b, L);
     }
 
+    // Joule heating source: ∫σ|∇V|² φ dx (V solution + conductivity).
+    if (joule_V_ and joule_sigma_) {
+        auto preJ = std::make_shared<fem::PrecomputeData<double>>(
+            mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
+            std::vector<const fem::FiniteElement<double>*> {
+                joule_sigma_->function()->function_space()->element().get(),
+                joule_V_->function_space()->element().get()},
+            coord, 2);
+        auto kjoule = fem::make_cell_kernel(*preJ, kernels::joule_heat_load);
+        std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist1 {V_};
+        std::map<std::pair<fem::IntegralType, int>, std::vector<fem::Form<double>::integral_data>> ints;
+        ints[{fem::IntegralType::cell, 0}] = {{kjoule, cells, {0, 1}}};
+        std::vector<std::shared_ptr<const fem::Function<double>>> jcoeffs {
+            std::make_shared<fem::Function<double>>(*joule_sigma_->function()),
+            joule_V_};
+        fem::Form<double> L(Vlist1, std::move(ints), mesh_, jcoeffs, {});
+        fem::assemble_vector(b, L);
+    }
+
     // Apply Dirichlet: diagonal, lifting, RHS injection.
     if (!bcs.empty()) {
         fem::set_diagonal(A.mat_set_values(), a, bref, 1.0);
@@ -432,6 +469,13 @@ SolidMechanicsSolver::SolidMechanicsSolver(
     : FieldSolver(std::move(mesh), std::move(facet_tags), std::move(cell_tags),
         order, 3)
 {
+}
+
+void SolidMechanicsSolver::set_thermal_expansion(
+    std::shared_ptr<const fem::Function<double>> T,
+    std::shared_ptr<CellProperty> alpha, double T_ref)
+{
+    thermal_ = Thermal {std::move(T), std::move(alpha), T_ref};
 }
 
 void SolidMechanicsSolver::solve_steady()
@@ -463,18 +507,37 @@ void SolidMechanicsSolver::solve_steady()
     pattern.insert_diagonal(std::span(diag));
     pattern.finalize();
     la::MatrixCSR<double> A(pattern);
-    fem::assemble_matrix(A.mat_add_values(), a, {});
+    // Blocked (vector) element: scatter with 3x3 blocks (default BS=1 would
+    // treat scalar-block dofs as physical and read out of bounds). The
+    // matrix is assembled ONCE below, together with the BC handling (a
+    // second assembly without BCs would double the interior and keep the
+    // BC-interior coupling, making the system indefinite).
 
-    // RHS: thermal strain load.
+    // RHS: thermal expansion load ∫Bᵀσ_th φ dx, σ_th = C : (αΔT I).
     la::Vector<double> b(V_->dofmap()->index_map, V_->dofmap()->index_map_bs());
     b.set(0.0);
-    if (sigma_th_) {
+    if (thermal_ and E_ and nu_) {
         auto preL = std::make_shared<fem::PrecomputeData<double>>(
             mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
-            std::vector<const fem::FiniteElement<double>*> {},
+            std::vector<const fem::FiniteElement<double>*> {
+                thermal_->T->function_space()->element().get(),
+                thermal_->alpha->function()->function_space()->element().get(),
+                E_->function()->function_space()->element().get(),
+                nu_->function()->function_space()->element().get()},
             coord, 2);
-        // Thermal strain is a per-cell constant 6-vector; assemble directly.
-        // (Handled by the coupling layer with a custom loop.)
+        auto kth = fem::make_cell_kernel(*preL, kernels::thermal_expansion_load);
+        auto Tref = std::make_shared<fem::Constant<double>>(thermal_->Tref);
+        std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist1 {V_};
+        std::map<std::pair<fem::IntegralType, int>, std::vector<fem::Form<double>::integral_data>> ints;
+        ints[{fem::IntegralType::cell, 0}] = {{kth, cells, {0, 1, 2, 3}}};
+        std::vector<std::shared_ptr<const fem::Function<double>>> tcoeffs {
+            thermal_->T,
+            std::make_shared<fem::Function<double>>(*thermal_->alpha->function()),
+            std::make_shared<fem::Function<double>>(*E_->function()),
+            std::make_shared<fem::Function<double>>(*nu_->function())};
+        fem::Form<double> L(Vlist1, std::move(ints), mesh_, tcoeffs,
+            std::vector<std::shared_ptr<const fem::Constant<double>>> {Tref});
+        fem::assemble_vector(b, L);
     }
 
     // Dirichlet fixed BCs: zero displacement on the fixed boundaries.
@@ -487,18 +550,33 @@ void SolidMechanicsSolver::solve_steady()
     std::ranges::sort(bc_dofs);
     bc_dofs.erase(std::unique(bc_dofs.begin(), bc_dofs.end()), bc_dofs.end());
 
-    if (!bc_dofs.empty()) {
-        fem::DirichletBC<double> bc(0.0, bc_dofs, V_);
+    // Fixed BC fixes all components: expand scalar-block dofs to physical
+    // (DirichletBC::set/mark_dofs index the physical vector).
+    std::vector<std::int32_t> bc_phys;
+    bc_phys.reserve(bc_dofs.size() * 3);
+    for (std::int32_t d : bc_dofs)
+        for (int k = 0; k < 3; ++k)
+            bc_phys.push_back(3 * d + k);
+
+    if (!bc_phys.empty()) {
+        fem::DirichletBC<double> bc(0.0, bc_phys, V_);
         std::vector<std::reference_wrapper<const fem::DirichletBC<double>>> bref {bc};
-        fem::assemble_matrix(A.mat_add_values(), a, bref);
-        fem::set_diagonal(A.mat_set_values(), a, bref, 1.0);
+        // Assemble ONCE, zeroing the BC rows/cols in the element tensors.
+        fem::assemble_matrix(A.mat_add_values<3, 3>(), a, bref);
+        fem::set_diagonal(A.mat_set_values<3, 3>(), a, bref, 1.0);
         fem::apply_lifting(b, a, bref, std::optional<std::span<const double>> {}, 1.0);
         fem::set_bc(std::span(b.array()), bref, std::optional<std::span<const double>> {}, 1.0);
+    }
+    else {
+        fem::assemble_matrix(A.mat_add_values<3, 3>(), a, {});
     }
 
     la::KrylovSolver<double> solver;
     solver.set_operator(A);
     solver.set_solver_type("cg");
+    // BC rows have diagonal 1.0 while interior stiffness is ~1e10: Jacobi
+    // (per-block diagonal) restores a reasonable condition number.
+    solver.set_preconditioner_type("jacobi");
     solver.set_tolerances(1e-10, 1e-12, 2000);
     solver.solve(*u_->x(), b);
 }

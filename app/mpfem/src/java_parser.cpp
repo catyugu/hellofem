@@ -275,6 +275,29 @@ namespace {
         return out;
     }
 
+    /// Join only the string tokens of an argument (space-separated). Used
+    /// for property values, where a `new String[]{...}` array becomes a
+    /// space-separated list (e.g. a 9-entry tensor).
+    std::string arg_strings(const std::vector<Token>& arg)
+    {
+        std::string out;
+        for (const Token& t : arg)
+            if (t.kind == TokKind::string) {
+                if (!out.empty())
+                    out += ' ';
+                out += t.text;
+            }
+        return out;
+    }
+
+    /// Property/feature value: the space-joined string tokens if any,
+    /// else the raw token text (for numeric values).
+    std::string arg_value(const std::vector<Token>& arg)
+    {
+        const std::string s = arg_strings(arg);
+        return s.empty() ? arg_string(arg) : s;
+    }
+
     /// Parse a `new int[]{...}` / `new String[]{...}` selection arg into a
     /// set of integers (single int args and `new int[]{}` supported).
     std::set<int> parse_selection(const std::vector<Token>& arg)
@@ -291,6 +314,16 @@ namespace {
             }
         }
         return ids;
+    }
+
+    /// Parse a `set(...)` selection that may span multiple arguments, e.g.
+    /// `set(2, 3, 4, 5)` (each argument is one token-vector).
+    std::set<int> parse_selection_args(const std::vector<std::vector<Token>>& args)
+    {
+        std::vector<Token> flat;
+        for (const auto& a : args)
+            flat.insert(flat.end(), a.begin(), a.end());
+        return parse_selection(flat);
     }
 
     /// Interpret one chain and update `model`.
@@ -352,12 +385,12 @@ namespace {
                 while (k + 1 < c.size()) {
                     if (c[k].method == "propertyGroup" and k + 1 < c.size() and c[k + 1].method == "set") {
                         const std::string prop = arg_string(c[k + 1].args[0]);
-                        std::string value = arg_string(c[k + 1].args[1]);
+                        std::string value = arg_value(c[k + 1].args[1]);
                         mat->properties.push_back({prop, value});
                         return;
                     }
                     if (c[k].method == "selection" and k + 1 < c.size() and c[k + 1].method == "set") {
-                        mat->domains = parse_selection(c[k + 1].args[0]);
+                        mat->domains = parse_selection_args(c[k + 1].args);
                         return;
                     }
                     if (c[k].method == "materialModel" and k + 1 < c.size() and c[k + 1].method == "create")
@@ -413,12 +446,12 @@ namespace {
                     while (k < c.size()) {
                         if (c[k].method == "set") {
                             const std::string key = arg_string(c[k].args[0]);
-                            const std::string value = c[k].args.size() > 1 ? arg_string(c[k].args[1]) : "";
+                            const std::string value = c[k].args.size() > 1 ? arg_value(c[k].args[1]) : "";
                             feat->properties[key] = value;
                             return;
                         }
                         if (c[k].method == "selection" and k + 1 < c.size() and c[k + 1].method == "set") {
-                            feat->selection = parse_selection(c[k + 1].args[0]);
+                            feat->selection = parse_selection_args(c[k + 1].args);
                             return;
                         }
                         ++k;
@@ -449,12 +482,12 @@ namespace {
                 while (k < c.size()) {
                     if (c[k].method == "set") {
                         const std::string key = arg_string(c[k].args[0]);
-                        const std::string value = c[k].args.size() > 1 ? arg_string(c[k].args[1]) : "";
+                        const std::string value = c[k].args.size() > 1 ? arg_value(c[k].args[1]) : "";
                         mc->properties[key] = value;
                         return;
                     }
                     if (c[k].method == "selection" and k + 1 < c.size() and c[k + 1].method == "set") {
-                        mc->domains = parse_selection(c[k + 1].args[0]);
+                        mc->domains = parse_selection_args(c[k + 1].args);
                         return;
                     }
                     ++k;

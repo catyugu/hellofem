@@ -22,6 +22,10 @@ namespace hellofem::fem {
         /// element at a set of points. `phi` is filled with values
         /// `(num_points, num_dofs)`, `dphi` with gradients
         /// `(num_points, num_dofs, tdim)`.
+        ///
+        /// For a blocked element (block size `bs`) the scalar sub-element
+        /// basis is tabulated once and replicated across the block with
+        /// node-major dof ordering (`dof = scalar_dof * bs + component`).
         template <std::floating_point T>
         void _tabulate_scalar_basis(const FiniteElement<T>& element,
             const std::vector<T>& Xq, std::array<std::size_t, 2> xshape,
@@ -30,21 +34,30 @@ namespace hellofem::fem {
             const int num_points = static_cast<int>(xshape[0]);
             const int tdim = static_cast<int>(xshape[1]);
             const int ndofs = element.space_dimension();
+            const int bs = element.block_size();
+            const FiniteElement<T>& base
+                = bs > 1 ? *element.sub_elements()[0] : element;
+            const int ndofs_scalar = base.space_dimension();
 
             // Allocating tabulate returns (data, {nderivs, nq, ndofs, vs}).
-            auto [basis, shape] = element.tabulate(Xq, xshape, 1);
+            auto [basis, shape] = base.tabulate(Xq, xshape, 1);
             (void)shape;
 
             const std::size_t np = static_cast<std::size_t>(num_points);
+            const std::size_t ns = static_cast<std::size_t>(ndofs_scalar);
             const std::size_t nd = static_cast<std::size_t>(ndofs);
+            const std::size_t nbs = static_cast<std::size_t>(bs);
             phi.assign(np * nd, 0);
             dphi.assign(np * nd * static_cast<std::size_t>(tdim), 0);
             for (std::size_t p = 0; p < np; ++p) {
-                for (std::size_t i = 0; i < nd; ++i) {
-                    phi[p * nd + i] = basis[p * nd + i];
-                    for (int j = 0; j < tdim; ++j)
-                        dphi[(p * nd + i) * tdim + j]
-                            = basis[(static_cast<std::size_t>(j + 1) * np + p) * nd + i];
+                for (std::size_t s = 0; s < ns; ++s) {
+                    for (std::size_t c = 0; c < nbs; ++c) {
+                        const std::size_t d = s * nbs + c;
+                        phi[p * nd + d] = basis[p * ns + s];
+                        for (int j = 0; j < tdim; ++j)
+                            dphi[(p * nd + d) * tdim + j]
+                                = basis[(static_cast<std::size_t>(j + 1) * np + p) * ns + s];
+                    }
                 }
             }
         }
@@ -143,10 +156,13 @@ namespace hellofem::fem {
         std::vector<T> dphi0_phys(static_cast<std::size_t>(nq) * ndofs0 * tdim);
         std::vector<T> dphi1_phys(static_cast<std::size_t>(nq) * ndofs1 * tdim);
         std::vector<T> coeffs_phys(static_cast<std::size_t>(ncoeffs) * nq);
+        std::vector<T> dcoeffs_phys(
+            static_cast<std::size_t>(ncoeffs) * nq * gdim);
 
         return [&pre, weak_fn, nq, tdim, ndofs0, ndofs1, ncoeffs, ngeom,
                    cdofs, J, K, detJ, Jwork, dphi0_phys, dphi1_phys,
-                   coeffs_phys](T* Ae, const T* coeffs, const T* constants,
+                   coeffs_phys, dcoeffs_phys](
+                   T* Ae, const T* coeffs, const T* constants,
                    const double* cds, const int*, const std::uint8_t*, void*) mutable {
             const std::size_t nq_ = static_cast<std::size_t>(nq);
             const std::size_t nd_ = static_cast<std::size_t>(ngeom);
@@ -212,6 +228,21 @@ namespace hellofem::fem {
                         acc += pre.coeff_phi(c)[p * csize + i] * coeffs[offset + i];
                     coeffs_phys[c * nq_ + p] = acc;
                 }
+
+                // Physical coefficient gradients: dcoeffs = dphi_ref * K.
+                for (int c = 0; c < ncoeffs; ++c) {
+                    const int offset = pre.coeff_offset(c);
+                    const auto cdphi = pre.coeff_dphi(c);
+                    const std::size_t csize_ref = cdphi.size() / (nq_ * tdim);
+                    for (int q = 0; q < gdim; ++q) {
+                        T gacc = 0;
+                        for (int j = 0; j < tdim; ++j)
+                            for (std::size_t i = 0; i < csize_ref; ++i)
+                                gacc += cdphi[(p * csize_ref + i) * tdim + j]
+                                    * K[j * gdim + q] * coeffs[offset + i];
+                        dcoeffs_phys[(c * nq_ + p) * gdim + q] = gacc;
+                    }
+                }
             }
 
             // Build the friendly data view and invoke the weak form.
@@ -223,6 +254,7 @@ namespace hellofem::fem {
             data.w = pre.weights();
             data.detJ = detJ;
             data.coeffs = coeffs_phys;
+            data.dcoeffs = dcoeffs_phys;
             data.constants = constants;
             data.num_points = nq;
             data.num_dofs0 = ndofs0;

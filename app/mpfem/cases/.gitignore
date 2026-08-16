@@ -1,11 +1,25 @@
-# COMSOL pipeline artifacts (regenerated per run)
-app/mpfem/cases/*/*.class
-app/mpfem/cases/*/*.mph
-app/mpfem/cases/*/*.mph.status
-app/mpfem/cases/*/*.mph.recovery
-app/mpfem/cases/*/batch.log
-app/mpfem/cases/*/full.out
-app/mpfem/cases/*/result.txt
-app/mpfem/cases/*/mesh.mphtxt
-app/mpfem/cases/*/generated_model.java
-app/mpfem/cases/*/probe.java
+# COMSOL pipeline intermediates & results (regenerated per run).
+# Only the hand-written case sources (*.java — and not the generated/clean
+# model scripts) are tracked. Patterns are relative to this directory.
+
+# Compiled case
+*/*.class
+
+# COMSOL model file + recovery artifacts
+*/*.mph
+*/*_Model.mph
+*/*.mph.status
+*/*.mph.recovery
+
+# Mesh + result exports
+*/mesh.mphtxt
+*/result.txt
+*/result_hellofem.txt
+
+# Logs
+*/batch.log
+*/full.out
+
+# Save-As-Java / cleaned model scripts (intermediates, not sources)
+*/generated_model.java
+*/clean_model.java

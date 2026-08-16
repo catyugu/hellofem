@@ -104,11 +104,14 @@ namespace hellofem::fem::impl {
             P1T(Ae, cell_info1, c, 1);
 
             if (not LiftingMode) {
-                // Zero rows marked by bc0 and columns marked by bc1.
+                // Zero rows marked by bc0 and columns marked by bc1. A
+                // BC marks the whole block, so zero all bs0 component
+                // rows (and, via zero_col_block, all bs1 columns).
                 for (std::size_t i = 0; i < ndofs0; ++i)
                     if (has_bc(dofs0.subspan(i, 1), bs0, bc0))
-                        for (std::size_t j = 0; j < ndim1; ++j)
-                            Ae[i * ndim1 + j] = 0;
+                        for (int k = 0; k < bs0; ++k)
+                            for (std::size_t j = 0; j < ndim1; ++j)
+                                Ae[(i * bs0 + static_cast<std::size_t>(k)) * ndim1 + j] = 0;
                 for (std::size_t j = 0; j < ndofs1; ++j)
                     if (has_bc(dofs1.subspan(j, 1), bs1, bc1))
                         zero_col_block(Ae, ndim0, ndim1, j, bs1);
@@ -176,8 +179,9 @@ namespace hellofem::fem::impl {
             if (not LiftingMode) {
                 for (std::size_t i = 0; i < ndofs0; ++i)
                     if (has_bc(dofs0.subspan(i, 1), bs0, bc0))
-                        for (std::size_t j = 0; j < ndim1; ++j)
-                            Ae[i * ndim1 + j] = 0;
+                        for (int k = 0; k < bs0; ++k)
+                            for (std::size_t j = 0; j < ndim1; ++j)
+                                Ae[(i * bs0 + static_cast<std::size_t>(k)) * ndim1 + j] = 0;
                 for (std::size_t j = 0; j < ndofs1; ++j)
                     if (has_bc(dofs1.subspan(j, 1), bs1, bc1))
                         zero_col_block(Ae, ndim0, ndim1, j, bs1);

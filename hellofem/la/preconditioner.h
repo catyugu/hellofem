@@ -71,11 +71,12 @@ namespace hellofem::la {
                 _bs = bs0;
                 const auto S = A.to_scalar();
                 const std::int32_t nrows_b = S.num_owned_rows();
-                _inv_diag.resize(static_cast<std::size_t>(nrows_b) * bs0 * bs1, 0);
+                const std::int32_t nblocks = nrows_b / bs0;
+                _inv_diag.resize(static_cast<std::size_t>(nblocks) * bs0 * bs1,
+                    0);
                 const auto& row_ptr = S.row_ptr();
                 const auto& cols = S.cols();
                 const auto& values = S.values();
-                const std::int32_t nblocks = nrows_b / bs0;
                 for (std::int32_t b = 0; b < nblocks; ++b) {
                     // Diagonal block entries: S[b*bs+i0][b*bs+i1].
                     std::vector<T> D(static_cast<std::size_t>(bs0 * bs1), 0);
@@ -105,8 +106,7 @@ namespace hellofem::la {
                     _inv_block(D, bs0, Din);
                     for (int i0 = 0; i0 < bs0; ++i0)
                         for (int i1 = 0; i1 < bs1; ++i1)
-                            _inv_diag[static_cast<std::size_t>(b * bs0 + i0)
-                                      * bs0 * bs1
+                            _inv_diag[static_cast<std::size_t>(b) * bs0 * bs1
                                 + i0 * bs1 + i1]
                                 = Din[static_cast<std::size_t>(i0 * bs1 + i1)];
                 }
@@ -129,6 +129,7 @@ namespace hellofem::la {
             }
             else {
                 // Block-Jacobi: y[block*i0] = sum_i1 Din[i0][i1] x[block*i1].
+                // `_inv_diag` holds one bs*bs block inverse per scalar block.
                 const std::size_t nblocks = _inv_diag.size() / (_bs * _bs);
                 for (std::size_t b = 0; b < nblocks; ++b)
                     for (int i0 = 0; i0 < _bs; ++i0) {

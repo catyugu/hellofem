@@ -247,24 +247,38 @@ namespace hellofem::fem {
         const std::vector<std::reference_wrapper<const DirichletBC<T>>>& bcs,
         T diagonal)
     {
-        const std::size_t n = a.function_spaces()[0]->dofmap()->index_map_bs()
-            * a.function_spaces()[0]->dofmap()->index_map->size_local();
+        const auto& dofmap = *a.function_spaces()[0]->dofmap();
+        const int bs = dofmap.index_map_bs();
+        const std::size_t n = static_cast<std::size_t>(bs)
+            * dofmap.index_map->size_local();
         std::vector<std::int8_t> markers(n, 0);
         for (const auto& bc : bcs)
             bc.get().mark_dofs(markers);
 
-        std::vector<std::int32_t> dofs;
-        for (std::size_t i = 0; i < n; ++i)
+        // Markers index physical dofs (`bs * block + component`); the
+        // MatSet expects scalar-block indices and block-sized values, so
+        // group marked components per block and write one block at a time
+        // (a full block with several marked components must be written in a
+        // single call or later writes would wipe earlier diagonals).
+        std::vector<std::int8_t> comp(bs, 0);
+        std::vector<T> block(static_cast<std::size_t>(bs * bs), 0);
+        for (std::size_t i = 0; i < n; ++i) {
             if (markers[i])
-                dofs.push_back(static_cast<std::int32_t>(i));
-        if (dofs.empty())
-            return;
-
-        // Set each diagonal entry individually.
-        for (std::int32_t d : dofs) {
-            std::array<std::int32_t, 1> one {d};
-            std::array<T, 1> val {diagonal};
-            mat_set(one, one, val);
+                comp[static_cast<std::size_t>(i % bs)] = 1;
+            if (i % static_cast<std::size_t>(bs) != static_cast<std::size_t>(bs - 1))
+                continue;
+            bool any = false;
+            std::ranges::fill(block, 0);
+            for (int c = 0; c < bs; ++c)
+                if (comp[static_cast<std::size_t>(c)]) {
+                    block[static_cast<std::size_t>(c * bs + c)] = diagonal;
+                    any = true;
+                }
+            if (any)
+                mat_set(std::array<std::int32_t, 1> {static_cast<std::int32_t>(i / bs)},
+                    std::array<std::int32_t, 1> {static_cast<std::int32_t>(i / bs)},
+                    block);
+            std::ranges::fill(comp, 0);
         }
     }
 

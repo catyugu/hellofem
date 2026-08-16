@@ -11,14 +11,16 @@ namespace {
 
     /// Voigt strain-displacement vector B (6 entries) for scalar dof `a`
     /// with physical gradient `g = (gx,gy,gz)` and component `c` (0..2).
+    /// The displacement is `u_c = φ`, others zero, so the shear terms pick
+    /// the gradient of the OTHER index: e.g. gamma_xy = ∂u_x/∂y + ∂u_y/∂x.
     inline void strain_B(double out[6], double gx, double gy, double gz, int c)
     {
-        out[0] = (c == 0) ? gx : 0.0; // eps_xx
-        out[1] = (c == 1) ? gy : 0.0; // eps_yy
-        out[2] = (c == 2) ? gz : 0.0; // eps_zz
-        out[3] = (c == 2) ? gz : (c == 1) ? gy : 0.0; // gamma_yz
-        out[4] = (c == 2) ? gz : (c == 0) ? gx : 0.0; // gamma_xz
-        out[5] = (c == 1) ? gy : (c == 0) ? gx : 0.0; // gamma_xy
+        out[0] = (c == 0) ? gx : 0.0;              // eps_xx
+        out[1] = (c == 1) ? gy : 0.0;              // eps_yy
+        out[2] = (c == 2) ? gz : 0.0;              // eps_zz
+        out[3] = (c == 2) ? gy : (c == 1) ? gz : 0.0; // gamma_yz
+        out[4] = (c == 2) ? gx : (c == 0) ? gz : 0.0; // gamma_xz
+        out[5] = (c == 1) ? gx : (c == 0) ? gy : 0.0; // gamma_xy
     }
 
     /// Voigt (6x6) elasticity tensor from Lamé parameters.
@@ -77,6 +79,24 @@ void load_scalar(double* Ae, const CellKernelData<double>& d)
     }
 }
 
+void joule_heat_load(double* Ae, const CellKernelData<double>& d)
+{
+    const int nq = d.num_points, nd = d.num_dofs0;
+    // Physical dimension from the coefficient-gradient buffer size.
+    const int gdim = nq > 0 ? static_cast<int>(d.dcoeffs.size() / (2 * nq)) : 3;
+    std::memset(Ae, 0, nd * sizeof(double));
+    for (int q = 0; q < nq; ++q) {
+        const double w = d.w[q] * d.detJ[q];
+        const double sigma = d.coeffs[q]; // coeffs[0] = σ
+        const double* gV = &d.dcoeffs[(nq + q) * gdim]; // coeffs[1] = ∇V
+        double j2 = 0;
+        for (int k = 0; k < gdim; ++k)
+            j2 += gV[k] * gV[k];
+        for (int i = 0; i < nd; ++i)
+            Ae[i] += w * sigma * j2 * d.phi0[q * nd + i];
+    }
+}
+
 void convection_mass(double* Ae, const FacetKernelData<double>& d)
 {
     const int nq = d.num_points, nd = d.num_dofs0;
@@ -106,7 +126,9 @@ void elasticity(double* Ae, const CellKernelData<double>& d)
 {
     constexpr int vdim = 3;
     const int nq = d.num_points, nd = d.num_dofs0, tdim = d.tdim;
-    const int nn = (vdim * nd) * (vdim * nd);
+    // Blocked vector element: local dof = scalar_dof * vdim + component.
+    const int nds = nd / vdim;
+    const int nn = nd * nd;
     std::memset(Ae, 0, nn * sizeof(double));
     for (int q = 0; q < nq; ++q) {
         const double w = d.w[q] * d.detJ[q];
@@ -116,30 +138,31 @@ void elasticity(double* Ae, const CellKernelData<double>& d)
         const double mu = E / (2 * (1 + nu));
         double C[36];
         elasticity_C(C, lambda, mu);
-        for (int a = 0; a < nd; ++a) {
-            const double* gA = &d.dphi0[(q * nd + a) * tdim];
-            double BA[6][3]; // BA[i][r] = strain row r for component i
-            for (int i = 0; i < vdim; ++i)
-                strain_B(BA[i], gA[0], gA[1], gA[2], i);
-            for (int b = 0; b < nd; ++b) {
-                const double* gB = &d.dphi1[(q * nd + b) * tdim];
-                double BB[6][3];
-                for (int i = 0; i < vdim; ++i)
-                    strain_B(BB[i], gB[0], gB[1], gB[2], i);
-                for (int ia = 0; ia < vdim; ++ia) {
-                    // CB[r] = sum_s C[r][s] * BB[ib][s]
+        for (int a = 0; a < nds; ++a) {
+            // Scalar basis function a is identical across components.
+            const double* gA = &d.dphi0[(q * nd + a * vdim) * tdim];
+            double BA[3][6]; // BA[c][r] = strain row r for component c
+            for (int c = 0; c < vdim; ++c)
+                strain_B(BA[c], gA[0], gA[1], gA[2], c);
+            for (int b = 0; b < nds; ++b) {
+                const double* gB = &d.dphi1[(q * nd + b * vdim) * tdim];
+                double BB[3][6];
+                for (int c = 0; c < vdim; ++c)
+                    strain_B(BB[c], gB[0], gB[1], gB[2], c);
+                for (int cb = 0; cb < vdim; ++cb) {
+                    // CB[r] = sum_s C[r][s] * BB[cb][s]
                     double CB[6];
                     for (int r = 0; r < 6; ++r) {
                         double acc = 0;
                         for (int s = 0; s < 6; ++s)
-                            acc += C[r * 6 + s] * BB[ia][s];
+                            acc += C[r * 6 + s] * BB[cb][s];
                         CB[r] = acc;
                     }
-                    for (int ib = 0; ib < vdim; ++ib) {
+                    for (int ca = 0; ca < vdim; ++ca) {
                         double acc = 0;
                         for (int r = 0; r < 6; ++r)
-                            acc += BA[ib][r] * CB[r];
-                        Ae[(a * vdim + ib) * (vdim * nd) + (b * vdim + ia)] += w * acc;
+                            acc += BA[ca][r] * CB[r];
+                        Ae[(a * vdim + ca) * nd + (b * vdim + cb)] += w * acc;
                     }
                 }
             }
@@ -147,25 +170,35 @@ void elasticity(double* Ae, const CellKernelData<double>& d)
     }
 }
 
-void thermal_strain_load(double* Ae, const CellKernelData<double>& d)
+void thermal_expansion_load(double* Ae, const CellKernelData<double>& d)
 {
     constexpr int vdim = 3;
     const int nq = d.num_points, nd = d.num_dofs0, tdim = d.tdim;
-    std::memset(Ae, 0, vdim * nd * sizeof(double));
+    // Blocked vector element: local dof = scalar_dof * vdim + component.
+    const int nds = nd / vdim;
+    const double Tref = d.constants ? d.constants[0] : 0.0;
+    std::memset(Ae, 0, nd * sizeof(double));
     for (int q = 0; q < nq; ++q) {
         const double w = d.w[q] * d.detJ[q];
-        // coeffs: 6 Voigt stress components per point.
-        const double* s = &d.coeffs[q * 6];
-        for (int a = 0; a < nd; ++a) {
-            const double* g = &d.dphi0[(q * nd + a) * tdim];
-            double BA[6][3];
-            for (int i = 0; i < vdim; ++i)
-                strain_B(BA[i], g[0], g[1], g[2], i);
-            for (int i = 0; i < vdim; ++i) {
+        // Coeffs [T, α, E, ν] per point; σ_th = αΔT(2μ+3λ) diagonal.
+        const double dT = d.coeffs[q] - Tref;
+        const double alpha = d.coeffs[nq + q];
+        const double E = d.coeffs[2 * nq + q];
+        const double nu = d.coeffs[3 * nq + q];
+        const double lambda = E * nu / ((1 + nu) * (1 - 2 * nu));
+        const double mu = E / (2 * (1 + nu));
+        const double st = alpha * dT * (2 * mu + 3 * lambda);
+        const double sth[6] = {st, st, st, 0, 0, 0};
+        for (int a = 0; a < nds; ++a) {
+            const double* g = &d.dphi0[(q * nd + a * vdim) * tdim];
+            double BA[3][6];
+            for (int c = 0; c < vdim; ++c)
+                strain_B(BA[c], g[0], g[1], g[2], c);
+            for (int c = 0; c < vdim; ++c) {
                 double acc = 0;
                 for (int r = 0; r < 6; ++r)
-                    acc += BA[i][r] * s[r];
-                Ae[a * vdim + i] += w * acc;
+                    acc += BA[c][r] * sth[r];
+                Ae[a * vdim + c] += w * acc;
             }
         }
     }

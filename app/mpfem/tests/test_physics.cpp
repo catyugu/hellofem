@@ -15,6 +15,7 @@
 using hellofem::app::CellProperty;
 using hellofem::app::ElectrostaticsSolver;
 using hellofem::app::HeatTransferSolver;
+using hellofem::app::SolidMechanicsSolver;
 using Catch::Approx;
 
 namespace {
@@ -158,4 +159,73 @@ TEST_CASE("HeatTransfer: steady -div(k grad T)=0 with Robin convection", "[app][
     }
     INFO("heat max error = " << max_err);
     REQUIRE(max_err < 1e-8);
+}
+
+TEST_CASE("SolidMechanics: blocked assembly — no load with Fixed gives u=0", "[app][physics]")
+{
+    auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {2, 2, 1});
+    SolidMechanicsSolver sm(f.mesh, f.boundary, f.cells, 1);
+    auto E = std::make_shared<CellProperty>(f.mesh, f.cells);
+    E->set_domain(1, 200e9);
+    auto nu = std::make_shared<CellProperty>(f.mesh, f.cells);
+    nu->set_domain(1, 0.3);
+    sm.set_elastic(E, nu);
+    sm.add_fixed_bc(1); // x- face: u=v=w=0
+
+    sm.solve_steady();
+    auto u = sm.solution();
+    double max_mag = 0;
+    for (double v : u->x()->array())
+        max_mag = std::max(max_mag, std::abs(v));
+    INFO("no-load solid max |u| = " << max_mag);
+    REQUIRE(max_mag < 1e-10);
+}
+
+TEST_CASE("SolidMechanics: uniform thermal expansion of a clamped bar", "[app][physics]")
+{
+    // Slender bar along x: uniform DT=100, alpha=1e-5 -> free expansion would
+    // be u_x = alpha*DT*x = 1e-3 at x=1. Fixed (u=v=w=0) on the x- face adds a
+    // lateral-constraint boundary layer, so u_x(1) stays near alpha*DT*L and
+    // the displacement is smooth and monotone.
+    auto f = make_box_fixture({0, 0, 0}, {1, 0.3, 0.3}, {10, 3, 3});
+    SolidMechanicsSolver sm(f.mesh, f.boundary, f.cells, 1);
+    auto E = std::make_shared<CellProperty>(f.mesh, f.cells);
+    E->set_domain(1, 200e9);
+    auto nu = std::make_shared<CellProperty>(f.mesh, f.cells);
+    nu->set_domain(1, 0.3);
+    auto alpha = std::make_shared<CellProperty>(f.mesh, f.cells);
+    alpha->set_domain(1, 1e-5);
+    auto T = std::make_shared<CellProperty>(f.mesh, f.cells);
+    T->set_domain(1, 393.15); // DT = 100 above Tref=293.15
+    sm.set_elastic(E, nu);
+    sm.set_thermal_expansion(T->function(), alpha, 293.15);
+    sm.add_fixed_bc(1); // x- face clamped
+
+    sm.solve_steady();
+    auto u = sm.solution();
+    const auto& xa = u->x()->array();
+
+    // Blocked space: dof coordinates are per physical dof (bs*block + comp),
+    // so vertex d lives at dofcoords[(3*d)*gdim + q] = coords[9*d+q], and the
+    // solution component c of vertex d is xa[3*d+c].
+    auto coords = sm.space()->tabulate_dof_coordinates(false);
+    double ux_max = 0, ux_at_1 = -1e9;
+    double max_lat = 0;
+    for (std::int32_t d = 0; d < sm.space()->dofmap()->index_map->size_local(); ++d) {
+        const std::size_t cd = static_cast<std::size_t>(9 * d);
+        const double x = coords[cd];
+        const double ux = xa[static_cast<std::size_t>(3 * d)];
+        const double uy = xa[static_cast<std::size_t>(3 * d + 1)];
+        const double uz = xa[static_cast<std::size_t>(3 * d + 2)];
+        ux_max = std::max(ux_max, ux);
+        if (std::abs(x - 1.0) < 1e-9)
+            ux_at_1 = std::max(ux_at_1, ux);
+        max_lat = std::max(max_lat, std::max(std::abs(uy), std::abs(uz)));
+    }
+    INFO("thermal bar ux_max = " << ux_max << ", ux(x=1)=" << ux_at_1
+        << ", max lateral |u| = " << max_lat);
+    REQUIRE(ux_max > 0.9e-3);
+    REQUIRE(ux_max < 1.1e-3);
+    REQUIRE(ux_at_1 > 0.9e-3); // end face essentially alpha*DT*L
+    REQUIRE(max_lat < 2e-3);   // bounded lateral deformation
 }
