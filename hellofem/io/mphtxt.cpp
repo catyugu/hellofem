@@ -219,6 +219,7 @@ io::MphtxtMesh io::read_mphtxt(const std::filesystem::path& filename)
     std::vector<mesh::CellType> volume_types;
     std::vector<std::int64_t> cells; // Cell-to-vertex (flat, per type).
     std::vector<std::int64_t> orig; // Original cell index (identity).
+    std::vector<int> cell_geom_indices; // Domain index per volume element.
     for (const Block& block : data.blocks) {
         if (mesh::cell_dim(block.type) != tdim)
             continue;
@@ -236,6 +237,8 @@ io::MphtxtMesh io::read_mphtxt(const std::filesystem::path& filename)
             }
             orig.push_back(static_cast<std::int64_t>(orig.size()));
         }
+        cell_geom_indices.insert(cell_geom_indices.end(),
+            block.geom_indices.begin(), block.geom_indices.end());
         volume_types.push_back(block.type);
     }
 
@@ -365,7 +368,17 @@ io::MphtxtMesh io::read_mphtxt(const std::filesystem::path& filename)
             std::move(sorted_indices), std::move(sorted_values), "facet_tags");
     }
 
+    std::shared_ptr<mesh::MeshTags<int>> cell_tags;
+    if (!cell_geom_indices.empty()) {
+        const std::size_t nc = cell_geom_indices.size();
+        std::vector<std::int32_t> cell_indices(nc);
+        std::iota(cell_indices.begin(), cell_indices.end(), 0);
+        // Every cell carries a domain index; indices are already sorted/unique.
+        cell_tags = std::make_shared<mesh::MeshTags<int>>(topology, tdim,
+            std::move(cell_indices), std::move(cell_geom_indices), "cell_tags");
+    }
+
     return MphtxtMesh {
         mesh::Mesh<double>(topology, std::move(geometry)),
-        std::move(facet_tags)};
+        std::move(facet_tags), std::move(cell_tags)};
 }

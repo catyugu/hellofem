@@ -21,6 +21,10 @@ namespace hellofem::io {
         /// COMSOL domain indices are 1-based and boundary entity indices
         /// 0-based; the raw file values are stored.
         std::shared_ptr<mesh::MeshTags<int>> facet_tags;
+        /// Tags on the volume cells (dimension `tdim`): each volume
+        /// element's geometric entity (domain) index from the file. COMSOL
+        /// domain indices are already 1-based; raw file values are stored.
+        std::shared_ptr<mesh::MeshTags<int>> cell_tags;
     };
 
     /// Read a COMSOL `.mphtxt` mesh file.

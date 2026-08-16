@@ -158,6 +158,14 @@ TEST_CASE("read_mphtxt imports a two-tet fixture", "[io][mphtxt]")
     REQUIRE(values[0] == 4);
     REQUIRE(values[1] == 8);
 
+    // Volume cell tags carry the domain indices (both cells on domain 1).
+    REQUIRE(data.cell_tags != nullptr);
+    REQUIRE(data.cell_tags->dim() == 3);
+    REQUIRE(data.cell_tags->size() == 2);
+    const std::vector<int> cell_values(
+        data.cell_tags->values().begin(), data.cell_tags->values().end());
+    REQUIRE(cell_values == std::vector<int> {1, 1});
+
     // Every tagged facet is a boundary facet.
     auto topology_mut = data.mesh.topology_mutable();
     topology_mut->create_connectivity(2, 3);
@@ -187,6 +195,15 @@ TEST_CASE("read_mphtxt imports the busbar mesh (real file)", "[io][mphtxt]")
     // Boundary tags match the file's boundary triangle count (9138).
     REQUIRE(data.facet_tags != nullptr);
     REQUIRE(data.facet_tags->size() == 9138);
+
+    // Volume tags cover every cell; busbar has 7 domains (1..7).
+    REQUIRE(data.cell_tags != nullptr);
+    REQUIRE(data.cell_tags->size() == 31021);
+    int min_dom = 100, max_dom = 0;
+    for (int v : data.cell_tags->values())
+        min_dom = std::min(min_dom, v), max_dom = std::max(max_dom, v);
+    REQUIRE(min_dom == 1);
+    REQUIRE(max_dom == 7);
 }
 
 TEST_CASE("read_mphtxt imports a second-order mesh", "[io][mphtxt]")
