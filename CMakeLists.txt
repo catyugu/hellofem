@@ -10,6 +10,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(HELLOFEM_BUILD_TESTS "build tests" ON)
 option(HELLOFEM_BUILD_TOOLS "build tools" ON)
 
+# enable_testing() once, before any subdirectory, so every subtree can
+# register tests (CMP0002).
+if(HELLOFEM_BUILD_TESTS)
+    enable_testing()
+endif()
+
 # ---- CMake 模块 / 依赖 / 目标宏 ----
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 set(CPM_SOURCE_CACHE "${CMAKE_SOURCE_DIR}/.cache/cpm" CACHE PATH "CPM cache to avoid repeated fetching")
@@ -35,7 +41,6 @@ add_subdirectory(hellofem)
 add_subdirectory(app)
 
 if(HELLOFEM_BUILD_TESTS)
-    enable_testing()
     add_subdirectory(tests)
 endif()
 
