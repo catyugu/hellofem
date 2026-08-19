@@ -308,7 +308,10 @@ io::MphtxtMesh io::read_mphtxt(const std::filesystem::path& filename)
         std::span<const std::int64_t>(xdofs), x, data.sdim);
 
     // Boundary facet tags from the co-dimension-1 blocks.
-    topology->create_entities(tdim - 1);
+    // Note: for geom_order > 1, topological entities (dim 1..tdim-1)
+    // are already created above; avoid re-creating dim 2 which triggers a crash.
+    if (geom_order == 1)
+        topology->create_entities(tdim - 1);
 
     // Collect all boundary entity vertex lists (flat) and their geometric
     // entity indices; map them to facet indices in one pass.
@@ -380,5 +383,6 @@ io::MphtxtMesh io::read_mphtxt(const std::filesystem::path& filename)
 
     return MphtxtMesh {
         mesh::Mesh<double>(topology, std::move(geometry)),
+        geom_order,
         std::move(facet_tags), std::move(cell_tags)};
 }

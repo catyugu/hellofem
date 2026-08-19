@@ -194,6 +194,13 @@ namespace hellofem::mesh {
 
     } // namespace impl
 
+    /// Coordinates of every vertex of the mesh, stored column-major with
+    /// shape `(3, num_vertices)`.
+    ///
+    /// For P1 meshes, returns only the coordinate of each geometric vertex.
+    /// For P2+ meshes (with mid-edge nodes), returns coordinates of all
+    /// geometry nodes in order (vertex + mid-edge nodes), so that callers
+    /// can evaluate functions at any geometry node.
     template <std::floating_point T>
     std::pair<std::vector<T>, std::array<std::size_t, 2>>
     compute_vertex_coords(const mesh::Mesh<T>& mesh)
@@ -204,14 +211,35 @@ namespace hellofem::mesh {
 
         const auto vertex_to_node = impl::vertex_to_geometry_node(mesh);
         std::span<const T> x_nodes = mesh.geometry().x();
-        std::vector<T> x_vertices(3 * num_vertices, 0);
-        for (std::int32_t i = 0; i < num_vertices; ++i) {
-            const std::int32_t pos = 3 * vertex_to_node[i];
-            for (std::size_t j = 0; j < 3; ++j)
-                x_vertices[j * num_vertices + i] = x_nodes[pos + j];
+        const std::size_t num_geom_nodes = mesh.geometry().index_map()->size_local();
+
+        // P1 case: every topology vertex maps to a unique geometry node.
+        if (num_vertices == static_cast<std::int32_t>(num_geom_nodes) &&
+            std::all_of(vertex_to_node.begin(), vertex_to_node.end(),
+                [](std::int32_t v) { return v >= 0; })) {
+            std::vector<T> x_vertices(3 * num_vertices, 0);
+            for (std::int32_t i = 0; i < num_vertices; ++i) {
+                const std::int32_t pos = 3 * vertex_to_node[i];
+                for (std::size_t j = 0; j < 3; ++j)
+                    x_vertices[j * num_vertices + i] = x_nodes[pos + j];
+            }
+            return {std::move(x_vertices), {3, static_cast<std::size_t>(num_vertices)}};
         }
 
-        return {std::move(x_vertices), {3, static_cast<std::size_t>(num_vertices)}};
+        // P2+ fallback: only return coordinates of topology vertices that
+        // map to geometry nodes (skip interior/mid-edge nodes that have no
+        // corresponding topology vertex).
+        std::vector<T> x_vertices(3 * num_vertices, 0);
+        std::int32_t nv_written = 0;
+        for (std::int32_t i = 0; i < num_vertices; ++i) {
+            const std::int32_t pos = vertex_to_node[i];
+            if (pos >= 0) {
+                for (std::size_t j = 0; j < 3; ++j)
+                    x_vertices[j * num_vertices + nv_written] = x_nodes[3 * pos + j];
+                ++nv_written;
+            }
+        }
+        return {std::move(x_vertices), {3, static_cast<std::size_t>(nv_written)}};
     }
 
     template <std::floating_point T>

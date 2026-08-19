@@ -16,6 +16,8 @@ namespace hellofem::io {
         /// The mesh (affine P1 geometry, or isoparametric P2 for
         /// second-order elements).
         mesh::Mesh<double> mesh;
+        /// Polynomial degree of the volume cells (1 or 2 for Lagrange).
+        int order = 1;
         /// Tags on the boundary facets (dimension `tdim - 1`): each
         /// boundary element's geometric entity index from the file.
         /// COMSOL domain indices are 1-based and boundary entity indices

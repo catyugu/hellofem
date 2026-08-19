@@ -13,6 +13,7 @@ LoadedMesh load_mphtxt_mesh(const std::filesystem::path& filename)
 {
     io::MphtxtMesh raw = io::read_mphtxt(filename);
     LoadedMesh out;
+    out.order = raw.order;
     out.mesh = std::make_shared<mesh::Mesh<double>>(
         raw.mesh.topology(), raw.mesh.geometry());
 

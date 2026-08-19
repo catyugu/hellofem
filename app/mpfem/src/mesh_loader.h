@@ -13,6 +13,8 @@ namespace hellofem::app {
     /// Loaded mesh with normalized domain/boundary ids for the app layer.
     struct LoadedMesh {
         std::shared_ptr<mesh::Mesh<double>> mesh;
+        /// Polynomial degree of the volume cells (1 or 2).
+        int order = 1;
         /// Domain id (1-based COMSOL) per cell, by cell index.
         std::shared_ptr<mesh::MeshTags<int>> cell_tags;
         /// Boundary id (1-based COMSOL) per boundary facet, by facet index.

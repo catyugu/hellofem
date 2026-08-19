@@ -194,9 +194,9 @@ int main(int argc, char* argv[])
 
     // Mesh (mphtxt, domain/boundary ids already 1-based).
     LoadedMesh lm = load_mphtxt_mesh(mesh_path);
-    spdlog::info("mesh: {} cells, {} domains, {} boundaries",
+    spdlog::info("mesh: {} cells, {} domains, {} boundaries, order={}",
         lm.mesh->topology()->index_map(lm.mesh->topology()->dim())->size_local(),
-        lm.num_domains, lm.num_boundaries);
+        lm.num_domains, lm.num_boundaries, lm.order);
 
     // Clean Java model script.
     ModelScript model = parse_model_java(model_path);
@@ -209,7 +209,7 @@ int main(int argc, char* argv[])
     for (const auto& p : model.parameters)
         params[p.name] = p.si;
 
-    const int order = 1;
+    const int order = lm.order;
 
     // ---- Electric currents -> V ----
     std::shared_ptr<CellProperty> sigma;
@@ -305,6 +305,10 @@ int main(int argc, char* argv[])
     }
 
     // ---- Export COMSOL-consistent result ----
+    spdlog::info("about to export result, path='{}'", result_path);
+    spdlog::info("  V={}", es ? "yes" : "no");
+    spdlog::info("  T={}", ht ? "yes" : "no");
+    spdlog::info("  u={}", sm ? "yes" : "no");
     export_result(result_path, model, lm.mesh, es ? es->solution() : nullptr,
         ht ? ht->solution() : nullptr, sm ? sm->solution() : nullptr);
     spdlog::info("wrote {}", result_path);
