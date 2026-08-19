@@ -254,9 +254,14 @@ int main(int argc, char* argv[])
                 ht->add_temperature_bc(id, t0);
         }
         for (const auto* f : model.features("HeatFluxBoundary")) {
-            for (int id : f->selection)
-                std::fprintf(stderr, " %d", id);
-            std::fprintf(stderr, " }\n");
+            spdlog::info("  HeatFluxBoundary IDs: [");
+            bool first = true;
+            for (int id : f->selection) {
+                if (!first) spdlog::info(", ");
+                spdlog::info("{}", id);
+                first = false;
+            }
+            spdlog::info("]");
             const std::string type = f->properties.contains("HeatFluxType")
                 ? f->properties.at("HeatFluxType")
                 : "HeatFlux";

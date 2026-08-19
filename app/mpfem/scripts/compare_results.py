@@ -32,7 +32,7 @@ def parse_result(path: Path):
                 expressions = [f"f{i}" for i in range(int(m.group(1)))]
             continue
         parts = line.split()
-        if len(parts) >= 6:
+        if len(parts) >= 4:
             try:
                 nums = [float(p) for p in parts]
             except ValueError:
