@@ -71,15 +71,14 @@ vcpkg_installed/
 # debug information files
 *.dwo
 
-|# test output & cache
-|Testing/
-|.cache/
-|
-|# COMSOL generated files (not tracked)
-|*.mph
-|*.mph.recovery
-|*.mph.status
-|generated_model.java
-|batch.log
-|comsol.log
-|comsol_render.log
+# test output & cache
+Testing/
+
+# COMSOL generated files (not tracked)
+*.mph
+*.mph.recovery
+*.mph.status
+generated_model.java
+batch.log
+comsol.log
+comsol_render.log
