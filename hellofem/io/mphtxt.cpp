@@ -75,19 +75,29 @@ namespace {
     /// Node permutation from the COMSOL second-order ordering to the
     /// basix ordering, or an empty map when the orderings coincide.
     ///
-    /// COMSOL orders the edge nodes of a second-order tetrahedron as the
-    /// base-triangle edges `(0,1) (0,2) (1,2)` followed by the side edges
-    /// `(0,3) (1,3) (2,3)`; basix orders them `(0,1) (0,2) (0,3) (1,2)
-    /// (1,3) (2,3)`.
+    /// COMSOL lists the second-order nodes as the vertices followed by
+    /// the edge midpoints in the order `(0,1) (0,2) (1,2) (0,3) (1,3)
+    /// (2,3)` for a tetrahedron and `(0,1) (0,2) (1,2)` for a triangle.
+    /// basix orders the edges `(2,3) (1,3) (1,2) (0,3) (0,2) (0,1)` for a
+    /// tetrahedron and `(1,2) (0,2) (0,1)` for a triangle (matching the
+    /// reference-cell topology). The permutation maps a basix position to
+    /// the COMSOL source position.
     std::vector<std::uint16_t> comsol_to_basix(mesh::CellType type, int order)
     {
         if (order != 2)
             return {};
         switch (type) {
         case mesh::CellType::tetrahedron:
-            return {0, 1, 2, 3, 4, 5, 7, 6, 8, 9};
+            // basix edge order: (2,3)(1,3)(1,2)(0,3)(0,2)(0,1)  [indices 4..9]
+            // comsol edge order: (0,1)(0,2)(1,2)(0,3)(1,3)(2,3)  [indices 4..9]
+            return {0, 1, 2, 3, 9, 8, 6, 7, 5, 4};
+        case mesh::CellType::triangle:
+            // basix edge order: (1,2)(0,2)(0,1)  [indices 3..5]
+            // comsol edge order: (0,1)(0,2)(1,2)  [indices 3..5]
+            return {0, 1, 2, 5, 4, 3};
+        case mesh::CellType::interval:
+            return {};
         default:
-            // Triangles and intervals use the same edge ordering as basix.
             return {};
         }
     }

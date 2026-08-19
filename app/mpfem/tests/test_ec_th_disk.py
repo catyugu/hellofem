@@ -1,11 +1,11 @@
 """Case-pipeline pytest: EcThDiskCoupled (copper disk, electric-thermal coupled).
 
-NOTE: This case generates a second-order (P2) tetrahedral mesh by COMSOL
-(even though the Java code looks identical to the P1 variant EcThPlateCoupled —
-the default model-level order differs between saved .mph files). hellofem
-currently runs with `order=1` hardcoded in app/mpfem/main.cpp:212 and lacks
-P2 Lagrange basis support, so this case is SKIPPED until we refactor the mesh
-→ element order path (see issue tracker).
+Runs the full hellofem pipeline for a second-order (P2) tetrahedral mesh:
+COMSOL Java model -> mesh.mphtxt -> mpfem_app -> result_hellofem.txt, then
+compares against the COMSOL reference result.txt. P2 geometry support is
+provided by the arbitrary-order refactor (mesh -> element order path), where
+the reader adapts the COMSOL edge-midpoint node ordering to the basix
+reference ordering in the IO layer.
 """
 from __future__ import annotations
 
@@ -28,6 +28,11 @@ pytestmark = pytest.mark.skipif(
     reason="needs COMSOL on PATH and a built mpfem_app")
 
 
-def test_case_skipped():
-    """Placeholder: EcThDiskCoupled requires P2 basis support."""
-    pytest.skip("requires P2 basis support (second-order mesh)")
+def test_case_pipeline():
+    r = subprocess.run(
+        [sys.executable, str(SCRIPTS / "run_case.py"), "run", CASE],
+        capture_output=True, text=True)
+    assert r.returncode == 0, (
+        f"pipeline failed (rc={r.returncode})\nstdout:\n{r.stdout[-4000:]}\n"
+        f"stderr:\n{r.stderr[-2000:]}")
+    assert "PASS" in r.stdout and "FAIL" not in r.stdout
