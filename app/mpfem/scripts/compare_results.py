@@ -20,16 +20,31 @@ from pathlib import Path
 
 
 def parse_result(path: Path):
-    """Return (expressions, rows) where rows are (x, y, z, values...)."""
+    """Return (expressions, rows) where rows are (x, y, z, values...).
+
+    Expression names are extracted from the COMSOL-style column-header line
+    (``% x  y  z  expr1  expr2 ...``).  The ``% Description:`` line is
+    ignored — it carries COMSOL display labels which often differ from the
+    storage names.  Fallback: ``f0, f1, ...`` when no header is found.
+    """
     expressions = []
     rows = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line:
             continue
         if line.startswith("%"):
-            m = re.match(r"% Expressions:\s*(\d+)", line)
-            if m:
-                expressions = [f"f{i}" for i in range(int(m.group(1)))]
+            # Column-header line: % x  y  z  expr1 (unit1)  expr2 (unit2) ...
+            if re.match(r"%\s*x\s+y\s+z\s", line):
+                parts = line.split()
+                # First 3 parts are '%', 'x', 'y', 'z'; the rest are
+                # alternating (name, "(unit)") pairs.
+                expr_parts = parts[4:]
+                expressions = []
+                for i in range(0, len(expr_parts), 2):
+                    if i + 1 < len(expr_parts):
+                        expressions.append(expr_parts[i])
+                    else:
+                        expressions.append(expr_parts[i])
             continue
         parts = line.split()
         if len(parts) >= 4:
@@ -38,6 +53,10 @@ def parse_result(path: Path):
             except ValueError:
                 continue
             rows.append((nums[0], nums[1], nums[2], nums[3:]))
+    if not expressions:
+        # Fallback: generate f0, f1, ... from the number of data columns.
+        col_count = len(rows[0][3]) if rows else 0
+        expressions = [f"f{i}" for i in range(col_count)]
     return expressions, rows
 
 
@@ -97,15 +116,18 @@ def main() -> int:
                     help="max allowed Linf / max|ref| error per field")
     args = ap.parse_args()
 
-    _, ref_rows = parse_result(args.reference)
-    _, cur_rows = parse_result(args.current)
+    ref_expr, ref_rows = parse_result(args.reference)
+    cur_expr, cur_rows = parse_result(args.current)
     if len(ref_rows) != len(cur_rows):
         raise SystemExit(f"point count mismatch: ref={len(ref_rows)} cur={len(cur_rows)}")
     ncol = len(ref_rows[0][3])
-    if not args.fields:
-        fields = [f"f{i}" for i in range(ncol)]
-    else:
+    if args.fields:
         fields = args.fields.split(",")
+        if len(fields) != ncol:
+            raise SystemExit(f"field count mismatch: --fields has {len(fields)} but data has {ncol} columns")
+    else:
+        # Use reference file's header names; fall back to f0, f1, ... if missing.
+        fields = ref_expr[:ncol] if ref_expr else [f"f{i}" for i in range(ncol)]
 
     ref_aligned, cur_aligned = align(ref_rows, cur_rows)
 

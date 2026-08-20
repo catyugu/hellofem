@@ -111,6 +111,13 @@ namespace hellofem::app {
         /// Solve one backward-Euler step: (M + dt K) T^{n+1} = M T^n + dt F.
         void solve_step(double dt);
 
+        /// Assemble the steady linear system K T = b with the current
+        /// property values. Dirichlet BCs are applied (zeroed rows +
+        /// diagonal + RHS lifting).
+        /// @param[out] A  Matrix CSR to fill (caller owns sparsity pattern).
+        /// @param[out] b  RHS vector to fill.
+        void assemble_system(la::MatrixCSR<double>& A, la::Vector<double>& b);
+
     private:
         std::shared_ptr<CellProperty> k_, rho_cp_, Q_;
         std::shared_ptr<const fem::Function<double>> joule_V_;
