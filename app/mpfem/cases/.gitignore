@@ -13,8 +13,7 @@
 
 # Mesh + result exports
 */mesh.mphtxt
-*/result.txt
-*/result_hellofem.txt
+*/*.txt
 
 # Logs
 */batch.log
