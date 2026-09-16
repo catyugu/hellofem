@@ -3,7 +3,7 @@ import com.comsol.model.Model;
 import com.comsol.model.util.ModelUtil;
 
 /**
- * PoissonPlate: 纯电场 静电学 Poisson问题（3D薄板）。
+ * EcPlateStationary: 纯电场 静电学 Poisson问题（3D薄板）。
  *
  * <p>几何: 3D Block (L x W x T), 单域。
  * 物理: ec (Front V=V0, Back Ground, 其余绝缘)。
@@ -11,12 +11,12 @@ import com.comsol.model.util.ModelUtil;
  *
  * <p>用于验证单物理场直线问题，无耦合。
  */
-public class PoissonPlate {
+public class EcPlateStationary {
 
     public static void main(String[] args) throws Exception {
         String[] a = args == null ? new String[0] : args;
         final String[] P = a.length >= 4 ? a
-            : new String[]{"result.txt", "mesh.mphtxt", "PoissonPlate.mph", "generated_model.java"};
+            : new String[]{"result.txt", "mesh.mphtxt", "EcPlateStationary.mph", "generated_model.java"};
 
         Model model = ModelUtil.create("Model");
         model.param().set("L", "0.1[m]", "板长度");
@@ -116,6 +116,6 @@ public class PoissonPlate {
         model.result().export("mesh1").run();
 
         model.save(P[3], "java");
-        System.out.println("PoissonPlate_OK");
+        System.out.println("EcPlateStationary_OK");
     }
 }

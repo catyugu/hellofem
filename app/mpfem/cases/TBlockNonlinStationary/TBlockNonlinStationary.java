@@ -4,7 +4,7 @@ import com.comsol.model.MeshFeature;
 import com.comsol.model.util.ModelUtil;
 
 /**
- * NonlinThermal: temperature-dependent thermal conductivity (pure HT, nonlinear).
+ * TBlockNonlinStationary: temperature-dependent thermal conductivity (pure HT, nonlinear).
  *
  * Geometry: 3D Block (0.1 x 0.05 x 0.01 m), single domain.
  * Physics: ht (left T=293.15K, right T=373.15K, others insulated).
@@ -12,12 +12,12 @@ import com.comsol.model.util.ModelUtil;
  * Mesh: FreeTet hmax=mh.
  * Study: Stationary (COMSOL handles nonlinearity natively).
  */
-public class NonlinThermal {
+public class TBlockNonlinStationary {
 
     public static void main(String[] args) throws Exception {
         String[] a = args == null ? new String[0] : args;
         final String[] P = a.length >= 4 ? a
-            : new String[]{"result.txt", "mesh.mphtxt", "NonlinThermal.mph", "generated_model.java"};
+            : new String[]{"result.txt", "mesh.mphtxt", "TBlockNonlinStationary.mph", "generated_model.java"};
 
         Model model = ModelUtil.create("Model");
         model.param().set("L", "0.1[m]", "bar length");
@@ -128,6 +128,6 @@ public class NonlinThermal {
         model.result().export("mesh1").run();
 
         model.save(P[3], "java");
-        System.out.println("NonlinThermal_OK");
+        System.out.println("TBlockNonlinStationary_OK");
     }
 }

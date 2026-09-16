@@ -3,7 +3,7 @@ import com.comsol.model.Model;
 import com.comsol.model.util.ModelUtil;
 
 /**
- * EcThPlateCoupled: 铝矩形板 稳态 电→热 耦合。
+ * EcTPlateStationary: 铝矩形板 稳态 电→热 耦合。
  *
  * <p>几何: 3D Block (L x W x T), 单域。
  * 物理: ec (Front V=V0, Back Ground), ht (Back 恒温热沉, 其余表面对流)。
@@ -12,12 +12,12 @@ import com.comsol.model.util.ModelUtil;
  *
  * <p>材料: 铝 (sig=3.77e7, k=237)。
  */
-public class EcThPlateCoupled {
+public class EcTPlateStationary {
 
     public static void main(String[] args) throws Exception {
         String[] a = args == null ? new String[0] : args;
         final String[] P = a.length >= 4 ? a
-            : new String[]{"result.txt", "mesh.mphtxt", "EcThPlateCoupled.mph", "generated_model.java"};
+            : new String[]{"result.txt", "mesh.mphtxt", "EcTPlateStationary.mph", "generated_model.java"};
 
         Model model = ModelUtil.create("Model");
         model.param().set("L", "0.2[m]", "板长度");
