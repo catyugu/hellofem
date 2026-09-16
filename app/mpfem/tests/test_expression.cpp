@@ -8,8 +8,8 @@
 #include <algorithm>
 #include <unordered_map>
 
-using hellofem::app::Expression;
 using Catch::Approx;
+using hellofem::app::Expression;
 
 TEST_CASE("Expression evaluates params and coordinates", "[app][expr]")
 {

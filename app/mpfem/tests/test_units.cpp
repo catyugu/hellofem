@@ -5,9 +5,9 @@
 #include "catch2/catch_test_macros.hpp"
 #include "units.h"
 
+using Catch::Approx;
 using hellofem::app::parse_si;
 using hellofem::app::parse_unit;
-using Catch::Approx;
 
 TEST_CASE("parse_unit converts to SI", "[app][units]")
 {

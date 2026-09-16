@@ -123,7 +123,11 @@ namespace hellofem::app {
         std::shared_ptr<const fem::Function<double>> joule_V_;
         std::shared_ptr<CellProperty> joule_sigma_;
         std::map<int, double> temps_;
-        struct Convection { int id; double h; double Tinf; };
+        struct Convection {
+            int id;
+            double h;
+            double Tinf;
+        };
         std::vector<Convection> convections_;
     };
 
@@ -134,7 +138,11 @@ namespace hellofem::app {
             std::shared_ptr<const mesh::MeshTags<int>> facet_tags,
             std::shared_ptr<const mesh::MeshTags<int>> cell_tags, int order);
 
-        void set_elastic(std::shared_ptr<CellProperty> E, std::shared_ptr<CellProperty> nu) { E_ = E; nu_ = nu; }
+        void set_elastic(std::shared_ptr<CellProperty> E, std::shared_ptr<CellProperty> nu)
+        {
+            E_ = E;
+            nu_ = nu;
+        }
         /// Set the thermal expansion load: σ_th = C : ε_th computed from
         /// T (Function), α (per-domain) and E,ν (from set_elastic) with
         /// reference temperature T_ref.

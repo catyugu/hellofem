@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-#include "fem/precompute.h"
 #include "fem/facet_precompute.h"
+#include "fem/precompute.h"
 
 namespace hellofem::app::kernels {
 

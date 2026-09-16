@@ -12,11 +12,11 @@
 #include <cstdio>
 #include <numeric>
 
+using Catch::Approx;
 using hellofem::app::CellProperty;
 using hellofem::app::ElectrostaticsSolver;
 using hellofem::app::HeatTransferSolver;
 using hellofem::app::SolidMechanicsSolver;
-using Catch::Approx;
 
 namespace {
 
@@ -44,14 +44,20 @@ namespace {
             auto vs = f_to_v->links(f);
             double xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9, zmin = 1e9, zmax = -1e9;
             for (auto v : vs) {
-                xmin = std::min(xmin, vert(v, 0)); xmax = std::max(xmax, vert(v, 0));
-                ymin = std::min(ymin, vert(v, 1)); ymax = std::max(ymax, vert(v, 1));
-                zmin = std::min(zmin, vert(v, 2)); zmax = std::max(zmax, vert(v, 2));
+                xmin = std::min(xmin, vert(v, 0));
+                xmax = std::max(xmax, vert(v, 0));
+                ymin = std::min(ymin, vert(v, 1));
+                ymax = std::max(ymax, vert(v, 1));
+                zmin = std::min(zmin, vert(v, 2));
+                zmax = std::max(zmax, vert(v, 2));
             }
             int id = 0;
-            if (xmin == xmax) id = (xmin < 0.5) ? 1 : 2;
-            else if (ymin == ymax) id = (ymin < 0.5) ? 3 : 4;
-            else id = (zmin < 0.5) ? 5 : 6;
+            if (xmin == xmax)
+                id = (xmin < 0.5) ? 1 : 2;
+            else if (ymin == ymax)
+                id = (ymin < 0.5) ? 3 : 4;
+            else
+                id = (zmin < 0.5) ? 5 : 6;
             idx.push_back(f);
             vals.push_back(id);
         }
@@ -108,8 +114,8 @@ TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[a
     auto sigma = std::make_shared<CellProperty>(mesh, cell_tags);
     sigma->set_domain(1, 1.0);
     es.set_conductivity(sigma);
-    es.add_voltage_bc(2, 1.0);  // x+ : V=1
-    es.add_voltage_bc(1, 0.0);  // x- : V=0
+    es.add_voltage_bc(2, 1.0); // x+ : V=1
+    es.add_voltage_bc(1, 0.0); // x- : V=0
 
     es.solve_steady();
     auto V = es.solution();
@@ -223,9 +229,9 @@ TEST_CASE("SolidMechanics: uniform thermal expansion of a clamped bar", "[app][p
         max_lat = std::max(max_lat, std::max(std::abs(uy), std::abs(uz)));
     }
     INFO("thermal bar ux_max = " << ux_max << ", ux(x=1)=" << ux_at_1
-        << ", max lateral |u| = " << max_lat);
+                                 << ", max lateral |u| = " << max_lat);
     REQUIRE(ux_max > 0.9e-3);
     REQUIRE(ux_max < 1.1e-3);
     REQUIRE(ux_at_1 > 0.9e-3); // end face essentially alpha*DT*L
-    REQUIRE(max_lat < 2e-3);   // bounded lateral deformation
+    REQUIRE(max_lat < 2e-3); // bounded lateral deformation
 }

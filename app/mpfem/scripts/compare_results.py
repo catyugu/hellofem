@@ -34,7 +34,8 @@ def parse_result(path: Path):
             continue
         if line.startswith("%"):
             # Column-header line: % x  y  z  expr1 (unit1)  expr2 (unit2) ...
-            if re.match(r"%\s*x\s+y\s+z\s", line):
+            # (COMSOL writes the coordinate names in either case).
+            if re.match(r"%\s*[xyzXYZ]\s+[xyzXYZ]\s+[xyzXYZ]\s", line):
                 parts = line.split()
                 # First 3 parts are '%', 'x', 'y', 'z'; the rest are
                 # alternating (name, "(unit)") pairs.
