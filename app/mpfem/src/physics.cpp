@@ -300,6 +300,7 @@ namespace hellofem::app {
         la::KrylovSolver<double> solver;
         solver.set_operator(A);
         solver.set_solver_type("cg");
+        solver.set_preconditioner_type("amg");
         solver.set_tolerances(1e-12, 1e-14, 2000);
         solver.solve(*u_->x(), b);
     }
@@ -464,6 +465,7 @@ namespace hellofem::app {
         la::KrylovSolver<double> solver;
         solver.set_operator(A);
         solver.set_solver_type("cg");
+        solver.set_preconditioner_type("amg");
         solver.set_tolerances(1e-12, 1e-14, 2000);
         solver.solve(*u_->x(), b);
     }
@@ -584,9 +586,7 @@ namespace hellofem::app {
         la::KrylovSolver<double> solver;
         solver.set_operator(A);
         solver.set_solver_type("cg");
-        // BC rows have diagonal 1.0 while interior stiffness is ~1e10: Jacobi
-        // (per-block diagonal) restores a reasonable condition number.
-        solver.set_preconditioner_type("jacobi");
+        solver.set_preconditioner_type("amg");
         solver.set_tolerances(1e-10, 1e-12, 2000);
         solver.solve(*u_->x(), b);
     }

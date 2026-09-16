@@ -234,7 +234,8 @@ namespace hellofem::app {
         cfg.relative_tolerance = 1e-8;
         cfg.absolute_tolerance = 1e-12;
         cfg.max_iterations = 100;
-        cfg.preconditioner_type = "jacobi";
+        cfg.linear_solver_type = "cg";
+        cfg.preconditioner_type = "amg";
 
         auto result = nls::anderson_picard<double>(
             [&](const la::Vector<double>& x)
