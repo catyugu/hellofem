@@ -173,8 +173,11 @@ namespace hellofem::app {
         auto& arr = f_->x()->array();
         if (cell_tags_) {
             for (std::size_t i = 0; i < cell_tags_->indices().size(); ++i)
-                if (cell_tags_->values()[i] == dom)
-                    arr[static_cast<std::size_t>(cell_tags_->indices()[i])] = value;
+                if (cell_tags_->values()[i] == dom) {
+                    const auto dofs = f_->function_space()->dofmap()->cell_dofs(
+                        cell_tags_->indices()[i]);
+                    arr[static_cast<std::size_t>(dofs.front())] = value;
+                }
         }
         else {
             std::fill(arr.begin(), arr.end(), value);
@@ -188,10 +191,16 @@ namespace hellofem::app {
         const auto [vc, vshape] = mesh::compute_vertex_coords(*mesh_);
         const std::size_t nv = vshape[1];
         auto& arr = f_->x()->array();
+        std::size_t tag = 0;
         for (std::int32_t c = 0; c < static_cast<std::int32_t>(c_to_v->num_nodes()); ++c) {
-            if (cell_tags_ and not domains.empty()
-                and not domains.contains(cell_tags_->values()[c]))
-                continue;
+            if (cell_tags_ and not domains.empty()) {
+                const auto indices = cell_tags_->indices();
+                while (tag < indices.size() and indices[tag] < c)
+                    ++tag;
+                if (tag == indices.size() or indices[tag] != c
+                    or not domains.contains(cell_tags_->values()[tag]))
+                    continue;
+            }
             auto verts = c_to_v->links(c);
             std::array<double, 3> xc {0, 0, 0};
             for (auto v : verts)
@@ -199,7 +208,9 @@ namespace hellofem::app {
                     xc[d] += vc[d * nv + v];
             for (int d = 0; d < 3; ++d)
                 xc[d] /= static_cast<double>(verts.size());
-            arr[static_cast<std::size_t>(c)] = eval(xc[0], xc[1], xc[2], t);
+            const auto dofs = f_->function_space()->dofmap()->cell_dofs(c);
+            arr[static_cast<std::size_t>(dofs.front())]
+                = eval(xc[0], xc[1], xc[2], t);
         }
     }
 

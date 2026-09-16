@@ -101,6 +101,31 @@ namespace {
 
 } // namespace
 
+TEST_CASE("CellProperty fill_from respects sparse cell tags", "[app][physics]")
+{
+    auto mesh = hellofem::mesh::create_box(
+        std::array<double, 3> {0, 0, 0}, std::array<double, 3> {1, 1, 1},
+        std::array<int, 3> {3, 1, 1});
+    auto tags = std::make_shared<hellofem::mesh::MeshTags<int>>(
+        mesh->topology(), 3, std::vector<std::int32_t> {1, 2},
+        std::vector<int> {2, 1}, "sparse cells");
+    CellProperty property(mesh, tags);
+
+    property.fill_from([](double, double, double, double) { return 7.0; },
+        std::set<int> {2}, 0.0);
+
+    const auto& values = property.function()->x()->array();
+    const auto& dofmap = *property.function()->function_space()->dofmap();
+    auto value_on_cell = [&](std::int32_t cell) {
+        return values[static_cast<std::size_t>(dofmap.cell_dofs(cell).front())];
+    };
+    REQUIRE(value_on_cell(0) == Approx(0.0));
+    REQUIRE(value_on_cell(1) == Approx(7.0));
+    for (std::int32_t cell = 2;
+        cell < static_cast<std::int32_t>(dofmap.map().extent(0)); ++cell)
+        REQUIRE(value_on_cell(cell) == Approx(0.0));
+}
+
 TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[app][physics]")
 {
     // 1x1x1 box, single layer in z. V solves Laplace; with V=1 on x+, 0 on x-,
