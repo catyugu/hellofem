@@ -65,7 +65,7 @@ namespace hellofem::mesh {
 
         const std::int64_t nx = n[0] + 1, ny = n[1] + 1, nz = n[2] + 1;
         const auto v = [nx, ny](std::int64_t i, std::int64_t j,
-                          std::int64_t k) {
+                           std::int64_t k) {
             return i + j * nx + k * nx * ny;
         };
 

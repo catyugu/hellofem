@@ -125,8 +125,8 @@ namespace hellofem::mesh {
             std::vector<std::int32_t> vertex_to_node(
                 topology->index_map(0)->size_local(), -1);
             for (std::size_t cell_type_idx = 0;
-                 cell_type_idx < topology->entity_types(tdim).size();
-                 ++cell_type_idx) {
+                cell_type_idx < topology->entity_types(tdim).size();
+                ++cell_type_idx) {
                 auto x_dofmap
                     = mesh.geometry().dofmaps().at(cell_type_idx);
                 auto c_to_v = topology->connectivity(
@@ -214,9 +214,7 @@ namespace hellofem::mesh {
         const std::size_t num_geom_nodes = mesh.geometry().index_map()->size_local();
 
         // P1 case: every topology vertex maps to a unique geometry node.
-        if (num_vertices == static_cast<std::int32_t>(num_geom_nodes) &&
-            std::all_of(vertex_to_node.begin(), vertex_to_node.end(),
-                [](std::int32_t v) { return v >= 0; })) {
+        if (num_vertices == static_cast<std::int32_t>(num_geom_nodes) && std::all_of(vertex_to_node.begin(), vertex_to_node.end(), [](std::int32_t v) { return v >= 0; })) {
             std::vector<T> x_vertices(3 * num_vertices, 0);
             for (std::int32_t i = 0; i < num_vertices; ++i) {
                 const std::int32_t pos = 3 * vertex_to_node[i];

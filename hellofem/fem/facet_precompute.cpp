@@ -210,7 +210,7 @@ namespace hellofem::fem {
 
             const int nf = tdim - 1; // facet topological dimension
             const auto J_ref = pre.facet_jacobian(local_facet); // tdim*nf
-            const auto n_ref = pre.facet_normal(local_facet);   // tdim
+            const auto n_ref = pre.facet_normal(local_facet); // tdim
 
             // Reference coordinates of the facet points were used to build
             // the basis; the physical map is evaluated at those points.

@@ -479,7 +479,8 @@ namespace hellofem::la {
 
         /// Apply the preconditioner to `x`, storing `y = P x`. If no
         /// preconditioner is set, `y = x`.
-        void _apply_preconditioner(const Vector<T>& x, Vector<T>& y) const        {
+        void _apply_preconditioner(const Vector<T>& x, Vector<T>& y) const
+        {
             if (_P)
                 _P->apply(x, y);
             else

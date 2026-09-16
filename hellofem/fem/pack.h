@@ -102,7 +102,7 @@ namespace hellofem::fem {
                 const int cells_per_entity
                     = (type == IntegralType::interior_facet) ? 2 : 1;
                 const int entries_per_entity
-                    = (type == IntegralType::cell) ? 1
+                    = (type == IntegralType::cell)           ? 1
                     : (type == IntegralType::exterior_facet) ? 2
                                                              : 4;
                 const std::size_t num_entities

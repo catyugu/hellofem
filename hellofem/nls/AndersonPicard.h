@@ -66,7 +66,7 @@ namespace hellofem::nls {
 
         /// Called after each inner linear solve, before the mixing step
         /// (e.g. to apply Dirichlet lifting or update auxiliary state).
-        std::function<void()> post_linear_solve = [] {};
+        std::function<void()> post_linear_solve = [] { };
     };
 
     /// Result of an Anderson-accelerated Picard solve.
@@ -101,8 +101,7 @@ namespace hellofem::nls {
         /// @param[in] reset_on_growth Clear history when the guard trips.
         AndersonMixer(int depth, int warmup_iters, double dampening,
             double max_growth, bool reset_on_growth)
-            : _depth(depth), _warmup_iters(warmup_iters), _dampening(dampening),
-              _max_growth(max_growth), _reset_on_growth(reset_on_growth)
+            : _depth(depth), _warmup_iters(warmup_iters), _dampening(dampening), _max_growth(max_growth), _reset_on_growth(reset_on_growth)
         {
         }
 

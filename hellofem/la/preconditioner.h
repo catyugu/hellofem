@@ -136,7 +136,7 @@ namespace hellofem::la {
                         T acc {0};
                         for (int i1 = 0; i1 < _bs; ++i1)
                             acc += _inv_diag[b * static_cast<std::size_t>(_bs * _bs)
-                                      + static_cast<std::size_t>(i0 * _bs + i1)]
+                                       + static_cast<std::size_t>(i0 * _bs + i1)]
                                 * xa[b * static_cast<std::size_t>(_bs) + i1];
                         ya[b * static_cast<std::size_t>(_bs) + i0] = acc;
                     }

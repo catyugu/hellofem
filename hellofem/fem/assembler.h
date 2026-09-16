@@ -68,7 +68,7 @@ namespace hellofem::fem {
                 const std::size_t entities_per_cell
                     = (type == IntegralType::interior_facet) ? 4
                     : (type == IntegralType::exterior_facet) ? 2
-                                                              : 1;
+                                                             : 1;
                 const std::size_t num_entities
                     = cells.size() / entities_per_cell;
                 if (num_entities == 0)
@@ -163,7 +163,7 @@ namespace hellofem::fem {
                 const std::size_t entities_per_cell
                     = (type == IntegralType::interior_facet) ? 4
                     : (type == IntegralType::exterior_facet) ? 2
-                                                              : 1;
+                                                             : 1;
                 const std::size_t num_entities
                     = cells.size() / entities_per_cell;
                 if (num_entities == 0)
@@ -415,7 +415,7 @@ namespace hellofem::fem {
                 const std::size_t entities_per_cell
                     = (type == IntegralType::interior_facet) ? 4
                     : (type == IntegralType::exterior_facet) ? 2
-                                                              : 1;
+                                                             : 1;
                 const std::size_t num_entities
                     = cells.size() / entities_per_cell;
 
