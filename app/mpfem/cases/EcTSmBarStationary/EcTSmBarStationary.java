@@ -7,17 +7,28 @@ import com.comsol.model.util.ModelUtil;
  *
  * <p>几何: 3D Block (L x wbb x tbb), 单域。
  * 物理: ec (Terminal V=V0 @ x=L 端面, Ground @ x=0 端面),
- *       ht (Ground端恒温热沉, 其余表面对流 htc->T0),
- *       solid (Fixed @ x=0 端面)。
+ *       ht (两端面恒温热沉 T0, 4 个侧面自然对流 htc->T0),
+ *       solid (两端面 Fixed)。
  * 耦合: ElectromagneticHeating (ec->ht 焦耳热), ThermalExpansion (ht->solid, Tref=T0)。
  * 网格: FreeTet, hmax=mh。研究: Stationary。
  *
+ * <p>载荷与解析参照 (验证要点): 焦耳热 Q=sig*(V0/L)^2 在导体内均匀, 端面恒温 +
+ * 侧面散热给出沿轴向的抛物型温度分布 (中面温升 46.6 K, 非近似等温):
+ *       T(x) = T0 + (Q/(k*m^2))*(1 - cosh(m*(x-L/2))/cosh(m*L/2)),
+ *       m^2 = htc*P/(k*A),  A = wbb*tbb,  P = 2*(wbb+tbb),  mL = 0.27
+ * 两端面被接线端子固定: 轴向热膨胀被完全约束, 杆内无轴力故 sigma_xx 沿轴向为常数,
+ * 由 u_x(L)-u_x(0)=0 定出
+ *       sigma_xx = -E*alpha*<T-T0>   (<T-T0> = 长度平均温升, 抛物型下约为峰值的 2/3)
+ * 横向自由, 应变随局部温度沿轴向分布 (中面最大, 端面最小):
+ *       eps_yy = eps_zz = nu*alpha*<T-T0> + alpha*(T(x)-T0)
+ * 即应力/应变分摊在全跨上 (COMSOL 6.2 核对: 各 1/5 长度段的 |sigma_xx| 均值都在
+ * 59 MPa ±2% 内, 与 -E*alpha*<T-T0> 偏差 3%), 只有夹持端棱边存在局部峰值 (2.6x)。
+ *
  * <p>边界识别 (确定性): 用 GeomInfo faceX 采样各面中心, 按坐标平面分类:
- *       x~0 -> ground/fixed, x~L -> terminal, 其余 -> 对流。
+ *       x~0 -> ground/fixed, x~L -> terminal/fixed, 其余 -> 对流。
  *     面编号是运行时探测的 COMSOL 编号, 与 .mphtxt 边界实体号一致, 驱动据此匹配。
  *
- * <p>元素阶: 显式设为 1 (Prop Order), 与 hellofem P1 解一致。
- * 导出: args[0]=result.txt (V,T,solid.disp), args[1]=mesh.mphtxt,
+ * <p>导出: args[0]=result.txt (V,T,solid.disp), args[1]=mesh.mphtxt,
  *       args[2]=.mph, args[3]=generated_model.java (Save-As-Java)。
  */
 public class EcTSmBarStationary {
@@ -31,7 +42,7 @@ public class EcTSmBarStationary {
         model.param().set("L", "0.1[m]", "母线长度");
         model.param().set("wbb", "0.03[m]", "母线宽度");
         model.param().set("tbb", "0.005[m]", "母线厚度");
-        model.param().set("V0", "0.005[V]", "端电压");
+        model.param().set("V0", "0.05[V]", "端电压");
         model.param().set("T0", "293.15[K]", "环境/无应变参考温度");
         model.param().set("htc", "5[W/(m^2*K)]", "自然对流换热系数");
         model.param().set("mh", "0.002[m]", "最大网格尺寸");
@@ -121,7 +132,7 @@ public class EcTSmBarStationary {
         model.component(comp).physics("ec").create("gnd1", "Ground", 2);
         model.component(comp).physics("ec").feature("gnd1").selection().set(new int[]{groundFace});
 
-        // 热边界: 全外表面对流
+        // 热边界: 4 个侧面自然对流
         model.component(comp).physics("ht").create("hf1", "HeatFluxBoundary", 2);
         model.component(comp).physics("ht").feature("hf1").selection().set(convArr);
         model.component(comp).physics("ht").feature("hf1").set("HeatFluxType", "ConvectiveHeatFlux");
@@ -130,22 +141,28 @@ public class EcTSmBarStationary {
         model.component(comp).physics("ht").feature("hf1").set("HeatTransferCoefficientType", "UserDef");
         model.component(comp).physics("ht").feature("hf1").set("h", "htc");
 
-        // 接地/固定端由安装结构保持在环境温度
+        // 两端面由接线端子保持在环境温度
         model.component(comp).physics("ht").create("temp1", "TemperatureBoundary", 2);
         model.component(comp).physics("ht").feature("temp1").selection().set(new int[]{groundFace});
         model.component(comp).physics("ht").feature("temp1").set("T0_src", "userdef");
         model.component(comp).physics("ht").feature("temp1").set("T0", "T0");
+        model.component(comp).physics("ht").create("temp2", "TemperatureBoundary", 2);
+        model.component(comp).physics("ht").feature("temp2").selection().set(new int[]{terminalFace});
+        model.component(comp).physics("ht").feature("temp2").set("T0_src", "userdef");
+        model.component(comp).physics("ht").feature("temp2").set("T0", "T0");
 
         // 多物理场: 焦耳热
         model.component(comp).multiphysics().create("emh1", "ElectromagneticHeating");
         model.component(comp).multiphysics("emh1").set("EMHeat_physics", "ec");
         model.component(comp).multiphysics("emh1").set("Heat_physics", "ht");
 
-        // 结构: Fixed @ ground 端面
+        // 结构: 两端面被接线端子固定
         model.component(comp).physics("solid").feature("lemm1").set("E_mat", "from_mat");
         model.component(comp).physics("solid").feature("lemm1").set("nu_mat", "from_mat");
         model.component(comp).physics("solid").create("fix1", "Fixed", 2);
         model.component(comp).physics("solid").feature("fix1").selection().set(new int[]{groundFace});
+        model.component(comp).physics("solid").create("fix2", "Fixed", 2);
+        model.component(comp).physics("solid").feature("fix2").selection().set(new int[]{terminalFace});
 
         // 热膨胀耦合
         model.component(comp).multiphysics().create("te1", "ThermalExpansion");
