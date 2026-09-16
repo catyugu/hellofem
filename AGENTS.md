@@ -38,6 +38,7 @@
 ## Testing Guidelines
 
 - **Test utilities**: `pytest` and `ctest` for testing
+- **Test layers**: library tests are Catch2/ctest (`tests/<module>/`); app-layer result verification is pytest-only (`app/mpfem/tests/python/`, run with `pytest` from the repo root). It verifies mpfem_app against the stored COMSOL references, and runs the COMSOL stage itself only for a case whose artifacts are missing. The app's C++ unit tests build as one ctest target, `test_mpfem`.
 - **Enforce TDD for every behavior change**: follow `red -> green -> refactor`.
 - **Start with verifiable baseline**: run the relevant existing tests before edits, and record the exact command + outcome in the PR/commit notes.
 - **Test updates goes first**: Add or update a failing test first that reproduces the bug or captures the new requirement; implement code only after the test fails for the expected reason.

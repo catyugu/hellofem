@@ -1,17 +1,93 @@
-// hellofem::app — clean-Java model-script parser tests
+// hellofem::app — COMSOL model-script parsing tests: unit literals,
+// muparser expressions and the clean-Java model extractor.
 // SPDX-License-Identifier: MIT
 
+#include "Expression.h"
 #include "catch2/catch_approx.hpp"
 #include "catch2/catch_test_macros.hpp"
 #include "java_parser.h"
+#include "units.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <set>
+#include <unordered_map>
 
-using hellofem::app::ModelScript;
+using Catch::Approx;
+using hellofem::app::Expression;
 using hellofem::app::parse_model_java;
+using hellofem::app::parse_si;
+using hellofem::app::parse_unit;
+
+TEST_CASE("parse_unit converts to SI", "[app][units]")
+{
+    REQUIRE(parse_unit("m") == Approx(1.0));
+    REQUIRE(parse_unit("cm") == Approx(1e-2));
+    REQUIRE(parse_unit("mm") == Approx(1e-3));
+    REQUIRE(parse_unit("GPa") == Approx(1e9));
+    REQUIRE(parse_unit("MPa") == Approx(1e6));
+    REQUIRE(parse_unit("mV") == Approx(1e-3));
+    REQUIRE(parse_unit("W/(m*K)") == Approx(1.0));
+    REQUIRE(parse_unit("kg/m^3") == Approx(1.0));
+    REQUIRE(parse_unit("1/K") == Approx(1.0));
+}
+
+TEST_CASE("parse_si handles bare numbers and unit literals", "[app][units]")
+{
+    REQUIRE(parse_si("0.006") == Approx(0.006));
+    REQUIRE(parse_si("20[mV]") == Approx(0.02));
+    REQUIRE(parse_si("5[W/m^2/K]") == Approx(5.0));
+    REQUIRE(parse_si("110[GPa]") == Approx(1.1e11));
+    REQUIRE(parse_si("293.15[K]") == Approx(293.15));
+    REQUIRE(parse_si("7.407e5[S/m]") == Approx(740700.0));
+}
+
+TEST_CASE("Expression evaluates params and coordinates", "[app][expr]")
+{
+    double Vtot = 0.02;
+    std::unordered_map<std::string, double*> vars;
+    vars["Vtot"] = &Vtot;
+    Expression e;
+    e.parse("Vtot * x / 0.1", vars);
+    REQUIRE(e.eval(0.05, 0, 0, 0) == Approx(0.01));
+    REQUIRE(e.eval(0.1, 0, 0, 0) == Approx(0.02));
+
+    // x/y/z/t are built-in.
+    Expression e2;
+    e2.parse("x*y + z*t", vars);
+    REQUIRE(e2.eval(2, 3, 4, 5) == Approx(26.0));
+}
+
+TEST_CASE("Expression normalizes unit literals", "[app][expr]")
+{
+    std::unordered_map<std::string, double*> vars;
+    Expression e;
+    e.parse("20[mV]", vars);
+    REQUIRE(e.eval(0, 0, 0, 0) == Approx(0.02));
+
+    // Non-numeric expression referencing params is left to muparser.
+    double htc = 5.0;
+    double T = 303.15;
+    vars["htc"] = &htc;
+    vars["T"] = &T;
+    Expression e2;
+    e2.parse("htc * (T - 293.15)", vars);
+    REQUIRE(e2.eval(0, 0, 0, 0) == Approx(50.0));
+}
+
+TEST_CASE("Expression reports used variables", "[app][expr]")
+{
+    double k = 2.0;
+    std::unordered_map<std::string, double*> vars;
+    vars["k"] = &k;
+    Expression e;
+    e.parse("k * sin(x) + y", vars);
+    auto vs = e.variables();
+    REQUIRE(std::find(vs.begin(), vs.end(), "k") != vs.end());
+    REQUIRE(std::find(vs.begin(), vs.end(), "x") != vs.end());
+}
 
 namespace {
     /// Write a small clean-Java model to a temp file and return its path.
