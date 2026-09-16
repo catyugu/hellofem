@@ -6,7 +6,7 @@ import com.comsol.model.util.ModelUtil;
  * EcThPlateCoupled: 铝矩形板 稳态 电→热 耦合。
  *
  * <p>几何: 3D Block (L x W x T), 单域。
- * 物理: ec (Front V=V0, Back Ground), ht (全表面辐射+对流)。
+ * 物理: ec (Front V=V0, Back Ground), ht (Back 恒温热沉, 其余表面对流)。
  * 耦合: ElectromagneticHeating (ec->ht 焦耳热)。
  * 网格: FreeTet, hmax=mh。研究: Stationary。
  *
@@ -23,7 +23,7 @@ public class EcThPlateCoupled {
         model.param().set("L", "0.2[m]", "板长度");
         model.param().set("W", "0.1[m]", "板宽度");
         model.param().set("T", "0.005[m]", "板厚度");
-        model.param().set("V0", "0.05[V]", "前端电压");
+        model.param().set("V0", "0.01[V]", "前端电压");
         model.param().set("T0", "293.15[K]", "环境温度");
         model.param().set("htc", "8[W/(m^2*K)]", "对流换热系数");
         model.param().set("mh", "0.005[m]", "最大网格尺寸");
@@ -115,6 +115,12 @@ public class EcThPlateCoupled {
         model.component(comp).physics("ht").feature("hf1").set("HeatTransferCoefficientType", "UserDef");
         model.component(comp).physics("ht").feature("hf1").set("h", "htc");
 
+        // 接地端与安装热沉接触
+        model.component(comp).physics("ht").create("temp1", "TemperatureBoundary", 2);
+        model.component(comp).physics("ht").feature("temp1").selection().set(new int[]{backFace});
+        model.component(comp).physics("ht").feature("temp1").set("T0_src", "userdef");
+        model.component(comp).physics("ht").feature("temp1").set("T0", "T0");
+
         // 多物理场: 焦耳热
         model.component(comp).multiphysics().create("emh1", "ElectromagneticHeating");
         model.component(comp).multiphysics("emh1").set("EMHeat_physics", "ec");
@@ -151,7 +157,6 @@ public class EcThPlateCoupled {
         model.result().export("mesh1").set("filename", P[1]);
         model.result().export("mesh1").run();
 
-        model.save(P[2]);
         model.save(P[3], "java");
         System.out.println("EcThPlate_OK");
     }

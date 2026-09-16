@@ -115,7 +115,6 @@ public class PoissonPlate {
         model.result().export("mesh1").set("filename", P[1]);
         model.result().export("mesh1").run();
 
-        model.save(P[2]);
         model.save(P[3], "java");
         System.out.println("PoissonPlate_OK");
     }

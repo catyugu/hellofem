@@ -6,7 +6,8 @@ import com.comsol.model.util.ModelUtil;
  * EcTSmBarStationary: 矩形铜母线 稳态 电→热→结构 三场耦合。
  *
  * <p>几何: 3D Block (L x wbb x tbb), 单域。
- * 物理: ec (Terminal V=V0 @ x=L 端面, Ground @ x=0 端面), ht (全外表面对流 htc->T0),
+ * 物理: ec (Terminal V=V0 @ x=L 端面, Ground @ x=0 端面),
+ *       ht (Ground端恒温热沉, 其余表面对流 htc->T0),
  *       solid (Fixed @ x=0 端面)。
  * 耦合: ElectromagneticHeating (ec->ht 焦耳热), ThermalExpansion (ht->solid, Tref=T0)。
  * 网格: FreeTet, hmax=mh。研究: Stationary。
@@ -30,7 +31,7 @@ public class EcTSmBarStationary {
         model.param().set("L", "0.1[m]", "母线长度");
         model.param().set("wbb", "0.03[m]", "母线宽度");
         model.param().set("tbb", "0.005[m]", "母线厚度");
-        model.param().set("V0", "0.02[V]", "端电压");
+        model.param().set("V0", "0.005[V]", "端电压");
         model.param().set("T0", "293.15[K]", "环境/无应变参考温度");
         model.param().set("htc", "5[W/(m^2*K)]", "自然对流换热系数");
         model.param().set("mh", "0.002[m]", "最大网格尺寸");
@@ -57,6 +58,7 @@ public class EcTSmBarStationary {
         // ---- 面识别 (确定性, 按面心坐标分类) ----
         GeomInfo gi = model.component(comp).geom("geom1");
         int nFace = gi.getNFaces();
+        double Lval = model.param().evaluate("L");
         java.util.List<Integer> groundFaces = new java.util.ArrayList<Integer>();
         java.util.List<Integer> terminalFaces = new java.util.ArrayList<Integer>();
         java.util.List<Integer> convFaces = new java.util.ArrayList<Integer>();
@@ -74,7 +76,7 @@ public class EcTSmBarStationary {
             if (pts == null || pts.length == 0) continue;
             double[] c = pts[0];
             if (Math.abs(c[0]) < 1e-6) groundFaces.add(f);
-            else if (Math.abs(c[0] - 0.1) < 1e-6) terminalFaces.add(f);
+            else if (Math.abs(c[0] - Lval) < 1e-6) terminalFaces.add(f);
             else convFaces.add(f);
             System.out.println("FACE " + f + " center=(" + c[0] + "," + c[1] + "," + c[2] + ")");
         }
@@ -128,6 +130,12 @@ public class EcTSmBarStationary {
         model.component(comp).physics("ht").feature("hf1").set("HeatTransferCoefficientType", "UserDef");
         model.component(comp).physics("ht").feature("hf1").set("h", "htc");
 
+        // 接地/固定端由安装结构保持在环境温度
+        model.component(comp).physics("ht").create("temp1", "TemperatureBoundary", 2);
+        model.component(comp).physics("ht").feature("temp1").selection().set(new int[]{groundFace});
+        model.component(comp).physics("ht").feature("temp1").set("T0_src", "userdef");
+        model.component(comp).physics("ht").feature("temp1").set("T0", "T0");
+
         // 多物理场: 焦耳热
         model.component(comp).multiphysics().create("emh1", "ElectromagneticHeating");
         model.component(comp).multiphysics("emh1").set("EMHeat_physics", "ec");
@@ -156,8 +164,6 @@ public class EcTSmBarStationary {
         size1.set("custom", "on");
         size1.set("hmax", "mh");
         size1.set("hmin", "mh/2");
-        size1.set("hcurve", 0.2);
-        size1.set("hgrad", 1.5);
         model.component(comp).mesh("mesh1").run();
         System.out.println("MESH_OK");
 
@@ -180,7 +186,6 @@ public class EcTSmBarStationary {
         model.result().export("mesh1").set("filename", P[1]);
         model.result().export("mesh1").run();
 
-        model.save(P[2]);
         model.save(P[3], "java");
         System.out.println("EcTSmBar_OK");
     }

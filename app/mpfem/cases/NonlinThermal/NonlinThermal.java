@@ -7,7 +7,7 @@ import com.comsol.model.util.ModelUtil;
  * NonlinThermal: temperature-dependent thermal conductivity (pure HT, nonlinear).
  *
  * Geometry: 3D Block (0.1 x 0.05 x 0.01 m), single domain.
- * Physics: ht (left T=300K, right T=400K, others insulated).
+ * Physics: ht (left T=293.15K, right T=373.15K, others insulated).
  * Material: k(T) = k0 * (1 + alpha_k * (T - Tref)).
  * Mesh: FreeTet hmax=mh.
  * Study: Stationary (COMSOL handles nonlinearity natively).
@@ -23,11 +23,13 @@ public class NonlinThermal {
         model.param().set("L", "0.1[m]", "bar length");
         model.param().set("W", "0.05[m]", "bar width");
         model.param().set("T", "0.01[m]", "bar thickness");
-        model.param().set("Tleft", "300[K]", "left temperature");
-        model.param().set("Tright", "400[K]", "right temperature");
-        model.param().set("k0", "50[W/(m*K)]", "base conductivity");
-        model.param().set("alpha_k", "0.05[1/K]", "conductivity temp coefficient");
+        model.param().set("Tleft", "293.15[K]", "left temperature");
+        model.param().set("Tright", "373.15[K]", "right temperature");
+        model.param().set("k0", "45[W/(m*K)]", "steel conductivity at Tref");
+        model.param().set("alpha_k", "-0.001[1/K]", "conductivity temp coefficient");
         model.param().set("Tref", "293.15[K]", "reference temperature");
+        model.param().set("rho", "7850[kg/m^3]", "steel density");
+        model.param().set("Cp", "470[J/(kg*K)]", "steel heat capacity");
         model.param().set("mh", "0.005[m]", "max mesh size");
 
         String comp = "comp1";
@@ -74,9 +76,9 @@ public class NonlinThermal {
         model.component(comp).material("mat1").propertyGroup("def")
             .set("thermalconductivity", new String[][]{{"k0*(1+alpha_k*(T-Tref))"}});
         model.component(comp).material("mat1").propertyGroup("def")
-            .set("density", new String[][]{{"1[kg/m^3]"}});
+            .set("density", new String[][]{{"rho"}});
         model.component(comp).material("mat1").propertyGroup("def")
-            .set("heatcapacity", new String[][]{{"1[J/(kg*K)]"}});
+            .set("heatcapacity", new String[][]{{"Cp"}});
         System.out.println("MAT_OK");
 
         // Physics: Heat Transfer
@@ -125,7 +127,6 @@ public class NonlinThermal {
         model.result().export("mesh1").set("filename", P[1]);
         model.result().export("mesh1").run();
 
-        model.save(P[2]);
         model.save(P[3], "java");
         System.out.println("NonlinThermal_OK");
     }

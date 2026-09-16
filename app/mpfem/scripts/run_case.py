@@ -10,10 +10,15 @@ Usage:
     python run_case.py probe <case-dir>            # Stage 1 only, validate COMSOL round-trip
     python run_case.py run <case-dir> [--no-comsol] [--no-clean]
     python run_case.py clean <case-dir>            # Stage 2 only
+
+The run action reuses a COMSOL reference only when its SHA-256 manifest matches
+both the hand-written Java source and every exported reference artifact.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -21,10 +26,50 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]            # repo root
+ROOT = Path(__file__).resolve().parents[3]  # repo root
 APP = ROOT / "app" / "mpfem"
 COMCOL = shutil.which("comsolcompile")
 COMSOLBATCH = shutil.which("comsolbatch")
+REFERENCE_MANIFEST = ".comsol-reference.json"
+REFERENCE_OUTPUTS = ("generated_model.java", "mesh.mphtxt", "result.txt")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _reference_hashes(case_dir: Path, case_name: str) -> dict[str, str] | None:
+    names = (f"{case_name}.java", *REFERENCE_OUTPUTS)
+    paths = [case_dir / name for name in names]
+    if not all(path.is_file() for path in paths):
+        return None
+    return {path.name: _sha256(path) for path in paths}
+
+
+def write_reference_manifest(case_dir: Path, case_name: str) -> None:
+    hashes = _reference_hashes(case_dir, case_name)
+    if hashes is None:
+        raise SystemExit("COMSOL reference is incomplete; cannot write its manifest")
+    manifest = {"schema": 1, "sha256": hashes}
+    (case_dir / REFERENCE_MANIFEST).write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def reference_is_current(case_dir: Path, case_name: str) -> bool:
+    manifest_path = case_dir / REFERENCE_MANIFEST
+    hashes = _reference_hashes(case_dir, case_name)
+    if hashes is None or not manifest_path.is_file():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    return manifest == {"schema": 1, "sha256": hashes}
 
 
 def _run(cmd, cwd=None):
@@ -34,7 +79,9 @@ def _run(cmd, cwd=None):
         if r.stdout:
             print(r.stdout[-4000:])
         print(r.stderr[-4000:], file=sys.stderr)
-        raise SystemExit(f"command failed ({r.returncode}): {' '.join(str(c) for c in cmd)}")
+        raise SystemExit(
+            f"command failed ({r.returncode}): {' '.join(str(c) for c in cmd)}"
+        )
     return r
 
 
@@ -43,7 +90,9 @@ def _comsol_ok(out: str) -> bool:
     markers, not benign solver chatter like "Solution error estimates"."""
     bad = re.compile(
         r"Undefined variable|Failed to|Exception|\*\*\*\*\*Error\*\*\*\*\*|"
-        r"diverg|license|invalid|Compilation error", re.I)
+        r"diverg|license|invalid|Compilation error",
+        re.I,
+    )
     return not bad.search(out)
 
 
@@ -64,7 +113,7 @@ def _split_statements(text: str) -> list[str]:
         c = text[i]
         if in_str:
             cur.append(c)
-            if c == '\\':
+            if c == "\\":
                 i += 1
                 if i < len(text):
                     cur.append(text[i])
@@ -74,7 +123,7 @@ def _split_statements(text: str) -> list[str]:
             if c == '"':
                 in_str = True
                 cur.append(c)
-            elif c == ';':
+            elif c == ";":
                 stmts.append("".join(cur))
                 cur = []
             else:
@@ -93,8 +142,13 @@ def _keep_clean(stmt: str) -> bool:
     s = stmt.strip()
     if not s:
         return False
-    if s.startswith("import") or s.startswith("public") or s.startswith("//") \
-       or s.startswith("/*") or s.startswith("*/"):
+    if (
+        s.startswith("import")
+        or s.startswith("public")
+        or s.startswith("//")
+        or s.startswith("/*")
+        or s.startswith("*/")
+    ):
         return False
     if not s.startswith("model."):
         return False
@@ -115,13 +169,15 @@ def _keep_clean(stmt: str) -> bool:
             return True
         if sub == "mesh":
             # Keep only mesh().create / autoMeshSize / run (drop FreeTet/size detail).
-            return re.search(r"mesh\(\)\.create|autoMeshSize|mesh\(\"[^\"]*\"\)\.run", s) is not None
+            return (
+                re.search(r"mesh\(\)\.create|autoMeshSize|mesh\(\"[^\"]*\"\)\.run", s)
+                is not None
+            )
         if sub == "study":
-            return "study().create" in s or "study(\"" in s and "create" in s
+            return "study().create" in s or 'study("' in s and "create" in s
         if sub == "result":
             # Keep only the Data result export (drop the mesh export).
-            return ("export().create(\"data1\", \"Data\")" in s
-                    or 'export("data1")' in s)
+            return 'export().create("data1", "Data")' in s or 'export("data1")' in s
     if s.startswith("model.study("):
         return "create" in s
     if s.startswith("model.result()"):
@@ -137,23 +193,45 @@ def clean_case(case_dir: Path):
     dst = case_dir / "clean_model.java"
     if not src.exists():
         raise SystemExit(f"{src} not found — run the COMSOL stage first")
-    kept = [s + ";" for s in _split_statements(src.read_text(encoding="utf-8"))
-            if _keep_clean(s)]
+    kept = [
+        s + ";"
+        for s in _split_statements(src.read_text(encoding="utf-8"))
+        if _keep_clean(s)
+    ]
     dst.write_text("\n".join(kept) + "\n", encoding="utf-8")
     print(f"clean_model.java written ({len(kept)} statements)")
 
 
 def stage1_comsol(case_dir: Path, case_name: str):
     """Compile + batch-run the case, exporting result/mesh/mph/generated-java."""
+    if COMCOL is None or COMSOLBATCH is None:
+        raise SystemExit(
+            "comsolcompile/comsolbatch not found on PATH (COMSOL bin/win64)"
+        )
     src = case_dir / f"{case_name}.java"
     rc = _run([COMCOL, str(src)], cwd=case_dir)
     if not _comsol_ok(rc.stdout or ""):
         raise SystemExit("comsolcompile reported errors — see compile log")
-    out_mph = case_dir / f"{case_name}.mph"
+    # Keep the batch-managed model separate from model.save(P[2]) in the Java
+    # case. COMSOL otherwise attempts to read and write the same MPH at once.
+    out_mph = case_dir / f"{case_name}_batch.mph"
     out_log = case_dir / "batch.log"
-    r = _run([COMSOLBATCH, "-inputfile", str(src.with_suffix(".class")),
-              "-outputfile", str(out_mph), "-batchlog", str(out_log),
-              "-study", "std1", "-np", "1"], cwd=case_dir)
+    r = _run(
+        [
+            COMSOLBATCH,
+            "-inputfile",
+            str(src.with_suffix(".class")),
+            "-outputfile",
+            str(out_mph),
+            "-batchlog",
+            str(out_log),
+            "-study",
+            "std1",
+            "-np",
+            "1",
+        ],
+        cwd=case_dir,
+    )
     log_text = ""
     if out_log.exists():
         log_text = out_log.read_text(encoding="utf-8", errors="replace")
@@ -163,44 +241,79 @@ def stage1_comsol(case_dir: Path, case_name: str):
             print(line.strip())
     if not _comsol_ok(combined):
         raise SystemExit("COMSOL batch reported errors — see batch.log")
+    write_reference_manifest(case_dir, case_name)
 
 
 def stage_mpfem(case_dir: Path):
     """Stage 3: run mpfem_app on the clean model + mesh."""
-    r = _run([str(_exe("mpfem_app")),
-              str(case_dir / "clean_model.java"),
-              str(case_dir / "mesh.mphtxt"),
-              str(case_dir / "result_hellofem.txt")])
+    r = _run(
+        [
+            str(_exe("mpfem_app")),
+            str(case_dir / "clean_model.java"),
+            str(case_dir / "mesh.mphtxt"),
+            str(case_dir / "result_hellofem.txt"),
+        ]
+    )
     return r
 
 
 def stage_compare(case_dir: Path):
     """Stage 4: compare COMSOL reference vs hellofem result."""
-    r = subprocess.run([sys.executable,
-                        str(APP / "scripts" / "compare_results.py"),
-                        str(case_dir / "result.txt"),
-                        str(case_dir / "result_hellofem.txt"),
-                        "--l2-rel", "1e-2", "--linf-rel", "5e-2"],
-                       capture_output=True, text=True)
+    r = subprocess.run(
+        [
+            sys.executable,
+            str(APP / "scripts" / "compare_results.py"),
+            str(case_dir / "result.txt"),
+            str(case_dir / "result_hellofem.txt"),
+            "--l2-rel",
+            "1e-2",
+            "--linf-rel",
+            "5e-2",
+        ],
+        capture_output=True,
+        text=True,
+    )
     print(r.stdout or "")
     if r.stderr:
         print(r.stderr, file=sys.stderr)
     return r.returncode
 
 
+def run_pipeline(
+    case_dir: Path, case_name: str, *, no_comsol: bool = False, no_clean: bool = False
+) -> int:
+    current = reference_is_current(case_dir, case_name)
+    if no_comsol and not current:
+        raise SystemExit(
+            "--no-comsol requires a current COMSOL reference manifest; rerun without it"
+        )
+    if not no_comsol:
+        if current:
+            print("COMSOL reference manifest matches; reusing cached artifacts")
+        else:
+            print("COMSOL reference missing or stale; rebuilding artifacts")
+            stage1_comsol(case_dir, case_name)
+    if not no_clean:
+        clean_case(case_dir)
+    stage_mpfem(case_dir)
+    return stage_compare(case_dir)
+
+
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("action", choices=["probe", "run", "clean"])
     ap.add_argument("case", type=Path, help="case directory (name or path)")
-    ap.add_argument("--no-comsol", action="store_true",
-                    help="skip the COMSOL stage (reuse existing artifacts)")
-    ap.add_argument("--no-clean", action="store_true",
-                    help="skip regenerating clean_model.java")
+    ap.add_argument(
+        "--no-comsol",
+        action="store_true",
+        help="skip the COMSOL stage (reuse existing artifacts)",
+    )
+    ap.add_argument(
+        "--no-clean", action="store_true", help="skip regenerating clean_model.java"
+    )
     args = ap.parse_args()
-
-    if args.action != "clean" and (COMCOL is None or COMSOLBATCH is None):
-        raise SystemExit("comsolcompile/comsolbatch not found on PATH (COMSOL bin/win64)")
 
     case_dir = args.case
     if not case_dir.is_absolute():
@@ -217,12 +330,11 @@ def main():
     elif args.action == "clean":
         clean_case(case_dir)
     elif args.action == "run":
-        if not args.no_comsol:
-            stage1_comsol(case_dir, case_name)
-        if not args.no_clean:
-            clean_case(case_dir)
-        stage_mpfem(case_dir)
-        sys.exit(stage_compare(case_dir))
+        sys.exit(
+            run_pipeline(
+                case_dir, case_name, no_comsol=args.no_comsol, no_clean=args.no_clean
+            )
+        )
 
 
 if __name__ == "__main__":

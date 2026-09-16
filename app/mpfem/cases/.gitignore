@@ -22,3 +22,4 @@
 # Save-As-Java / cleaned model scripts (intermediates, not sources)
 */generated_model.java
 */clean_model.java
+*/.comsol-reference.json
