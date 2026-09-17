@@ -394,7 +394,8 @@ namespace hellofem::la {
             Vector<T> v(b.index_map(), b.bs());
             Vector<T> s(b.index_map(), b.bs());
             Vector<T> t(b.index_map(), b.bs());
-            Vector<T> z(b.index_map(), b.bs());
+            Vector<T> zp(b.index_map(), b.bs());
+            Vector<T> zs(b.index_map(), b.bs());
 
             T rho_old {1};
             T alpha {1};
@@ -410,15 +411,11 @@ namespace hellofem::la {
                 for (std::size_t i = 0; i < n; ++i)
                     p[i] = r[i] + beta * (p[i] - omega * v[i]);
 
-                // v = A P p
+                // v = A (P p); the same P p updates x below, so keep it.
+                zp.set(0);
+                _apply_preconditioner(p, zp);
                 v.set(0);
-                _apply_preconditioner(p, z);
-                {
-                    Vector<T> ap(b.index_map(), b.bs());
-                    ap.set(0);
-                    _A.mult(z, ap);
-                    v = ap;
-                }
+                _A.mult(zp, v);
 
                 const T rv = inner_product(rhat, v);
                 if (std::abs(static_cast<double>(rv)) == 0)
@@ -431,23 +428,16 @@ namespace hellofem::la {
 
                 if (std::sqrt(squared_norm(s)) <= tol) {
                     // x += alpha P p, done.
-                    Vector<T> y(b.index_map(), b.bs());
-                    y.set(0);
-                    _apply_preconditioner(p, y);
                     for (std::size_t i = 0; i < n; ++i)
-                        x[i] += alpha * y[i];
+                        x[i] += alpha * zp[i];
                     return k + 1;
                 }
 
-                // t = A P s
+                // t = A (P s); the same P s updates x below, so keep it.
+                zs.set(0);
+                _apply_preconditioner(s, zs);
                 t.set(0);
-                _apply_preconditioner(s, z);
-                {
-                    Vector<T> ap(b.index_map(), b.bs());
-                    ap.set(0);
-                    _A.mult(z, ap);
-                    t = ap;
-                }
+                _A.mult(zs, t);
 
                 const T ts = inner_product(t, s);
                 const T tt = inner_product(t, t);
@@ -455,16 +445,11 @@ namespace hellofem::la {
                     break;
                 omega = ts / tt;
 
-                // x += alpha P p + omega P s
-                Vector<T> y(b.index_map(), b.bs());
-                y.set(0);
-                _apply_preconditioner(p, z);
+                // x += alpha P p + omega P s, both already computed.
                 for (std::size_t i = 0; i < n; ++i)
-                    x[i] += alpha * z[i];
-                y.set(0);
-                _apply_preconditioner(s, z);
+                    x[i] += alpha * zp[i];
                 for (std::size_t i = 0; i < n; ++i)
-                    x[i] += omega * z[i];
+                    x[i] += omega * zs[i];
 
                 // r = s - omega t
                 for (std::size_t i = 0; i < n; ++i)
