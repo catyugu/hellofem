@@ -83,9 +83,13 @@ TEST_CASE("CellProperty: a law reading no field does not evaluate a bound one",
 TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[app][physics]")
 {
     // 1x1x1 box, single layer in z. V solves Laplace; with V=1 on x+, 0 on x-,
-    // the solution is V = x (linear), sigma = 1.
+    // the solution is V = x (linear), sigma = 1. A linear potential is in
+    // every Lagrange space, so the discrete solution must reproduce it
+    // exactly at any order — a patch test of the space, the assembly and the
+    // boundary lift together.
+    for (const int order : {1, 2, 3, 4}) {
     auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {4, 4, 1});
-    ElectrostaticsSolver es(f.mesh, f.boundary, f.cells, 1);
+    ElectrostaticsSolver es(f.mesh, f.boundary, f.cells, order);
     auto sigma = constant_property(f.mesh, f.cells, 1.0);
     es.set_conductivity(sigma);
     es.add_voltage_bc(2, ScalarExpression(1.0)); // x+ : V=1
@@ -105,10 +109,54 @@ TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[a
         v_max = std::max(v_max, val);
         v_min = std::min(v_min, val);
     }
-    INFO("max error = " << max_err << ", V range [" << v_min << "," << v_max << "]");
+    INFO("order " << order << ", max error = " << max_err << ", V range ["
+                  << v_min << "," << v_max << "]");
     REQUIRE(max_err < 1e-10);
     REQUIRE(v_max == Catch::Approx(1.0).margin(1e-9));
     REQUIRE(v_min == Catch::Approx(0.0).margin(1e-9));
+    }
+}
+
+TEST_CASE("Electrostatics: a linear potential is exact on a tetrahedral mesh",
+    "[app][physics]")
+{
+    // The same patch test on tetrahedra, where a P3 and higher space needs
+    // the element's dof permutation: a cube of six tetrahedra, V = z driven
+    // by V=0 on z- and V=1 on z+, every other facet insulated.
+    using hellofem::mesh::CellType;
+    const std::vector<double> x {0, 0, 0, /**/ 1, 0, 0, /**/ 0, 1, 0,
+        /**/ 1, 1, 0, /**/ 0, 0, 1, /**/ 1, 0, 1, /**/ 0, 1, 1, /**/ 1, 1, 1};
+    // Kuhn's six tetrahedra around the main diagonal 0-7.
+    const std::vector<std::int64_t> cells {0, 1, 3, 7, /**/ 0, 1, 5, 7,
+        /**/ 0, 2, 3, 7, /**/ 0, 2, 6, 7, /**/ 0, 4, 5, 7, /**/ 0, 4, 6, 7};
+    auto mesh = std::make_shared<hellofem::mesh::Mesh<double>>(
+        hellofem::mesh::create_mesh(std::span<const std::int64_t>(cells),
+            CellType::tetrahedron, x, 3));
+    auto boundary = hellofem::app::test::boundary_tags(*mesh);
+    const std::size_t nc = mesh->topology()->index_map(3)->size_local();
+    std::vector<std::int32_t> cell_idx(nc);
+    std::iota(cell_idx.begin(), cell_idx.end(), 0);
+    auto cell_tags = std::make_shared<hellofem::mesh::MeshTags<int>>(
+        mesh->topology(), 3, std::move(cell_idx),
+        std::vector<int>(nc, 1), "cells");
+
+    for (const int order : {1, 2, 3, 4}) {
+        ElectrostaticsSolver es(mesh, boundary, cell_tags, order);
+        es.set_conductivity(constant_property(mesh, cell_tags, 1.0));
+        es.add_voltage_bc(6, ScalarExpression(1.0)); // z+ : V=1
+        es.add_voltage_bc(5, ScalarExpression(0.0)); // z- : V=0
+        es.solve_steady(0.0);
+
+        auto coords = es.space()->tabulate_dof_coordinates(false);
+        double max_err = 0;
+        for (std::int32_t d = 0;
+            d < es.space()->dofmap()->index_map->size_local(); ++d)
+            max_err = std::max(max_err,
+                std::abs(es.solution()->x()->array()[static_cast<std::size_t>(d)]
+                    - coords[3 * d + 2]));
+        INFO("order " << order << ", max error = " << max_err);
+        REQUIRE(max_err < 1e-10);
+    }
 }
 
 TEST_CASE("Electrostatics: voltage-dependent conductivity drives a nonlinear solve",
