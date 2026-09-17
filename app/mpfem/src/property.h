@@ -37,9 +37,6 @@ namespace hellofem::app {
             return impl_ ? impl_->expr.eval(x, y, z, t) : value_;
         }
 
-        /// Whether the value is a plain constant (no expression).
-        bool constant() const { return impl_ == nullptr; }
-
     private:
         // Shared so that the value is copyable together with the variable
         // storage the parsed expression reads (immutable after construction).
@@ -64,11 +61,9 @@ namespace hellofem::app {
             std::shared_ptr<const mesh::MeshTags<int>> cell_tags,
             std::unordered_map<std::string, double> params);
 
-        /// Set a constant value on domain `dom` (1-based COMSOL domain id).
-        void set_value(int dom, double value);
-
-        /// Set a model expression on domain `dom`. An expression that reads
-        /// a bound field makes the property solution dependent.
+        /// Set a model expression on domain `dom` (1-based COMSOL domain id).
+        /// An expression that reads a bound field makes the property
+        /// solution dependent.
         void set_expression(int dom, std::string_view text);
 
         /// Bind the solution field that `symbol` refers to in the
@@ -89,16 +84,11 @@ namespace hellofem::app {
         std::shared_ptr<fem::Function<double>> function() const { return f_; }
 
     private:
-        struct DomainValue {
-            double value = 0.0;
-            std::shared_ptr<Expression> expr; // null: constant value
-        };
-
         std::shared_ptr<const mesh::Mesh<double>> mesh_;
         std::shared_ptr<const mesh::MeshTags<int>> cell_tags_;
         std::shared_ptr<fem::Function<double>> f_;
-        std::map<int, DomainValue> values_;
-        bool dynamic_ = false;
+        /// Expression per domain; a domain without one keeps the zero of `f_`.
+        std::map<int, std::shared_ptr<Expression>> values_;
         bool field_dependent_ = false;
 
         // Variable storage shared by the parsed expressions: the model

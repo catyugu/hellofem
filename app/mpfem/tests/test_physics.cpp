@@ -17,6 +17,7 @@ namespace la = hellofem::la;
 
 using Catch::Approx;
 using namespace hellofem::app;
+using hellofem::app::test::constant_property;
 using hellofem::app::test::make_box_fixture;
 
 TEST_CASE("CellProperty: sparse domains and field-dependent values", "[app][physics]")
@@ -40,7 +41,7 @@ TEST_CASE("CellProperty: sparse domains and field-dependent values", "[app][phys
 
     CellProperty property(mesh, tags, {});
     property.bind_field("T", ht.solution());
-    property.set_value(2, 7.0); // domain 2: constant
+    property.set_expression(2, "7.0"); // domain 2: constant
     property.set_expression(1, "2*T"); // domain 1: 2x
     REQUIRE(property.field_dependent());
     property.update(0.0);
@@ -64,9 +65,7 @@ TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[a
     // the solution is V = x (linear), sigma = 1.
     auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {4, 4, 1});
     ElectrostaticsSolver es(f.mesh, f.boundary, f.cells, 1);
-    auto sigma = std::make_shared<CellProperty>(f.mesh, f.cells,
-        std::unordered_map<std::string, double> {});
-    sigma->set_value(1, 1.0);
+    auto sigma = constant_property(f.mesh, f.cells, 1.0);
     es.set_conductivity(sigma);
     es.add_voltage_bc(2, ScalarExpression(1.0)); // x+ : V=1
     es.add_voltage_bc(1, ScalarExpression(0.0)); // x- : V=0
@@ -142,15 +141,9 @@ TEST_CASE("HeatTransfer: steady -div(k grad T)=0 with Robin convection", "[app][
     // => b = -1/2. Hence T(x) = 1 - x/2, T(1)=0.5.
     auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {4, 4, 1});
     HeatTransferSolver ht(f.mesh, f.boundary, f.cells, 1);
-    auto k = std::make_shared<CellProperty>(f.mesh, f.cells,
-        std::unordered_map<std::string, double> {});
-    k->set_value(1, 1.0);
-    auto h = std::make_shared<CellProperty>(f.mesh, f.cells,
-        std::unordered_map<std::string, double> {});
-    h->set_value(1, 1.0);
-    auto t_inf = std::make_shared<CellProperty>(f.mesh, f.cells,
-        std::unordered_map<std::string, double> {});
-    t_inf->set_value(1, 0.0);
+    auto k = constant_property(f.mesh, f.cells, 1.0);
+    auto h = constant_property(f.mesh, f.cells, 1.0);
+    auto t_inf = constant_property(f.mesh, f.cells, 0.0);
     ht.set_conductivity(k);
     ht.add_temperature_bc(1, ScalarExpression(1.0)); // x- : T=1
     ht.add_convection(2, h, t_inf); // x+ : h=1, Tinf=0
@@ -224,12 +217,8 @@ TEST_CASE("SolidMechanics: blocked assembly — no load with Fixed gives u=0", "
 {
     auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {2, 2, 1});
     SolidMechanicsSolver sm(f.mesh, f.boundary, f.cells, 1);
-    auto E = std::make_shared<CellProperty>(f.mesh, f.cells,
-        std::unordered_map<std::string, double> {});
-    E->set_value(1, 200e9);
-    auto nu = std::make_shared<CellProperty>(f.mesh, f.cells,
-        std::unordered_map<std::string, double> {});
-    nu->set_value(1, 0.3);
+    auto E = constant_property(f.mesh, f.cells, 200e9);
+    auto nu = constant_property(f.mesh, f.cells, 0.3);
     sm.set_elastic(E, nu);
     sm.add_fixed_bc(1); // x- face: u=v=w=0
 
@@ -250,18 +239,10 @@ TEST_CASE("SolidMechanics: uniform thermal expansion of a clamped bar", "[app][p
     // the displacement is smooth and monotone.
     auto f = make_box_fixture({0, 0, 0}, {1, 0.3, 0.3}, {10, 3, 3});
     SolidMechanicsSolver sm(f.mesh, f.boundary, f.cells, 1);
-    auto E = std::make_shared<CellProperty>(f.mesh, f.cells,
-        std::unordered_map<std::string, double> {});
-    E->set_value(1, 200e9);
-    auto nu = std::make_shared<CellProperty>(f.mesh, f.cells,
-        std::unordered_map<std::string, double> {});
-    nu->set_value(1, 0.3);
-    auto alpha = std::make_shared<CellProperty>(f.mesh, f.cells,
-        std::unordered_map<std::string, double> {});
-    alpha->set_value(1, 1e-5);
-    auto T = std::make_shared<CellProperty>(f.mesh, f.cells,
-        std::unordered_map<std::string, double> {});
-    T->set_value(1, 393.15); // DT = 100 above Tref=293.15
+    auto E = constant_property(f.mesh, f.cells, 200e9);
+    auto nu = constant_property(f.mesh, f.cells, 0.3);
+    auto alpha = constant_property(f.mesh, f.cells, 1e-5);
+    auto T = constant_property(f.mesh, f.cells, 393.15); // DT = 100 above Tref
     sm.set_elastic(E, nu);
     sm.set_thermal_expansion(T->function(), alpha, 293.15);
     sm.add_fixed_bc(1); // x- face clamped

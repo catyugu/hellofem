@@ -197,7 +197,6 @@ TEST_CASE("parse_model_java extracts params/materials/physics", "[app][java]")
     REQUIRE(model.study.times.size() == 5);
     REQUIRE(model.study.times[1] == Catch::Approx(0.5));
     REQUIRE(model.study.times.back() == Catch::Approx(2.0));
-    REQUIRE(model.study.mesh_refine == 2);
 
     REQUIRE(model.export_config.expressions.size() == 3);
     REQUIRE(model.export_config.expressions[2] == "solid.disp");

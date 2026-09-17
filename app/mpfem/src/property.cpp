@@ -105,17 +105,6 @@ namespace hellofem::app {
             f_->function_space()->dofmap()->cell_dofs(cell).front())];
     }
 
-    void CellProperty::set_value(int dom, double value)
-    {
-        DomainValue& dv = values_[dom];
-        dv.value = value;
-        dv.expr.reset();
-        const std::int32_t nc = num_cells();
-        for (std::int32_t c = 0; c < nc; ++c)
-            if (domain_of_cell(c) == dom)
-                cell_entry(c) = value;
-    }
-
     void CellProperty::set_expression(int dom, std::string_view text)
     {
         auto expr = std::make_shared<Expression>();
@@ -127,9 +116,7 @@ namespace hellofem::app {
                     spdlog::debug("property on domain {}: '{}' reads the field '{}'",
                         dom, text, used);
                 }
-        DomainValue& dv = values_[dom];
-        dv.expr = std::move(expr);
-        dynamic_ = true;
+        values_[dom] = std::move(expr);
     }
 
     void CellProperty::bind_field(std::string symbol,
@@ -167,7 +154,7 @@ namespace hellofem::app {
 
     void CellProperty::update(double t)
     {
-        if (not dynamic_)
+        if (values_.empty())
             return;
         cell_centroids();
         const std::int32_t nc = num_cells();
@@ -186,12 +173,12 @@ namespace hellofem::app {
 
         for (std::int32_t c = 0; c < nc; ++c) {
             auto it = values_.find(domain_of_cell(c));
-            if (it == values_.end() or not it->second.expr)
+            if (it == values_.end())
                 continue;
             for (auto& field : fields_)
                 *var_ptrs_[field.symbol]
                     = field.values[static_cast<std::size_t>(c)];
-            cell_entry(c) = it->second.expr->eval(centroids_[3 * c],
+            cell_entry(c) = it->second->eval(centroids_[3 * c],
                 centroids_[3 * c + 1], centroids_[3 * c + 2], t);
         }
     }

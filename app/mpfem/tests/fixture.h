@@ -12,6 +12,7 @@
 #include <array>
 #include <memory>
 #include <numeric>
+#include <string>
 #include <vector>
 
 namespace hellofem::app::test {
@@ -92,6 +93,19 @@ namespace hellofem::app::test {
         f.cells = std::make_shared<mesh::MeshTags<int>>(f.mesh->topology(), 3,
             std::move(cell_idx), std::vector<int>(nc, 1), "cells");
         return f;
+    }
+
+    /// A DG0 property holding a constant on domain 1 (the single domain of
+    /// the box fixtures).
+    inline std::shared_ptr<CellProperty> constant_property(
+        const std::shared_ptr<const mesh::Mesh<double>>& mesh,
+        const std::shared_ptr<const mesh::MeshTags<int>>& tags, double value)
+    {
+        auto property = std::make_shared<CellProperty>(mesh, tags,
+            std::unordered_map<std::string, double> {});
+        property->set_expression(1, std::to_string(value));
+        property->update(0.0); // values are otherwise written on refresh
+        return property;
     }
 
     /// Assemble and solve a field solver's steady system at time `t`.

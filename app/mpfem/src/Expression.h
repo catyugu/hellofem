@@ -36,9 +36,6 @@ namespace hellofem::app {
         /// Evaluate at the given point (also updates x/y/z/t bindings).
         double eval(double x, double y, double z, double t);
 
-        /// Expression text (for diagnostics).
-        const std::string& expr() const noexcept { return expr_; }
-
         /// Names of the variables the expression references.
         std::vector<std::string> variables() const;
 

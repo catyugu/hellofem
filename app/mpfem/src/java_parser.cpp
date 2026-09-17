@@ -581,18 +581,6 @@ namespace hellofem::app {
                     }
                     return;
                 }
-
-                // mesh().create / mesh(tag).autoMeshSize / mesh(tag).run
-                if (c.size() >= 2 and c[1].method == "mesh") {
-                    if (c.size() >= 3 and c[2].method == "autoMeshSize") {
-                        try {
-                            model.study.mesh_refine = static_cast<int>(std::stod(arg_string(c[2].args[0])));
-                        }
-                        catch (...) {
-                        }
-                    }
-                    return;
-                }
             }
 
             // study().create / study(tag).create / study(tag).feature(feat).set

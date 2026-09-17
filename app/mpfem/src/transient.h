@@ -33,20 +33,12 @@ namespace hellofem::app {
 
         const TimeScheme& scheme() const { return *scheme_; }
 
-        /// Number of steps taken.
-        std::size_t steps() const { return steps_; }
-
-        /// Iterations of the last step (the nonlinear ones; 0 when linear).
-        int last_iterations() const { return iterations_; }
-
     private:
         std::shared_ptr<HeatTransferSolver> solver_;
         std::unique_ptr<const TimeScheme> scheme_;
         std::vector<la::Vector<double>> history_;
         std::optional<la::Vector<double>> source_;
         double t_ = 0.0;
-        std::size_t steps_ = 0;
-        int iterations_ = 0;
     };
 
 } // namespace hellofem::app

@@ -21,11 +21,6 @@ namespace hellofem::app {
         std::vector<double> b; // stiffness-operator weights
         double c_new = 1.0;
         double c_old = 0.0;
-        /// Fraction of the step at which Dirichlet data is evaluated,
-        /// `t_n + theta*dt`: 1 for the BDF schemes (the new level),
-        /// 1/2 for Crank-Nicolson (the midpoint, which keeps its second
-        /// order with a time-dependent boundary value).
-        double theta = 1.0;
     };
 
     /// A time stepping scheme: the temporal discretization of a

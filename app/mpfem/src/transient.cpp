@@ -23,7 +23,6 @@ namespace hellofem::app {
         history_.push_back(la::Vector<double>(*solver_->solution()->x()));
         source_.reset();
         t_ = t0;
-        steps_ = 0;
     }
 
     void HeatTimeStepper::step(double t)
@@ -44,7 +43,7 @@ namespace hellofem::app {
         level.history = history;
         level.source_old = source_ ? &*source_ : nullptr;
         level.source_new = &source;
-        iterations_ = solve_system(
+        const int iterations = solve_system(
             [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
                 solver_->refresh(t);
                 solver_->assemble_step(A, b, level);
@@ -53,7 +52,7 @@ namespace hellofem::app {
             /*warm_start=*/true);
 
         spdlog::info("stepping '{}' to t = {} s (dt = {} s, {} iterations)",
-            scheme_->name(), t, dt, iterations_);
+            scheme_->name(), t, dt, iterations);
 
         source_ = source;
         history_.insert(history_.begin(),
@@ -64,7 +63,6 @@ namespace hellofem::app {
             history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(keep),
                 history_.end());
         t_ = t;
-        ++steps_;
     }
 
 } // namespace hellofem::app

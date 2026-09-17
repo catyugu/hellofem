@@ -19,15 +19,6 @@ using namespace hellofem::app;
 
 namespace {
 
-    std::shared_ptr<CellProperty> constant(std::shared_ptr<const hellofem::mesh::Mesh<double>> mesh,
-        std::shared_ptr<const hellofem::mesh::MeshTags<int>> tags, double value)
-    {
-        auto property = std::make_shared<CellProperty>(mesh, tags,
-            std::unordered_map<std::string, double> {});
-        property->set_value(1, value);
-        return property;
-    }
-
     std::unordered_map<std::string, double> no_params()
     {
         return {};
@@ -42,8 +33,8 @@ namespace {
         auto box = test::make_box_fixture({0, 0, 0}, {1, 0.2, 0.2}, {4, 1, 1});
         auto solver = std::make_shared<HeatTransferSolver>(
             box.mesh, box.boundary, box.cells, 1);
-        solver->set_conductivity(constant(box.mesh, box.cells, 1.0));
-        solver->set_thermal_mass(constant(box.mesh, box.cells, 1.0));
+        solver->set_conductivity(test::constant_property(box.mesh, box.cells, 1.0));
+        solver->set_thermal_mass(test::constant_property(box.mesh, box.cells, 1.0));
         auto source = std::make_shared<CellProperty>(box.mesh, box.cells,
             no_params());
         source->set_expression(1, "3*t*t");
@@ -206,9 +197,9 @@ TEST_CASE("Transient heat: a solution-independent nonlinear law matches the line
             k->set_expression(1, "k0*(1+alpha_k*(T-Tref))");
         }
         else
-            k->set_value(1, 1.0);
+            k->set_expression(1, "k0");
         solver->set_conductivity(k);
-        solver->set_thermal_mass(constant(box.mesh, box.cells, 1.0));
+        solver->set_thermal_mass(test::constant_property(box.mesh, box.cells, 1.0));
         auto source = std::make_shared<CellProperty>(box.mesh, box.cells,
             no_params());
         source->set_expression(1, "3*t*t");

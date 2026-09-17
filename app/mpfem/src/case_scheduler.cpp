@@ -26,12 +26,6 @@ namespace hellofem::app {
                 return "(K)";
             if (name == "solid.disp")
                 return "(m)";
-            if (name == "ec.normJ")
-                return "(A/m^2)";
-            if (name == "ec.Qh")
-                return "(W/m^3)";
-            if (name == "solid.mises")
-                return "(N/m^2)";
             return "(1)";
         }
 

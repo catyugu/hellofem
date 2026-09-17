@@ -25,7 +25,6 @@ namespace hellofem::app {
     /// A material and its domain assignment + properties.
     struct Material {
         std::string tag;
-        std::string label;
         std::set<int> domains; // 1-based COMSOL domain ids
         std::vector<MaterialProperty> properties;
     };
@@ -62,7 +61,6 @@ namespace hellofem::app {
         /// Raw `tlist` expression, resolved into `times` once every model
         /// parameter is known.
         std::string times_expr;
-        int mesh_refine = 2; // autoMeshSize hint
     };
 
     /// Result export configuration (expressions to compare).
@@ -80,7 +78,6 @@ namespace hellofem::app {
         StudyConfig study;
         ExportConfig export_config;
 
-        const Parameter* parameter(const std::string& name) const;
         const Material* material_on_domain(int domain) const;
         const Physics* physics_by_type(const std::string& type) const;
         std::vector<const PhysicsFeature*> features(const std::string& type) const;

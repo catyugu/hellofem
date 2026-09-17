@@ -5,14 +5,6 @@
 
 namespace hellofem::app {
 
-    const Parameter* ModelScript::parameter(const std::string& name) const
-    {
-        for (const auto& p : parameters)
-            if (p.name == name)
-                return &p;
-        return nullptr;
-    }
-
     const Material* ModelScript::material_on_domain(int domain) const
     {
         for (const auto& m : materials)
