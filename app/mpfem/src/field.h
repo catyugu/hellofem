@@ -160,8 +160,6 @@ namespace hellofem::app {
         std::shared_ptr<fem::FunctionSpace<double>> V_;
         std::shared_ptr<fem::Function<double>> u_;
         std::shared_ptr<la::SparsityPattern> pattern_;
-        int order_;
-        int value_dim_;
         double t_ = 0.0; // time of the last refresh
     };
 

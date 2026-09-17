@@ -63,14 +63,11 @@ namespace hellofem::app {
             std::vector<Variable> variables_;
         };
 
-        std::unique_ptr<PhysicsField> make_electric_field(const Physics& physics,
-            CaseContext& ctx)
-        {
-            return std::make_unique<ElectricField>(physics, ctx);
-        }
-
-        const FieldRegistration electric_field {
-            "ConductiveMedia", make_electric_field};
+        const FieldRegistration electric_field {"ConductiveMedia",
+            [](const Physics& physics, CaseContext& ctx)
+                -> std::unique_ptr<PhysicsField> {
+                return std::make_unique<ElectricField>(physics, ctx);
+            }};
 
     } // namespace
 

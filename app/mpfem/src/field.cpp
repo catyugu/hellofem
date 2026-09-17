@@ -187,10 +187,8 @@ namespace hellofem::app {
         : mesh_(std::move(mesh))
         , facet_tags_(std::move(facet_tags))
         , cell_tags_(std::move(cell_tags))
-        , order_(order)
-        , value_dim_(value_dim)
     {
-        V_ = make_space(mesh_, order_, value_dim_);
+        V_ = make_space(mesh_, order, value_dim);
         u_ = std::make_shared<fem::Function<double>>(V_);
         u_->x()->set(0.0);
 

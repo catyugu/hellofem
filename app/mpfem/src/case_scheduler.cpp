@@ -175,7 +175,7 @@ namespace hellofem::app {
             }
             // A step that the next output time held back says nothing about
             // the size the solution allows, so the proposal stands.
-            const double basis = held ? std::max(dt, h) : h;
+            const double basis = held ? dt : h;
             // The order is the BDF family's to select; a family of a fixed
             // order is stepped at the order of its scheme.
             const int next = scheme.family == TimeFamily::bdf
