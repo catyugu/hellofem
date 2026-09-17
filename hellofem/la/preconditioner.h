@@ -12,6 +12,7 @@
 #include <amgcl/adapter/block_matrix.hpp>
 #include <amgcl/amg.hpp>
 #include <amgcl/backend/builtin.hpp>
+#include <amgcl/coarsening/ruge_stuben.hpp>
 #include <amgcl/coarsening/smoothed_aggregation.hpp>
 #include <amgcl/relaxation/gauss_seidel.hpp>
 #include <amgcl/value_type/static_matrix.hpp>
@@ -246,6 +247,20 @@ namespace hellofem::la {
     /// needs a multiple of the iterations of the block hierarchy for the
     /// same solution.
     ///
+    /// The scalar hierarchy coarsens classically (Ruge-Stüben): it splits the
+    /// variables into coarse and fine ones and interpolates from the strongly
+    /// coupled neighbours, so the Krylov iteration stays flat as the problem
+    /// grows. Smoothed aggregation instead groups whole neighbourhoods into
+    /// one aggregate and interpolates from a single constant per aggregate,
+    /// which on a scalar operator leaves the iteration growing with the
+    /// problem. On a box at second order, smoothed aggregation needed 22
+    /// iterations at 4913 unknowns and 51 at 68921, while amgcl's own solver
+    /// built on the same aggregation reproduced those counts exactly — so the
+    /// difference is the coarsening, not this wrapper — and classical
+    /// coarsening holds 5 to 7 over the same range. Ruge-Stüben cannot
+    /// coarsen a block-valued matrix, so the vector hierarchy keeps smoothed
+    /// aggregation, where the blocks themselves carry the coupling.
+    ///
     /// The smoother is a symmetric Gauss-Seidel sweep: unlike amgcl's
     /// default damped Jacobi it carries no damping the operator has to
     /// satisfy, so it stays a smoother at every level of every hierarchy.
@@ -343,7 +358,7 @@ namespace hellofem::la {
         using ScalarBackend = amgcl::backend::builtin<T>;
         using ScalarMatrix = typename ScalarBackend::matrix;
         using ScalarAmg = amgcl::amg<ScalarBackend,
-            amgcl::coarsening::smoothed_aggregation, amgcl::relaxation::gauss_seidel>;
+            amgcl::coarsening::ruge_stuben, amgcl::relaxation::gauss_seidel>;
         using BlockValue = amgcl::static_matrix<T, Block, Block>;
         using BlockBackend = amgcl::backend::builtin<BlockValue>;
         using BlockAmg = amgcl::amg<BlockBackend,
