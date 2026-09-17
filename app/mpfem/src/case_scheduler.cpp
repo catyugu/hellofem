@@ -6,17 +6,21 @@
 #include "mesh/utils.h"
 #include "spdlog/spdlog.h"
 
+#include <algorithm>
 #include <fstream>
 #include <iomanip>
+#include <span>
 #include <stdexcept>
+#include <utility>
 
 namespace hellofem::app {
 
     CaseScheduler::CaseScheduler(const ModelScript& model, const LoadedMesh& lm,
-        std::string_view scheme)
+        TimeSettings time)
         : model_(model)
         , lm_(lm)
-        , ctx_(model_, lm_, scheme)
+        , time_(std::move(time))
+        , ctx_(model_, lm_, time_)
         , mesh_(lm.mesh)
     {
         // One field per physics interface of the model, in the model's own
@@ -75,22 +79,129 @@ namespace hellofem::app {
 
         // The first level is the state the fields prepare for themselves: the
         // initial values of a field the study advances, and the constraints
-        // of the fields it does not. The fields it does not advance solve
-        // that level here, exactly as they solve every later one; a transient
-        // study then steps to each following output time.
+        // of the fields it does not. A field that is algebraic — one that
+        // does not step in time — is solved there like at any other level.
         const double t0 = times.empty() ? 0.0 : times.front();
         for (const auto& field : fields_)
             field->initialize(t0);
         for (const auto& field : fields_)
-            if (not field->advances_in_time())
+            if (not field->stepper())
                 field->solve_level(t0);
         record(t0);
 
+        std::vector<TimeStepper*> steppers;
+        for (const auto& field : fields_)
+            if (TimeStepper* stepper = field->stepper())
+                steppers.push_back(stepper);
+
+        const TimeScheme& scheme = find_time_scheme(time_.scheme);
+        if (model_.study.transient and time_.adaptive) {
+            advance_adaptive(steppers, times);
+            return;
+        }
+
         for (std::size_t i = 1; i < times.size(); ++i) {
+            // A scheme of a fixed order is stepped straight to every output
+            // time, at the size of the interval.
+            for (TimeStepper* stepper : steppers)
+                stepper->step(times[i], scheme.order);
             for (const auto& field : fields_)
-                field->solve_level(times[i]);
+                if (not field->stepper())
+                    field->solve_level(times[i]);
             record(times[i]);
         }
+    }
+
+    void CaseScheduler::advance_adaptive(
+        std::span<TimeStepper* const> steppers, const std::vector<double>& times)
+    {
+        const TimeScheme& scheme = find_time_scheme(time_.scheme);
+        const double t_end = times.back();
+
+        // The first step is a thousandth of the span: a first step has no
+        // history for the error estimate to read, so it has to be small
+        // enough that its own error cannot escape the tolerance, and the
+        // doubling of the controller raises it within a few steps wherever
+        // the solution allows. The step is carried over the output times —
+        // those hold a step back, they do not reset it.
+        double dt = (t_end - times.front()) / 1000.0;
+        // Below this the error cannot be met by shrinking the step any more,
+        // and the interval is one the estimate cannot resolve.
+        const double smallest = (t_end - times.front()) * 1e-10;
+        double t = times.front();
+        std::size_t output = 1;
+        int order = 1;
+        int steps = 0;
+        int rejected = 0;
+
+        while (t < t_end) {
+            // Output times the levels have already passed: there is nothing
+            // left to solve at them.
+            while (output < times.size() and times[output] <= t)
+                ++output;
+            const double stop = times[output];
+            const double remaining = stop - t;
+            const bool held = dt > remaining;
+            const double h = held ? remaining : dt;
+
+            for (TimeStepper* stepper : steppers)
+                stepper->step(t + h, order);
+
+            // The step is as good as its worst field, and the order of the
+            // next one follows the worst of their derivative norms.
+            double error = 0.0;
+            std::vector<double> norms;
+            for (TimeStepper* stepper : steppers) {
+                error = std::max(error, stepper->error());
+                const std::vector<double> field_norms
+                    = stepper->scaled_derivatives();
+                norms.resize(std::max(norms.size(), field_norms.size()), 0.0);
+                for (std::size_t k = 0; k < field_norms.size(); ++k)
+                    norms[k] = std::max(norms[k], field_norms[k]);
+            }
+
+            if (error > 1.0) {
+                // The step missed the tolerance: the fields go back to the
+                // level it started from, and it is retried smaller and at the
+                // order below, the more robust one.
+                for (TimeStepper* stepper : steppers)
+                    stepper->undo();
+                dt = h * step_factor(error, order);
+                order = std::max(1, order - 1);
+                ++rejected;
+                if (dt < smallest)
+                    throw std::runtime_error(
+                        "CaseScheduler: the time step at t = "
+                        + std::to_string(t) + " s fell to " + std::to_string(dt)
+                        + " s and the local error is still "
+                        + std::to_string(error) + "; the tolerance "
+                        + std::to_string(time_.tolerance)
+                        + " cannot be met on this interval");
+                continue;
+            }
+
+            t += h;
+            // A field that does not step is algebraic: it follows every
+            // level, not only the output times.
+            for (const auto& field : fields_)
+                if (not field->stepper())
+                    field->solve_level(t);
+            if (held) {
+                record(stop);
+                ++output;
+            }
+            // A step that the next output time held back says nothing about
+            // the size the solution allows, so the proposal stands.
+            const double basis = held ? std::max(dt, h) : h;
+            const int next = next_order(order, scheme.order, norms);
+            dt = basis * step_factor(error, order);
+            order = next;
+            ++steps;
+        }
+
+        spdlog::info(
+            "transient: {} steps over {} s ({} rejected, order {})", steps,
+            t_end - times.front(), rejected, order);
     }
 
     // -------------------------------------------------------------------------

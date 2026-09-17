@@ -126,7 +126,7 @@ TEST_CASE("CaseScheduler: a physics without a registered field is an error",
     ModelScript model;
     model.physics.push_back(Physics {"ff", "FluidFlow", {}});
     auto box = test::make_box_fixture({0, 0, 0}, {1, 1, 1}, {1, 1, 1});
-    REQUIRE_THROWS(CaseScheduler(model, loaded(box), "bdf2"));
+    REQUIRE_THROWS(CaseScheduler(model, loaded(box), TimeSettings {}));
 }
 
 TEST_CASE("CaseScheduler: the model's physics drives the solved fields",
@@ -135,43 +135,52 @@ TEST_CASE("CaseScheduler: the model's physics drives the solved fields",
     // A transient heat model and no electric physics: the scheduler must
     // build the heat field alone, step it, and export exactly the variable
     // that field provides — a column per output time, of the manufactured
-    // solution of that time.
+    // solution of that time. The levels are the model's output times whatever
+    // the scheme: the fixed-order one steps to each of them, the adaptive one
+    // steps within the intervals and lands on them.
     const int steps = 20;
     auto box = test::make_box_fixture({0, 0, 0}, {1, 0.2, 0.2}, {4, 1, 1});
-    CaseScheduler scheduler(manufactured_heat_model(steps), loaded(box), "bdf2");
-    scheduler.run();
 
-    const auto path = scratch_file("hellofem_scheduler_result.txt");
-    scheduler.export_result(path.string());
+    for (const TimeSettings& settings :
+        {TimeSettings {"bdf2", false, 1e-3}, TimeSettings {"bdf2", true, 1e-3}}) {
+        CaseScheduler scheduler(manufactured_heat_model(steps), loaded(box),
+            settings);
+        scheduler.run();
 
-    const std::string header = result_header(path);
-    REQUIRE(count_of(header, "T (K)") == static_cast<std::size_t>(steps) + 1);
-    REQUIRE(header.find("V (V)") == std::string::npos);
-    REQUIRE(header.find("T (K) @ t=1  ") != std::string::npos);
+        const auto path = scratch_file("hellofem_scheduler_result.txt");
+        scheduler.export_result(path.string());
 
-    // Every vertex of every level holds the manufactured solution T = t^3.
-    // The Dirichlet vertices carry its data alone; the interior vertices
-    // carry the time scheme's own error (dt^2/4 at worst), so the maximum
-    // below is that error and nothing else.
-    const std::vector<std::vector<double>> rows = result_rows(path);
-    REQUIRE(rows.size() > 0);
-    double max_err = 0.0;
-    for (const std::vector<double>& row : rows) {
-        REQUIRE(row.size() == 3 + static_cast<std::size_t>(steps) + 1);
-        for (int n = 0; n <= steps; ++n) {
-            const double exact = std::pow(static_cast<double>(n) / steps, 3.0);
-            max_err = std::max(
-                max_err, std::abs(row[static_cast<std::size_t>(3 + n)] - exact));
+        const std::string header = result_header(path);
+        REQUIRE(count_of(header, "T (K)") == static_cast<std::size_t>(steps) + 1);
+        REQUIRE(header.find("V (V)") == std::string::npos);
+        REQUIRE(header.find("T (K) @ t=1  ") != std::string::npos);
+
+        // Every vertex of every level holds the manufactured solution
+        // T = t^3. The Dirichlet vertices carry its data alone; the interior
+        // vertices carry the time scheme's own error, so the maximum below is
+        // that error and nothing else.
+        const std::vector<std::vector<double>> rows = result_rows(path);
+        REQUIRE(rows.size() > 0);
+        double max_err = 0.0;
+        for (const std::vector<double>& row : rows) {
+            REQUIRE(row.size() == 3 + static_cast<std::size_t>(steps) + 1);
+            for (int n = 0; n <= steps; ++n) {
+                const double exact = std::pow(static_cast<double>(n) / steps, 3.0);
+                max_err = std::max(
+                    max_err, std::abs(row[static_cast<std::size_t>(3 + n)] - exact));
+            }
         }
-    }
-    INFO("manufactured T = t^3: max error over the vertices and levels = " << max_err);
-    REQUIRE(max_err < 5e-3);
-    // A field that merely holds the boundary data would be exact: the
-    // interior has to be solved, and no scheme of the app is exact here.
-    REQUIRE(max_err > 1e-6);
+        INFO((settings.adaptive ? "adaptive steps" : "output-time steps")
+            << ": manufactured T = t^3, max error over the vertices and levels = "
+            << max_err);
+        REQUIRE(max_err < 5e-3);
+        // A field that merely holds the boundary data would be exact: the
+        // interior has to be solved, and no scheme of the app is exact here.
+        REQUIRE(max_err > 1e-6);
 
-    // The first level is the initial value of the model, not a solve.
-    REQUIRE(rows.front()[3] == Approx(0.0).margin(1e-12));
-    REQUIRE(rows.front()[3 + static_cast<std::size_t>(steps)]
-        == Approx(1.0).margin(5e-3));
+        // The first level is the initial value of the model, not a solve.
+        REQUIRE(rows.front()[3] == Approx(0.0).margin(1e-12));
+        REQUIRE(rows.front()[3 + static_cast<std::size_t>(steps)]
+            == Approx(1.0).margin(5e-3));
+    }
 }

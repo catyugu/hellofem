@@ -88,7 +88,7 @@ namespace hellofem::app {
                             ctx.expression(feature.properties.at("Tinit")));
 
                 if (ctx.model().study.transient)
-                    stepper_ = std::make_unique<TimeStepper>(*solver_, ctx.scheme());
+                    stepper_ = std::make_unique<TimeStepper>(*solver_, ctx.time_settings());
                 spdlog::info("heat: bound heat transfer");
             }
 
@@ -112,7 +112,7 @@ namespace hellofem::app {
                     ctx.material_property("electricconductivity"));
             }
 
-            bool advances_in_time() const override { return stepper_ != nullptr; }
+            TimeStepper* stepper() override { return stepper_.get(); }
 
             void initialize(double t0) override
             {
@@ -131,10 +131,6 @@ namespace hellofem::app {
 
             void solve_level(double t) override
             {
-                if (stepper_) {
-                    stepper_->step(t);
-                    return;
-                }
                 solver_->solve_steady(t);
                 spdlog::info("heat: T solved at t = {} s", t);
             }

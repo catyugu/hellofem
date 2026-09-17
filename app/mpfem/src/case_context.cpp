@@ -20,10 +20,10 @@ namespace hellofem::app {
     } // namespace
 
     CaseContext::CaseContext(const ModelScript& model, const LoadedMesh& mesh,
-        std::string_view scheme)
+        TimeSettings time)
         : model_(model)
         , mesh_(mesh)
-        , scheme_(scheme)
+        , time_(std::move(time))
     {
         for (const auto& p : model_.parameters)
             params_[p.name] = p.si;

@@ -7,28 +7,80 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace hellofem::app {
+    namespace {
 
-    TimeStepper::TimeStepper(TimeDependentField& field, std::string_view scheme)
+        /// The leading coefficient of the local truncation error of a BDF step
+        /// of order `order`, against the divided differences the estimate
+        /// reads: that error is `C_q dt^(q+1) u^(q+1)` with C_1 = 1/2 and
+        /// C_2 = 2/9, and `u^(q+1) = (q+1)! DD_{q+1}`, so the estimate is
+        /// `c_q dt^(q+1) DD_(q+1)` with c_1 = 2! / 2 = 1 and
+        /// c_2 = 3! * 2/9 = 4/3. The estimate is the leading term only, and
+        /// it is what the step size is controlled by.
+        double error_coefficient(int order)
+        {
+            return order <= 1 ? 1.0 : 4.0 / 3.0;
+        }
+
+        /// The absolute part of the error weight, as a fraction of the
+        /// magnitude of the level: the weight is
+        /// `tolerance |u| + tolerance * weight_floor * max|u|`.
+        constexpr double weight_floor = 1e-3;
+
+    } // namespace
+
+    TimeStepper::TimeStepper(TimeDependentField& field, const TimeSettings& settings)
         : field_(field)
-        , scheme_(find_time_scheme(scheme))
+        , scheme_(find_time_scheme(settings.scheme))
+        , tolerance_(settings.tolerance)
+        , adaptive_(settings.adaptive)
     {
+        // The estimate is the leading term of the BDF truncation error; the
+        // trapezoidal scheme has no such estimate installed.
+        if (adaptive_ and scheme_.family != TimeFamily::bdf)
+            throw std::runtime_error("adaptive step control needs a BDF scheme: '"
+                + std::string(scheme_.name) + "' has no truncation error estimate");
     }
 
     void TimeStepper::start(double t0)
     {
+        history_.clear();
+        times_.clear();
+        sources_.clear();
         history_.push_back(la::Vector<double>(*field_.solution()->x()));
-        source_.reset();
-        t_ = t0;
+        times_.push_back(t0);
     }
 
-    void TimeStepper::step(double t)
+    std::vector<const la::Vector<double>*> TimeStepper::levels() const
     {
-        const double dt = t - t_;
-        const int previous = static_cast<int>(history_.size());
-        const TimeWeights w = time_weights(scheme_, dt, previous);
+        std::vector<const la::Vector<double>*> out;
+        out.reserve(history_.size());
+        for (const la::Vector<double>& level : history_)
+            out.push_back(&level);
+        return out;
+    }
+
+    TimeWeights TimeStepper::weights(int order, TimeSteps steps) const
+    {
+        if (scheme_.family == TimeFamily::crank_nicolson)
+            return cn_weights(steps.dt);
+        // The order is the driver's only where the step control selects it;
+        // a step with no history behind it (or no step at all) is first order
+        // whatever the request.
+        const int taken = adaptive_ ? std::min(order, scheme_.order)
+                                    : scheme_.order;
+        return bdf_weights(taken, steps);
+    }
+
+    void TimeStepper::step(double t, int order)
+    {
+        const TimeSteps steps {t - times_.front(),
+            times_.size() > 1 ? times_[0] - times_[1] : 0.0};
+        const TimeWeights w = weights(order, steps);
 
         std::vector<const la::Vector<double>*> history;
         for (std::size_t k = 1; k < w.a.size() and k <= history_.size(); ++k)
@@ -40,7 +92,7 @@ namespace hellofem::app {
         level.weights = w;
         level.time = t;
         level.history = history;
-        level.source_old = source_ ? &*source_ : nullptr;
+        level.source_old = sources_.empty() ? nullptr : &sources_.front();
         level.source_new = &source;
         const int iterations = solve_system(
             [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
@@ -50,18 +102,72 @@ namespace hellofem::app {
             *field_.solution()->x(), field_.pattern(), field_.nonlinear(),
             /*warm_start=*/true);
 
-        spdlog::info("stepping '{}' to t = {} s (dt = {} s, {} iterations)",
-            scheme_.name, t, dt, iterations);
+        spdlog::debug("stepping '{}' to t = {} s (dt = {} s, order {}, {} iterations)",
+            scheme_.name, t, steps.dt, static_cast<int>(w.a.size()) - 1,
+            iterations);
 
-        source_ = source;
         history_.insert(history_.begin(),
             la::Vector<double>(*field_.solution()->x()));
-        const std::size_t keep
-            = static_cast<std::size_t>(scheme_.levels - 1);
-        if (history_.size() > keep)
-            history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(keep),
+        times_.insert(times_.begin(), t);
+        sources_.insert(sources_.begin(), std::move(source));
+        if (history_.size() > keep_levels) {
+            history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(keep_levels),
                 history_.end());
-        t_ = t;
+            times_.erase(times_.begin() + static_cast<std::ptrdiff_t>(keep_levels),
+                times_.end());
+            // One load fewer than levels: the first level has none.
+            if (sources_.size() >= keep_levels)
+                sources_.erase(
+                    sources_.begin() + static_cast<std::ptrdiff_t>(keep_levels - 1),
+                    sources_.end());
+        }
+        order_ = static_cast<int>(w.a.size()) - 1;
+        pending_ = true;
+    }
+
+    void TimeStepper::undo()
+    {
+        if (not pending_ or history_.size() < 2)
+            return;
+        *field_.solution()->x() = history_[1];
+        history_.erase(history_.begin());
+        times_.erase(times_.begin());
+        if (not sources_.empty())
+            sources_.erase(sources_.begin());
+        pending_ = false;
+    }
+
+    double TimeStepper::error() const
+    {
+        if (times_.size() < static_cast<std::size_t>(order_) + 2
+            or history_.empty())
+            return 0.0; // too short a history to estimate: the step stands
+
+        const std::vector<const la::Vector<double>*> level = levels();
+        const la::Vector<double> dd
+            = divided_difference(order_ + 1, level, times_);
+        const auto& u = field_.solution()->x()->array();
+        const std::size_t n = u.size();
+
+        double magnitude = 0.0;
+        for (std::size_t i = 0; i < n; ++i)
+            magnitude = std::max(magnitude, std::abs(u[i]));
+        const double floor = tolerance_ * weight_floor * magnitude;
+
+        const double coefficient = error_coefficient(order_);
+        double sum = 0.0;
+        for (std::size_t i = 0; i < n; ++i) {
+            const double weight = tolerance_ * std::abs(u[i]) + floor;
+            const double estimate = coefficient * dd.array()[i];
+            const double ratio = weight > 0.0 ? estimate / weight : 0.0;
+            sum += ratio * ratio;
+        }
+        return n > 0 ? std::sqrt(sum / static_cast<double>(n)) : 0.0;
+    }
+
+    std::vector<double> TimeStepper::scaled_derivatives() const
+    {
+        return derivative_scale(levels(), times_);
     }
 
 } // namespace hellofem::app

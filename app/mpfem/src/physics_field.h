@@ -4,6 +4,8 @@
 
 #include "case_context.h"
 
+#include "transient.h"
+
 #include <functional>
 #include <memory>
 #include <span>
@@ -46,18 +48,18 @@ namespace hellofem::app {
         /// result of a solve does not satisfy. Called once per study.
         virtual void initialize(double t0) = 0;
 
-        /// Whether the study advances this field in time, i.e. whether
-        /// `solve_level` steps the field's time scheme rather than solving
-        /// its steady system.
+        /// The time stepper of a field the study advances in time, and null
+        /// for one it does not.
         ///
-        /// The first level of a study is a solved one for every field this
-        /// returns false for — a state that is algebraic has to be solved
-        /// there like at any other level — and the state `initialize`
-        /// prepared for the others.
-        virtual bool advances_in_time() const { return false; }
+        /// The time levels of a study are a case-level decision — every field
+        /// of a level is at the same time, and step size and order are shared
+        /// — so the scheduler drives the steppers rather than stepping a
+        /// field through `solve_level`.
+        virtual TimeStepper* stepper() { return nullptr; }
 
-        /// Solve the level at time `t`: the steady system, or one step of the
-        /// time scheme for a field the study advances in time.
+        /// Solve the field at time `t` as a stationary problem: what a field
+        /// the study does not advance does at every level, the first one
+        /// included, and what `initialize` prepares there.
         virtual void solve_level(double t) = 0;
 
         /// Apply the multiphysics couplings this physics owns. Called once,

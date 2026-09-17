@@ -21,14 +21,14 @@ namespace hellofem::app {
     /// wins over a model parameter of the same name.
     class CaseContext {
     public:
-        /// @param[in] scheme Time stepping scheme of a transient study (see
-        /// `time_schemes`).
+        /// @param[in] time Time stepping scheme and tolerance of a transient
+        /// study (see `TimeSettings`).
         CaseContext(const ModelScript& model, const LoadedMesh& mesh,
-            std::string_view scheme);
+            TimeSettings time);
 
         const ModelScript& model() const { return model_; }
         const LoadedMesh& mesh() const { return mesh_; }
-        std::string_view scheme() const { return scheme_; }
+        const TimeSettings& time_settings() const { return time_; }
 
         /// Compile a model expression with the parameters bound by value.
         ScalarExpression expression(std::string_view text) const;
@@ -68,7 +68,7 @@ namespace hellofem::app {
     private:
         const ModelScript& model_;
         const LoadedMesh& mesh_;
-        std::string scheme_;
+        TimeSettings time_;
         std::unordered_map<std::string, double> params_;
         std::unordered_map<std::string,
             std::shared_ptr<const fem::Function<double>>>

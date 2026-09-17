@@ -19,18 +19,20 @@ namespace hellofem::app {
     /// physics interface of the model (see `FieldRegistration`, which each
     /// physics holds in its own translation unit), solves the model's study —
     /// every field prepares the first level, then solves one level per
-    /// output time, a field a transient study advances stepping its scheme —
-    /// and exports the result in COMSOL's Data format.
+    /// output time, which is a step of its time scheme for the fields a
+    /// transient study advances, at a step size and order the local error
+    /// estimate selects when the study asks for it — and exports the result
+    /// in COMSOL's Data format.
     ///
     /// The scheduler names no physics: the fields, their order (the order of
-    /// the model's physics interfaces), what they export and how they step
-    /// come from the field kinds that registered themselves.
+    /// the model's physics interfaces), what they export and what steps in
+    /// time come from the field kinds that registered themselves.
     class CaseScheduler {
     public:
-        /// @param[in] scheme Time stepping scheme of a transient study (see
-        /// `time_schemes`).
+        /// @param[in] time Time stepping of a transient study: its scheme,
+        /// its step control and its tolerance (see `TimeSettings`).
         CaseScheduler(const ModelScript& model, const LoadedMesh& mesh,
-            std::string_view scheme);
+            TimeSettings time);
 
         /// Run the study.
         void run();
@@ -54,6 +56,16 @@ namespace hellofem::app {
         /// takes. Both are fixed for the whole run.
         void resolve_vertices();
 
+        /// Advance the steppers over the whole span of `times` with the step
+        /// size and the order the local truncation error estimate selects
+        /// (see `step_factor` and `next_order`), recording the result at each
+        /// output time. The steps are held to the output times, so those are
+        /// solved rather than interpolated: only a step that is too coarse is
+        /// rejected, and the last one of an interval is taken at whatever
+        /// size is left.
+        void advance_adaptive(
+            std::span<TimeStepper* const> steppers, const std::vector<double>& times);
+
         // --- result export ---
         struct Snapshot {
             double time = 0.0;
@@ -65,6 +77,7 @@ namespace hellofem::app {
         // --- data ---
         ModelScript model_;
         LoadedMesh lm_;
+        TimeSettings time_;
         CaseContext ctx_;
 
         std::shared_ptr<const mesh::Mesh<double>> mesh_;

@@ -16,13 +16,17 @@ int main(int argc, char* argv[])
 {
     using namespace hellofem::app;
 
-    std::string scheme = "bdf2";
+    TimeSettings time;
     std::string positional[3];
     int npos = 0;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--scheme" and i + 1 < argc)
-            scheme = argv[++i];
+            time.scheme = argv[++i];
+        else if (arg == "--adaptive")
+            time.adaptive = true;
+        else if (arg == "--tol" and i + 1 < argc)
+            time.tolerance = std::stod(argv[++i]);
         else if (npos < 3)
             positional[npos++] = arg;
         else {
@@ -33,7 +37,7 @@ int main(int argc, char* argv[])
     if (npos < 3) {
         std::fprintf(stderr,
             "usage: mpfem_app <clean_model.java> <mesh.mphtxt> <result.txt> "
-            "[--scheme <%s>]\n",
+            "[--scheme <%s>] [--adaptive] [--tol <time stepping tolerance>]\n",
             time_scheme_names().c_str());
         return 2;
     }
@@ -55,7 +59,7 @@ int main(int argc, char* argv[])
         model.physics.size(), model.couplings.size());
 
     // Solve the model's study.
-    CaseScheduler scheduler(model, lm, scheme);
+    CaseScheduler scheduler(model, lm, time);
     scheduler.run();
     scheduler.export_result(result_path);
 
