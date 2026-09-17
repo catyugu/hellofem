@@ -197,13 +197,20 @@ namespace hellofem::la {
                     r[i] -= q[i];
             }
 
-            _apply_preconditioner(r, z);
-            p = z;
-            T rho = inner_product(r, z);
             const auto tol
                 = std::max(static_cast<decltype(squared_norm(b))>(_atol),
                     static_cast<decltype(squared_norm(b))>(_rtol)
                         * std::sqrt(squared_norm(b)));
+
+            // A residual that already meets the tolerance is a solution: a
+            // zero right-hand side with a zero initial guess is one, and the
+            // recurrence below would divide by its zero inner product.
+            if (std::sqrt(squared_norm(r)) <= tol)
+                return 0;
+
+            _apply_preconditioner(r, z);
+            p = z;
+            T rho = inner_product(r, z);
 
             for (int k = 0; k < _max_iter; ++k) {
                 q.set(0);
