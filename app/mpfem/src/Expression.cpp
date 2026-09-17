@@ -32,6 +32,11 @@ namespace hellofem::app {
     Expression::Expression(Expression&&) noexcept = default;
     Expression& Expression::operator=(Expression&&) noexcept = default;
 
+    bool reserved_variable(std::string_view name)
+    {
+        return name == "x" or name == "y" or name == "z" or name == "t";
+    }
+
     namespace {
         /// Replace a pure numeric-with-unit literal (`20[mV]`) with the
         /// numeric SI value. Leaves other expressions untouched.
@@ -72,7 +77,7 @@ namespace hellofem::app {
         impl_->parser.DefineVar("z", &impl_->z);
         impl_->parser.DefineVar("t", &impl_->t);
         for (const auto& [name, ptr] : vars) {
-            if (name != "x" and name != "y" and name != "z" and name != "t")
+            if (not reserved_variable(name))
                 impl_->parser.DefineVar(name, ptr);
         }
         impl_->parser.SetExpr(expr_);

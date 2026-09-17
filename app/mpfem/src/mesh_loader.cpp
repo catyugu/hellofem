@@ -20,11 +20,9 @@ namespace hellofem::app {
         // Domain ids: already 1-based, pass through.
         out.cell_tags = raw.cell_tags;
         if (out.cell_tags) {
-            int mn = 1000000, mx = 0;
-            for (int v : out.cell_tags->values()) {
-                mn = std::min(mn, v);
+            int mx = 0;
+            for (int v : out.cell_tags->values())
                 mx = std::max(mx, v);
-            }
             out.num_domains = mx;
         }
 
@@ -37,11 +35,10 @@ namespace hellofem::app {
             std::vector<std::int32_t> indices(idx.begin(), idx.end());
             std::vector<int> values;
             values.reserve(val.size());
-            int mn = 1000000, mx = 0;
+            int mx = 0;
             for (int v : val) {
                 const int b = v + 1;
                 values.push_back(b);
-                mn = std::min(mn, b);
                 mx = std::max(mx, b);
             }
             out.facet_tags = std::make_shared<mesh::MeshTags<int>>(

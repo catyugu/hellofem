@@ -11,6 +11,10 @@
 
 namespace hellofem::app {
 
+    /// Whether `name` is a variable the parser provides itself (the point
+    /// coordinates and time), i.e. one a caller must not bind.
+    bool reserved_variable(std::string_view name);
+
     /// A scalar expression evaluated at a point (x,y,z,t). Variables may be
     /// bound by name to a mutable value (parameter, field value, property).
     ///

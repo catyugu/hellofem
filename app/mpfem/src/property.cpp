@@ -21,10 +21,15 @@ namespace hellofem::app {
         using LV = basis::element::lagrange_variant;
         using DV = basis::element::dpc_variant;
 
-        /// Names the expression parser already provides (coordinates, time).
-        bool reserved_name(const std::string& name)
+        /// Bind the variable storage the parsed expressions of a coefficient
+        /// read: one pointer per model parameter, keyed by name. The names the
+        /// parser provides itself stay unbound, so its own coordinates win.
+        void bind_parameters(std::unordered_map<std::string, double>& storage,
+            std::unordered_map<std::string, double*>& bound)
         {
-            return name == "x" or name == "y" or name == "z" or name == "t";
+            for (auto& [name, value] : storage)
+                if (not reserved_variable(name))
+                    bound[name] = &value;
         }
 
     } // namespace
@@ -39,9 +44,7 @@ namespace hellofem::app {
         auto impl = std::make_shared<Impl>();
         impl->vars = params;
         std::unordered_map<std::string, double*> vars;
-        for (auto& [name, value] : impl->vars)
-            if (not reserved_name(name))
-                vars[name] = &value;
+        bind_parameters(impl->vars, vars);
         impl->expr.parse(text, vars);
         impl_ = std::move(impl);
     }
@@ -57,9 +60,7 @@ namespace hellofem::app {
         , cell_tags_(std::move(cell_tags))
         , vars_(std::move(params))
     {
-        for (auto& [name, value] : vars_)
-            if (not reserved_name(name))
-                var_ptrs_[name] = &value;
+        bind_parameters(vars_, var_ptrs_);
 
         // DG0 space: one scalar dof per cell, from the element's own dof
         // layout (the coordinate element's layout is P1).

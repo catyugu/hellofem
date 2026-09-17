@@ -34,18 +34,20 @@ namespace hellofem::app {
         return ScalarExpression(text, params_);
     }
 
-    void CaseContext::bind_solutions(CellProperty& coefficient) const
+    std::shared_ptr<CellProperty> CaseContext::zero_property() const
     {
+        auto coefficient = std::make_shared<CellProperty>(mesh_.mesh,
+            mesh_.cell_tags, params_);
+        // A material law may read any dependent variable of the model.
         for (const auto& [symbol, solution] : solutions_)
-            coefficient.bind_field(symbol, solution);
+            coefficient->bind_field(symbol, solution);
+        return coefficient;
     }
 
     std::shared_ptr<CellProperty> CaseContext::property(
         const std::function<std::string(const Material&)>& value) const
     {
-        auto coefficient = std::make_shared<CellProperty>(mesh_.mesh,
-            mesh_.cell_tags, params_);
-        bind_solutions(*coefficient);
+        auto coefficient = zero_property();
         for (int dom : domain_ids(*mesh_.cell_tags))
             if (const Material* material = model_.material_on_domain(dom)) {
                 const std::string expression = value(*material);
@@ -67,19 +69,9 @@ namespace hellofem::app {
     std::shared_ptr<CellProperty> CaseContext::uniform_property(
         std::string_view text) const
     {
-        auto coefficient = std::make_shared<CellProperty>(mesh_.mesh,
-            mesh_.cell_tags, params_);
-        bind_solutions(*coefficient);
+        auto coefficient = zero_property();
         for (int dom : domain_ids(*mesh_.cell_tags))
             coefficient->set_expression(dom, text);
-        return coefficient;
-    }
-
-    std::shared_ptr<CellProperty> CaseContext::zero_property() const
-    {
-        auto coefficient = std::make_shared<CellProperty>(mesh_.mesh,
-            mesh_.cell_tags, params_);
-        bind_solutions(*coefficient);
         return coefficient;
     }
 

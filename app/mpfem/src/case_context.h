@@ -51,7 +51,9 @@ namespace hellofem::app {
             std::string_view text) const;
 
         /// A cell coefficient without a model value: zero on every domain,
-        /// for a source a physics fills per domain from its own features.
+        /// with every solution published so far bound to it. A physics fills
+        /// it per domain from its own features; `property` and
+        /// `uniform_property` start from it.
         std::shared_ptr<CellProperty> zero_property() const;
 
         /// Publish the solution of a field under `symbol`, the COMSOL
@@ -64,9 +66,6 @@ namespace hellofem::app {
             std::string_view symbol) const;
 
     private:
-        /// Bind the solutions published so far to a coefficient.
-        void bind_solutions(CellProperty& coefficient) const;
-
         const ModelScript& model_;
         const LoadedMesh& mesh_;
         std::string scheme_;

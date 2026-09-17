@@ -320,33 +320,34 @@ namespace hellofem::app {
             return s.empty() ? arg_string(arg) : s;
         }
 
-        /// Parse a `new int[]{...}` / `new String[]{...}` selection arg into a
-        /// set of integers (single int args and `new int[]{}` supported).
-        std::set<int> parse_selection(const std::vector<Token>& arg)
+        /// Parse a `set(...)` selection: a `new int[]{...}` / `new String[]{...}`
+        /// array, or several arguments (`set(2, 3, 4, 5)`), into a set of ids.
+        std::set<int> parse_selection(const std::vector<std::vector<Token>>& args)
         {
             std::set<int> ids;
-            for (const Token& t : arg) {
-                if (t.kind == TokKind::number)
-                    ids.insert(static_cast<int>(std::stod(t.text)));
-                else if (t.kind == TokKind::string) {
-                    try {
+            for (const std::vector<Token>& arg : args)
+                for (const Token& t : arg) {
+                    if (t.kind == TokKind::number)
                         ids.insert(static_cast<int>(std::stod(t.text)));
-                    }
-                    catch (...) { /* non-numeric string: ignore */
+                    else if (t.kind == TokKind::string) {
+                        try {
+                            ids.insert(static_cast<int>(std::stod(t.text)));
+                        }
+                        catch (...) { /* non-numeric string: ignore */
+                        }
                     }
                 }
-            }
             return ids;
         }
 
-        /// Parse a `set(...)` selection that may span multiple arguments, e.g.
-        /// `set(2, 3, 4, 5)` (each argument is one token-vector).
-        std::set<int> parse_selection_args(const std::vector<std::vector<Token>>& args)
+        /// The element of `items` tagged `tag`, or nullptr.
+        template <class Item>
+        Item* find_tagged(std::vector<Item>& items, std::string_view tag)
         {
-            std::vector<Token> flat;
-            for (const auto& a : args)
-                flat.insert(flat.end(), a.begin(), a.end());
-            return parse_selection(flat);
+            for (Item& item : items)
+                if (item.tag == tag)
+                    return &item;
+            return nullptr;
         }
 
         /// Split a comma-separated argument list.
@@ -413,6 +414,194 @@ namespace hellofem::app {
             return times;
         }
 
+        /// `model.param().set(name, value, [desc])`.
+        void interpret_parameter(const std::vector<Call>& c, ModelScript& model)
+        {
+            if (c.size() < 2 or c[1].method != "set" or c[1].args.size() < 2)
+                return;
+            Parameter p;
+            p.name = arg_string(c[1].args[0]);
+            p.value = arg_string(c[1].args[1]);
+            try {
+                p.si = parse_si(p.value);
+            }
+            catch (const std::exception&) {
+                p.si = 0.0; // expression referencing other params
+            }
+            model.parameters.push_back(std::move(p));
+            return;
+        }
+
+        /// `model.component(...)`: the materials, the physics interfaces and
+        /// the multiphysics couplings of one component, by their tags.
+        void interpret_component(const std::vector<Call>& c, ModelScript& model)
+        {
+            if (c.size() < 2 or c[0].args.empty()
+                or arg_string(c[0].args[0]).empty())
+                return;
+            // material().create / material(tag).X
+            if (c.size() >= 2 and c[1].method == "material") {
+                if (c[1].args.empty() and c.size() >= 3 and c[2].method == "create") {
+                    Material m;
+                    m.tag = arg_string(c[2].args[0]);
+                    model.materials.push_back(std::move(m));
+                    return;
+                }
+                const std::string mtag = c[1].args.empty() ? "" : arg_string(c[1].args[0]);
+                auto* mat = find_tagged(model.materials, mtag);
+                if (mat == nullptr)
+                    return;
+                // propertyGroup(pg).set(prop, value) or materialModel().create then propertyGroup
+                std::size_t k = 2;
+                while (k + 1 < c.size()) {
+                    if (c[k].method == "propertyGroup" and k + 1 < c.size() and c[k + 1].method == "set") {
+                        const std::string prop = arg_string(c[k + 1].args[0]);
+                        std::string value = arg_value(c[k + 1].args[1]);
+                        mat->properties.push_back({prop, value});
+                        return;
+                    }
+                    if (c[k].method == "selection" and k + 1 < c.size() and c[k + 1].method == "set") {
+                        mat->domains = parse_selection(c[k + 1].args);
+                        return;
+                    }
+                    if (c[k].method == "materialModel" and k + 1 < c.size() and c[k + 1].method == "create")
+                        k += 2; // skip materialModel().create
+                    else
+                        return;
+                }
+                return;
+            }
+
+            // physics().create / physics(tag).create / physics(tag).feature(feat).set
+            if (c.size() >= 2 and c[1].method == "physics") {
+                if (c[1].args.empty() and c.size() >= 3 and c[2].method == "create") {
+                    Physics ph;
+                    ph.tag = arg_string(c[2].args[0]);
+                    ph.type = arg_string(c[2].args[1]);
+                    model.physics.push_back(std::move(ph));
+                    return;
+                }
+                const std::string ptag = c[1].args.empty() ? "" : arg_string(c[1].args[0]);
+                auto* ph = find_tagged(model.physics, ptag);
+                if (ph == nullptr)
+                    return;
+                // physics(tag).create(feat, type, dim)
+                if (c.size() >= 3 and c[2].method == "create") {
+                    PhysicsFeature f;
+                    f.tag = arg_string(c[2].args[0]);
+                    f.type = arg_string(c[2].args[1]);
+                    ph->features.push_back(std::move(f));
+                    return;
+                }
+                // physics(tag).feature(feat).set / .selection().set
+                if (c.size() >= 3 and c[2].method == "feature") {
+                    const std::string ftag = arg_string(c[2].args[0]);
+                    auto* feat = find_tagged(ph->features, ftag);
+                    if (feat == nullptr) {
+                        // A `.feature(tag).set()` without a matching create
+                        // (e.g. referencing a default feature) — track the tag.
+                        ph->features.push_back({ftag, ftag, {}, {}});
+                        feat = &ph->features.back();
+                    }
+                    std::size_t k = 3;
+                    while (k < c.size()) {
+                        if (c[k].method == "set") {
+                            const std::string key = arg_string(c[k].args[0]);
+                            const std::string value = c[k].args.size() > 1 ? arg_value(c[k].args[1]) : "";
+                            feat->properties[key] = value;
+                            return;
+                        }
+                        if (c[k].method == "selection" and k + 1 < c.size() and c[k + 1].method == "set") {
+                            feat->selection = parse_selection(c[k + 1].args);
+                            return;
+                        }
+                        ++k;
+                    }
+                }
+                return;
+            }
+
+            // multiphysics().create / multiphysics(tag).set / .selection().set
+            if (c.size() >= 2 and c[1].method == "multiphysics") {
+                if (c[1].args.empty() and c.size() >= 3 and c[2].method == "create") {
+                    MultiphysicsCoupling mc;
+                    mc.tag = arg_string(c[2].args[0]);
+                    mc.type = arg_string(c[2].args[1]);
+                    model.couplings.push_back(std::move(mc));
+                    return;
+                }
+                const std::string ctag = c[1].args.empty() ? "" : arg_string(c[1].args[0]);
+                auto* mc = find_tagged(model.couplings, ctag);
+                if (mc == nullptr)
+                    return;
+                std::size_t k = 2;
+                while (k < c.size()) {
+                    if (c[k].method == "set") {
+                        const std::string key = arg_string(c[k].args[0]);
+                        const std::string value = c[k].args.size() > 1 ? arg_value(c[k].args[1]) : "";
+                        mc->properties[key] = value;
+                        return;
+                    }
+                    if (c[k].method == "selection" and k + 1 < c.size() and c[k + 1].method == "set") {
+                        mc->domains = parse_selection(c[k + 1].args);
+                        return;
+                    }
+                    ++k;
+                }
+                return;
+            }
+        }
+
+        /// `model.study(...)`: the study step type (a stationary or a
+        /// transient driver) and the time list of a transient one.
+        void interpret_study(const std::vector<Call>& c, ModelScript& model)
+        {
+            if (c.size() < 2)
+                return;
+            // study(tag).create(step, type): the study step, whose type
+            // selects the stationary or the transient driver.
+            if (c[1].method == "create") {
+                if (c[1].args.size() < 2)
+                    return; // study().create(tag): the study itself
+                const std::string step_type = arg_string(c[1].args[1]);
+                if (step_type == "Stationary")
+                    model.study.transient = false;
+                else if (step_type == "Transient")
+                    model.study.transient = true;
+                return;
+            }
+            if (c.size() >= 3 and c[1].method == "feature" and c[2].method == "set") {
+                const std::string key = arg_string(c[2].args[0]);
+                const std::string value = c[2].args.size() > 1 ? arg_string(c[2].args[1]) : "";
+                if (key == "tlist")
+                    model.study.times_expr = value;
+                return;
+            }
+            return;
+        }
+
+        /// `model.result(...).export(...)`: the expressions a Data export
+        /// writes, one column per expression.
+        void interpret_result(const std::vector<Call>& c, ModelScript& model)
+        {
+            if (c.size() >= 3 and c[1].method == "export" and c[2].method == "create")
+                return; // export feature creation
+            if (c.size() >= 3 and c[1].method == "export" and c[2].method == "set") {
+                const std::string key = arg_string(c[2].args[0]);
+                if (key == "expr") {
+                    model.export_config.expressions.clear();
+                    if (c[2].args.size() > 1) {
+                        for (const Token& t : c[2].args[1]) {
+                            if (t.kind == TokKind::string)
+                                model.export_config.expressions.push_back(t.text);
+                        }
+                    }
+                }
+                return;
+            }
+            return;
+        }
+
         /// Interpret one chain and update `model`.
         void interpret(const Chain& chain, ModelScript& model)
         {
@@ -420,215 +609,14 @@ namespace hellofem::app {
             if (c.empty())
                 return;
 
-            // `model.param().set(name, value, [desc])` -> calls [param, set].
-            if (c.size() >= 2 and c[0].method == "param" and c[1].method == "set"
-                and c[1].args.size() >= 2) {
-                Parameter p;
-                p.name = arg_string(c[1].args[0]);
-                p.value = arg_string(c[1].args[1]);
-                try {
-                    p.si = parse_si(p.value);
-                }
-                catch (const std::exception&) {
-                    p.si = 0.0; // expression referencing other params
-                }
-                model.parameters.push_back(std::move(p));
-                return;
-            }
-
-            // `model.component().create(name, true)` — create component.
-            if (c[0].method == "component" and c[0].args.empty() and c.size() >= 2
-                and c[1].method == "create")
-                return; // component creation: nothing to record
-
-            // Material creation: `model.component(comp).material().create(tag, type)`
-            // Material property: `... .material(tag).propertyGroup(pg).set(prop, value)`
-            // Material selection: `... .material(tag).selection().set(ids)`
-            // Material model: `... .material(tag).materialModel().create(mtag, type)`
-            if (c[0].method == "component" and c[0].args.size() == 1) {
-                const std::string comp = arg_string(c[0].args[0]);
-                if (comp.empty())
-                    return;
-
-                // material().create / material(tag).X
-                if (c.size() >= 2 and c[1].method == "material") {
-                    if (c[1].args.empty() and c.size() >= 3 and c[2].method == "create") {
-                        Material m;
-                        m.tag = arg_string(c[2].args[0]);
-                        model.materials.push_back(std::move(m));
-                        return;
-                    }
-                    const std::string mtag = c[1].args.empty() ? "" : arg_string(c[1].args[0]);
-                    auto* mat = [&]() -> Material* {
-                        for (auto& m : model.materials)
-                            if (m.tag == mtag)
-                                return &m;
-                        return nullptr;
-                    }();
-                    if (mat == nullptr)
-                        return;
-                    // propertyGroup(pg).set(prop, value) or materialModel().create then propertyGroup
-                    std::size_t k = 2;
-                    while (k + 1 < c.size()) {
-                        if (c[k].method == "propertyGroup" and k + 1 < c.size() and c[k + 1].method == "set") {
-                            const std::string prop = arg_string(c[k + 1].args[0]);
-                            std::string value = arg_value(c[k + 1].args[1]);
-                            mat->properties.push_back({prop, value});
-                            return;
-                        }
-                        if (c[k].method == "selection" and k + 1 < c.size() and c[k + 1].method == "set") {
-                            mat->domains = parse_selection_args(c[k + 1].args);
-                            return;
-                        }
-                        if (c[k].method == "materialModel" and k + 1 < c.size() and c[k + 1].method == "create")
-                            k += 2; // skip materialModel().create
-                        else
-                            return;
-                    }
-                    return;
-                }
-
-                // physics().create / physics(tag).create / physics(tag).feature(feat).set
-                if (c.size() >= 2 and c[1].method == "physics") {
-                    if (c[1].args.empty() and c.size() >= 3 and c[2].method == "create") {
-                        Physics ph;
-                        ph.tag = arg_string(c[2].args[0]);
-                        ph.type = arg_string(c[2].args[1]);
-                        model.physics.push_back(std::move(ph));
-                        return;
-                    }
-                    const std::string ptag = c[1].args.empty() ? "" : arg_string(c[1].args[0]);
-                    auto* ph = [&]() -> Physics* {
-                        for (auto& p : model.physics)
-                            if (p.tag == ptag)
-                                return &p;
-                        return nullptr;
-                    }();
-                    if (ph == nullptr)
-                        return;
-                    // physics(tag).create(feat, type, dim)
-                    if (c.size() >= 3 and c[2].method == "create") {
-                        PhysicsFeature f;
-                        f.tag = arg_string(c[2].args[0]);
-                        f.type = arg_string(c[2].args[1]);
-                        ph->features.push_back(std::move(f));
-                        return;
-                    }
-                    // physics(tag).feature(feat).set / .selection().set
-                    if (c.size() >= 3 and c[2].method == "feature") {
-                        const std::string ftag = arg_string(c[2].args[0]);
-                        auto* feat = [&]() -> PhysicsFeature* {
-                            for (auto& f : ph->features)
-                                if (f.tag == ftag)
-                                    return &f;
-                            return nullptr;
-                        }();
-                        if (feat == nullptr) {
-                            // A `.feature(tag).set()` without a matching create
-                            // (e.g. referencing a default feature) — track the tag.
-                            ph->features.push_back({ftag, ftag, {}, {}});
-                            feat = &ph->features.back();
-                        }
-                        std::size_t k = 3;
-                        while (k < c.size()) {
-                            if (c[k].method == "set") {
-                                const std::string key = arg_string(c[k].args[0]);
-                                const std::string value = c[k].args.size() > 1 ? arg_value(c[k].args[1]) : "";
-                                feat->properties[key] = value;
-                                return;
-                            }
-                            if (c[k].method == "selection" and k + 1 < c.size() and c[k + 1].method == "set") {
-                                feat->selection = parse_selection_args(c[k + 1].args);
-                                return;
-                            }
-                            ++k;
-                        }
-                    }
-                    return;
-                }
-
-                // multiphysics().create / multiphysics(tag).set / .selection().set
-                if (c.size() >= 2 and c[1].method == "multiphysics") {
-                    if (c[1].args.empty() and c.size() >= 3 and c[2].method == "create") {
-                        MultiphysicsCoupling mc;
-                        mc.tag = arg_string(c[2].args[0]);
-                        mc.type = arg_string(c[2].args[1]);
-                        model.couplings.push_back(std::move(mc));
-                        return;
-                    }
-                    const std::string ctag = c[1].args.empty() ? "" : arg_string(c[1].args[0]);
-                    auto* mc = [&]() -> MultiphysicsCoupling* {
-                        for (auto& m : model.couplings)
-                            if (m.tag == ctag)
-                                return &m;
-                        return nullptr;
-                    }();
-                    if (mc == nullptr)
-                        return;
-                    std::size_t k = 2;
-                    while (k < c.size()) {
-                        if (c[k].method == "set") {
-                            const std::string key = arg_string(c[k].args[0]);
-                            const std::string value = c[k].args.size() > 1 ? arg_value(c[k].args[1]) : "";
-                            mc->properties[key] = value;
-                            return;
-                        }
-                        if (c[k].method == "selection" and k + 1 < c.size() and c[k + 1].method == "set") {
-                            mc->domains = parse_selection_args(c[k + 1].args);
-                            return;
-                        }
-                        ++k;
-                    }
-                    return;
-                }
-            }
-
-            // study().create / study(tag).create / study(tag).feature(feat).set
-            if (c[0].method == "study") {
-                if (c.size() < 2)
-                    return;
-                // study(tag).create(step, type): the study step, whose type
-                // selects the stationary or the transient driver.
-                if (c[1].method == "create") {
-                    if (c[1].args.size() < 2)
-                        return; // study().create(tag): the study itself
-                    const std::string step_type = arg_string(c[1].args[1]);
-                    if (step_type == "Stationary")
-                        model.study.transient = false;
-                    else if (step_type == "Transient")
-                        model.study.transient = true;
-                    return;
-                }
-                if (c.size() >= 3 and c[1].method == "feature" and c[2].method == "set") {
-                    const std::string key = arg_string(c[2].args[0]);
-                    const std::string value = c[2].args.size() > 1 ? arg_string(c[2].args[1]) : "";
-                    if (key == "tlist")
-                        model.study.times_expr = value;
-                    return;
-                }
-                return;
-            }
-
-            // result().export().create / result().export(tag).set / .run
-            if (c[0].method == "result") {
-                if (c.size() >= 3 and c[1].method == "export" and c[2].method == "create")
-                    return; // export feature creation
-                if (c.size() >= 3 and c[1].method == "export" and c[2].method == "set") {
-                    const std::string key = arg_string(c[2].args[0]);
-                    if (key == "expr") {
-                        model.export_config.expressions.clear();
-                        if (c[2].args.size() > 1) {
-                            for (const Token& t : c[2].args[1]) {
-                                if (t.kind == TokKind::string)
-                                    model.export_config.expressions.push_back(t.text);
-                            }
-                        }
-                    }
-                    return;
-                }
-                return;
-            }
-
+            if (c[0].method == "param")
+                interpret_parameter(c, model);
+            else if (c[0].method == "component")
+                interpret_component(c, model);
+            else if (c[0].method == "study")
+                interpret_study(c, model);
+            else if (c[0].method == "result")
+                interpret_result(c, model);
             // `model.save(...)`, `model.modelPath(...)` — no effect.
         }
 
