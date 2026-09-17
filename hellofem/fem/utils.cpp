@@ -3,10 +3,14 @@
 
 #include "utils.h"
 
+#include "DofMap.h"
+#include "common/IndexMap.h"
+#include "dofmapbuilder.h"
 #include "graph/AdjacencyList.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <numeric>
 #include <span>
 #include <vector>
 
@@ -74,6 +78,65 @@ namespace hellofem::fem {
             entities.push_back(local_entity_index(*c_to_e, cells[1], f));
         }
         return entities;
+    }
+
+    DofMap create_dofmap(const mesh::Mesh<double>& mesh,
+        const ElementDofLayout& layout, const DofPermutation& permute_inv,
+        const DofmapReordering& reorder_fn)
+    {
+        auto topology = mesh.topology_mutable();
+        const int tdim = topology->dim();
+
+        // The entities a dof lives on have to exist before the dofmap can
+        // number them.
+        const auto& entity_dofs = layout.entity_dofs_all();
+        for (int d = 1; d < tdim; ++d) {
+            const int dofs_on_d = std::accumulate(entity_dofs[d].begin(),
+                entity_dofs[d].end(), 0,
+                [](int count, const auto& e) {
+                    return count + static_cast<int>(e.size());
+                });
+            if (dofs_on_d > 0)
+                topology->create_entities(d);
+        }
+
+        auto [index_map, bs, dofmaps]
+            = build_dofmap_data(*topology, {layout}, reorder_fn);
+
+        // An entity shared by two cells is traversed in opposite directions,
+        // so the dofs along it are numbered differently in each cell; the
+        // permutation puts them back into the element's reference order.
+        if (permute_inv) {
+            const std::int32_t num_cells
+                = topology->connectivity(tdim, 0)->num_nodes();
+            topology->create_entity_permutations();
+            const std::vector<std::uint32_t>& cell_info
+                = topology->get_cell_permutation_info();
+            const int dim = layout.num_dofs();
+            for (std::int32_t cell = 0; cell < num_cells; ++cell) {
+                std::span dofs(
+                    dofmaps.front().data() + cell * dim, dim);
+                permute_inv(dofs, cell_info[cell]);
+            }
+        }
+
+        return DofMap(layout,
+            std::make_shared<common::IndexMap>(std::move(index_map)), bs,
+            std::move(dofmaps.front()), bs);
+    }
+
+    std::shared_ptr<FunctionSpace<double>> create_functionspace(
+        std::shared_ptr<const mesh::Mesh<double>> mesh,
+        std::shared_ptr<const FiniteElement<double>> element,
+        const DofmapReordering& reorder_fn)
+    {
+        DofPermutation permute_inv;
+        if (element->needs_dof_permutations())
+            permute_inv = element->dof_permutation_fn(/*inverse=*/false);
+        return std::make_shared<FunctionSpace<double>>(std::move(mesh),
+            std::move(element),
+            std::make_shared<const DofMap>(create_dofmap(*mesh,
+                element->create_dof_layout(), permute_inv, reorder_fn)));
     }
 
 } // namespace hellofem::fem
