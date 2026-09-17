@@ -29,6 +29,11 @@ namespace hellofem::app {
             {"bdf2", TimeFamily::bdf, 2},
         }};
 
+        /// The highest divided difference the app reads: a scheme of order 2
+        /// and the truncation error estimate one order above it. Its Newton
+        /// table therefore never needs more than the four newest levels.
+        constexpr std::size_t difference_order_limit = 3;
+
     } // namespace
 
     std::span<const TimeScheme> time_schemes()
@@ -130,19 +135,21 @@ namespace hellofem::app {
         out.set(0);
         const std::size_t n = levels[0]->array().size();
         if (n == 0 or levels.size() != times.size() or k < 1
+            or k > static_cast<int>(difference_order_limit)
             or levels.size() < static_cast<std::size_t>(k) + 1)
             return out;
 
         // Newton divided differences, ascending in the level order: after the
         // pass of order m, `d[i]` holds DD_m over times[i] ... times[i + m].
-        std::array<std::vector<double>, 4> d;
-        for (std::size_t i = 0; i < levels.size(); ++i)
+        // DD_k reads the newest k + 1 levels and no further ones.
+        const std::size_t rows = static_cast<std::size_t>(k) + 1;
+        std::array<std::vector<double>, difference_order_limit + 1> d;
+        for (std::size_t i = 0; i < rows; ++i)
             d[i].assign(levels[i]->array().begin(), levels[i]->array().end());
 
-        for (int m = 1; m <= k; ++m)
-            for (std::size_t i = 0; i + static_cast<std::size_t>(m) < levels.size();
-                ++i) {
-                const double span = times[i] - times[i + static_cast<std::size_t>(m)];
+        for (std::size_t m = 1; m < rows; ++m)
+            for (std::size_t i = 0; i + m < rows; ++i) {
+                const double span = times[i] - times[i + m];
                 const double factor = span == 0.0 ? 0.0 : 1.0 / span;
                 for (std::size_t j = 0; j < n; ++j)
                     d[i][j] = (d[i][j] - d[i + 1][j]) * factor;
@@ -162,13 +169,32 @@ namespace hellofem::app {
         std::span<const la::Vector<double>* const> levels,
         std::span<const double> times)
     {
-        std::vector<double> scale(3, 0.0);
-        for (int k = 1; k <= 3; ++k) {
-            const la::Vector<double> dd = divided_difference(k, levels, times);
-            for (double value : dd.array())
-                scale[static_cast<std::size_t>(k - 1)]
-                    = std::max(scale[static_cast<std::size_t>(k - 1)],
-                        std::abs(value));
+        std::vector<double> scale(difference_order_limit, 0.0);
+        if (levels.size() != times.size() or levels.size() < 2)
+            return scale;
+
+        // Every order comes out of one Newton table: the pass of order m
+        // leaves `d[0]` at the term the order selection compares (see
+        // `divided_difference`), and a level set too short for an order leaves
+        // that order at zero.
+        const std::size_t n = levels[0]->array().size();
+        const std::size_t rows = std::min(levels.size(), difference_order_limit + 1);
+        std::array<std::vector<double>, difference_order_limit + 1> d;
+        for (std::size_t i = 0; i < rows; ++i)
+            d[i].assign(levels[i]->array().begin(), levels[i]->array().end());
+
+        const double dt = times[0] - times[1];
+        for (std::size_t m = 1; m < rows; ++m) {
+            for (std::size_t i = 0; i + m < rows; ++i) {
+                const double span = times[i] - times[i + m];
+                const double factor = span == 0.0 ? 0.0 : 1.0 / span;
+                for (std::size_t j = 0; j < n; ++j)
+                    d[i][j] = (d[i][j] - d[i + 1][j]) * factor;
+            }
+            const double weight = std::pow(dt, static_cast<double>(m));
+            for (std::size_t j = 0; j < n; ++j)
+                scale[m - 1]
+                    = std::max(scale[m - 1], std::abs(weight * d[0][j]));
         }
         return scale;
     }
