@@ -50,15 +50,16 @@ namespace hellofem::app {
         }
 
         /// Initial temperature of a transient run (the model's initial-value
-        /// expression). Without one, COMSOL's heat-transfer default of
-        /// 293.15 K applies.
+        /// expression). Without one, COMSOL's default (see
+        /// `reference_temperature`) applies.
         void set_initial_temperature(ScalarExpression value)
         {
             initial_ = std::move(value);
         }
 
-        /// Set the solution to the initial temperature at t = 0.
-        void apply_initial_condition();
+        /// Set the solution to the initial temperature at the study's start
+        /// time `t0`.
+        void apply_initial_condition(double t0);
 
         void refresh(double t) override;
         bool nonlinear() const override;

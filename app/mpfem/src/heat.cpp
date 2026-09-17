@@ -124,7 +124,7 @@ namespace hellofem::app {
                     return;
                 }
                 // The scheme advances the model's initial values from t0.
-                solver_->apply_initial_condition();
+                solver_->apply_initial_condition(t0);
                 solver_->constrain_solution(t0);
                 stepper_->start(t0);
             }
@@ -204,13 +204,13 @@ namespace hellofem::app {
         impose_values(std::span(u_->x()->array()), make_bcs(temps_, t));
     }
 
-    void HeatTransferSolver::apply_initial_condition()
+    void HeatTransferSolver::apply_initial_condition(double t0)
     {
         const auto coords = V_->tabulate_dof_coordinates(false);
         auto& arr = u_->x()->array();
         for (std::int32_t d = 0; d < V_->dofmap()->index_map->size_local(); ++d)
             arr[static_cast<std::size_t>(d)] = initial_.eval(
-                coords[3 * d], coords[3 * d + 1], coords[3 * d + 2], 0.0);
+                coords[3 * d], coords[3 * d + 1], coords[3 * d + 2], t0);
     }
 
     void HeatTransferSolver::assemble_sources(la::Vector<double>& f) const

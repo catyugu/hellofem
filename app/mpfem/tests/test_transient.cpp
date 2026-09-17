@@ -65,7 +65,7 @@ namespace {
         solver->add_temperature_bc(1, ScalarExpression(problem.exact));
         solver->add_temperature_bc(2, ScalarExpression(problem.exact));
         solver->set_initial_temperature(ScalarExpression(problem.initial));
-        solver->apply_initial_condition();
+        solver->apply_initial_condition(0.0);
         return solver;
     }
 
@@ -407,6 +407,29 @@ TEST_CASE("Transient heat: a solution passing through zero keeps its own scale",
     REQUIRE(run.steps < 100);
 }
 
+TEST_CASE("Transient heat: the initial value is taken at the study's start time",
+    "[app][transient]")
+{
+    // A study whose output times start at t0 > 0 evaluates the model's
+    // initial-value expression there, not at zero: a T that follows `t`
+    // starts where the study does, and that state is what the scheme reads
+    // as the history of its first step.
+    auto box = test::make_box_fixture({0, 0, 0}, {1, 0.2, 0.2}, {4, 1, 1});
+    auto solver = std::make_shared<HeatTransferSolver>(
+        box.mesh, box.boundary, box.cells, 1);
+    solver->set_conductivity(test::constant_property(box.mesh, box.cells, 1.0));
+    solver->set_thermal_mass(test::constant_property(box.mesh, box.cells, 1.0));
+    solver->set_initial_temperature(ScalarExpression("t/2"));
+
+    solver->apply_initial_condition(2.0);
+
+    double worst = 0.0;
+    for (double value : solver->solution()->x()->array())
+        worst = std::max(worst, std::abs(value - 1.0));
+    INFO("initial state deviation from t0 / 2 = " << worst);
+    REQUIRE(worst == Approx(0.0).margin(1e-12));
+}
+
 TEST_CASE("Transient heat: a solution-independent nonlinear law matches the linear one",
     "[app][transient]")
 {
@@ -435,7 +458,7 @@ TEST_CASE("Transient heat: a solution-independent nonlinear law matches the line
         solver->add_temperature_bc(1, ScalarExpression("t*t*t"));
         solver->add_temperature_bc(2, ScalarExpression("t*t*t"));
         solver->set_initial_temperature(ScalarExpression(0.0));
-        solver->apply_initial_condition();
+        solver->apply_initial_condition(0.0);
         REQUIRE(solver->nonlinear() == field_dependent);
 
         TimeStepper stepper(*solver, TimeSettings {"bdf2", 1e-3});
