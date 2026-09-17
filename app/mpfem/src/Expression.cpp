@@ -7,7 +7,6 @@
 #include <muParser.h>
 
 #include <algorithm>
-#include <cctype>
 #include <cstdio>
 #include <stdexcept>
 
@@ -38,29 +37,21 @@ namespace hellofem::app {
     }
 
     namespace {
-        /// Replace a pure numeric-with-unit literal (`20[mV]`) with the
-        /// numeric SI value. Leaves other expressions untouched.
+        /// Replace a numeric-with-unit literal (`20[mV]`) with its numeric SI
+        /// value. Anything else — an expression, or a unit the parser does not
+        /// know — stays as it is, for muparser to accept or reject.
         std::string normalize_units(std::string_view text)
         {
-            const std::size_t lb = text.find('[');
-            if (lb == std::string::npos or text.back() != ']')
+            if (text.find('[') == std::string_view::npos or text.back() != ']')
                 return std::string(text);
-            // Numeric part only (digits/dot/e/sign), no operators.
-            std::string_view num = text.substr(0, lb);
-            if (num.empty())
-                return std::string(text);
-            for (char c : num)
-                if (!std::isdigit(static_cast<unsigned char>(c)) and c != '.'
-                    and c != '+' and c != '-' and c != 'e' and c != 'E')
-                    return std::string(text);
             try {
-                const double v = parse_si(text);
+                const double value = parse_si(text);
                 char buf[32];
-                std::snprintf(buf, sizeof(buf), "%.17g", v);
+                std::snprintf(buf, sizeof(buf), "%.17g", value);
                 return std::string(buf);
             }
             catch (const std::exception&) {
-                return std::string(text); // Leave to muparser to reject.
+                return std::string(text);
             }
         }
     } // namespace

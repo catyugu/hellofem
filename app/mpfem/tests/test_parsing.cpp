@@ -75,6 +75,12 @@ TEST_CASE("Expression normalizes unit literals", "[app][expr]")
     Expression e2;
     e2.parse("htc * (T - 293.15)", vars);
     REQUIRE(e2.eval(0, 0, 0, 0) == Approx(50.0));
+
+    // A unit literal on anything but a number is not normalized: the text
+    // stays as it is and muparser is the one to reject it. COMSOL scripts
+    // reference a named parameter for a value that carries a unit.
+    Expression e3;
+    REQUIRE_THROWS(e3.parse("T[K]", vars));
 }
 
 TEST_CASE("Expression reports used variables", "[app][expr]")

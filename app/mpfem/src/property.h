@@ -117,10 +117,16 @@ namespace hellofem::app {
         std::vector<std::int32_t> centroid_cells_;
         bool centroids_ready_ = false;
 
+        // The expression that applies to every cell, resolved from the domain
+        // tags on first use — the update loop then indexes an array instead of
+        // looking the domain of a cell up. A cell whose domain defines no
+        // expression keeps a null entry.
+        std::vector<Expression*> cell_expressions_;
+
         std::int32_t num_cells() const;
-        int domain_of_cell(std::int32_t cell) const;
         double& cell_entry(std::int32_t cell);
         void cell_centroids();
+        void resolve_cell_expressions();
     };
 
 } // namespace hellofem::app

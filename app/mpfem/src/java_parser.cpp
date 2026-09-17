@@ -3,7 +3,7 @@
 
 #include "java_parser.h"
 
-#include "Expression.h"
+#include "property.h"
 #include "units.h"
 
 #include <algorithm>
@@ -375,13 +375,7 @@ namespace hellofem::app {
         {
             if (text.empty())
                 throw std::runtime_error("java: empty value");
-            std::unordered_map<std::string, double> vars = params;
-            std::unordered_map<std::string, double*> bound;
-            for (auto& [name, value] : vars)
-                bound[name] = &value;
-            Expression expression;
-            expression.parse(text, bound);
-            return expression.eval(0, 0, 0, 0);
+            return ScalarExpression(text, params).eval(0, 0, 0, 0);
         }
 
         /// Resolve a time list into its levels: `range(t0, dt, t1)` (a

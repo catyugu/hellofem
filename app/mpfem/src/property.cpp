@@ -11,7 +11,6 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
-#include <numeric>
 #include <stdexcept>
 
 namespace hellofem::app {
@@ -85,18 +84,26 @@ namespace hellofem::app {
         return f_->function_space()->dofmap()->map().extent(0);
     }
 
-    /// 1-based domain of a cell (1 when the mesh tags are absent, i.e. the
-    /// whole mesh is one domain).
-    int CellProperty::domain_of_cell(std::int32_t cell) const
+    /// The expression of the domain of every cell: the update loop reads it
+    /// per cell, and a cell whose domain defines no expression keeps a null.
+    void CellProperty::resolve_cell_expressions()
     {
-        if (not cell_tags_)
-            return 1;
+        cell_expressions_.assign(static_cast<std::size_t>(num_cells()), nullptr);
+        if (not cell_tags_) {
+            // The whole mesh is one domain (COMSOL domain 1).
+            const auto it = values_.find(1);
+            if (it != values_.end())
+                std::ranges::fill(cell_expressions_, it->second.get());
+            return;
+        }
         const auto& indices = cell_tags_->indices();
-        auto it = std::lower_bound(indices.begin(), indices.end(), cell);
-        if (it == indices.end() or *it != cell)
-            return 0;
-        return cell_tags_->values()[static_cast<std::size_t>(
-            std::distance(indices.begin(), it))];
+        const auto& domains = cell_tags_->values();
+        for (std::size_t i = 0; i < indices.size(); ++i) {
+            const auto it = values_.find(domains[i]);
+            if (it != values_.end())
+                cell_expressions_[static_cast<std::size_t>(indices[i])]
+                    = it->second.get();
+        }
     }
 
     double& CellProperty::cell_entry(std::int32_t cell)
@@ -118,6 +125,7 @@ namespace hellofem::app {
                         dom, text, used);
                 }
         values_[dom] = std::move(expr);
+        cell_expressions_.clear();
     }
 
     void CellProperty::bind_field(std::string symbol,
@@ -160,6 +168,8 @@ namespace hellofem::app {
         if (values_.empty())
             return;
         cell_centroids();
+        if (cell_expressions_.empty())
+            resolve_cell_expressions();
         const std::int32_t nc = num_cells();
 
         for (auto& field : fields_) {
@@ -177,14 +187,14 @@ namespace hellofem::app {
         }
 
         for (std::int32_t c = 0; c < nc; ++c) {
-            auto it = values_.find(domain_of_cell(c));
-            if (it == values_.end())
+            Expression* expression = cell_expressions_[static_cast<std::size_t>(c)];
+            if (not expression)
                 continue;
             for (auto& field : fields_)
                 if (field.used)
                     *var_ptrs_[field.symbol]
                         = field.values[static_cast<std::size_t>(c)];
-            cell_entry(c) = it->second->eval(centroids_[3 * c],
+            cell_entry(c) = expression->eval(centroids_[3 * c],
                 centroids_[3 * c + 1], centroids_[3 * c + 2], t);
         }
     }

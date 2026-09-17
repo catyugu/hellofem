@@ -5,9 +5,25 @@
 
 #include "io/mphtxt.h"
 
-#include <algorithm>
+#include <set>
+#include <vector>
 
 namespace hellofem::app {
+    namespace {
+
+        /// The number of distinct ids the tags carry (COMSOL numbers a
+        /// component's domains and boundaries from one, but a geometry
+        /// operation may leave gaps, so the count is not the largest id).
+        int tag_count(const std::shared_ptr<mesh::MeshTags<int>>& tags)
+        {
+            if (not tags)
+                return 0;
+            const auto values = tags->values();
+            return static_cast<int>(
+                std::set<int>(values.begin(), values.end()).size());
+        }
+
+    } // namespace
 
     LoadedMesh load_mphtxt_mesh(const std::filesystem::path& filename)
     {
@@ -19,32 +35,22 @@ namespace hellofem::app {
 
         // Domain ids: already 1-based, pass through.
         out.cell_tags = raw.cell_tags;
-        if (out.cell_tags) {
-            int mx = 0;
-            for (int v : out.cell_tags->values())
-                mx = std::max(mx, v);
-            out.num_domains = mx;
-        }
+        out.num_domains = tag_count(out.cell_tags);
 
         // Boundary ids: file is 0-based -> +1 to match COMSOL selections.
-        out.facet_tags = raw.facet_tags;
-        if (out.facet_tags) {
-            // Rebuild MeshTags with +1'd values (MeshTags is immutable).
-            const auto idx = out.facet_tags->indices();
-            const auto val = out.facet_tags->values();
+        // MeshTags is immutable, so the normalized set is rebuilt.
+        if (raw.facet_tags) {
+            const auto idx = raw.facet_tags->indices();
+            const auto val = raw.facet_tags->values();
             std::vector<std::int32_t> indices(idx.begin(), idx.end());
             std::vector<int> values;
             values.reserve(val.size());
-            int mx = 0;
-            for (int v : val) {
-                const int b = v + 1;
-                values.push_back(b);
-                mx = std::max(mx, b);
-            }
+            for (int v : val)
+                values.push_back(v + 1);
             out.facet_tags = std::make_shared<mesh::MeshTags<int>>(
-                out.mesh->topology(), out.facet_tags->dim(), std::move(indices),
+                out.mesh->topology(), raw.facet_tags->dim(), std::move(indices),
                 std::move(values), "facet_tags");
-            out.num_boundaries = mx;
+            out.num_boundaries = tag_count(out.facet_tags);
         }
         return out;
     }
