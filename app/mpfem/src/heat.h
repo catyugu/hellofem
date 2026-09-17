@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include "defaults.h"
 #include "field.h"
 
 #include <map>
@@ -90,7 +91,7 @@ namespace hellofem::app {
         std::shared_ptr<CellProperty> joule_sigma_;
         std::map<int, ScalarExpression> temps_;
         std::vector<Convection> convections_;
-        ScalarExpression initial_ {293.15};
+        ScalarExpression initial_ {reference_temperature};
     };
 
 } // namespace hellofem::app

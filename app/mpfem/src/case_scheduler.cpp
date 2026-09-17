@@ -105,17 +105,12 @@ namespace hellofem::app {
     {
         const TimeScheme& scheme = find_time_scheme(time_.scheme);
         const double t_end = times.back();
+        const double span = t_end - times.front();
 
-        // The first step is a thousandth of the span: a first step has no
-        // history for the error estimate to read, so it has to be small
-        // enough that its own error cannot escape the tolerance, and the
-        // doubling of the controller raises it within a few steps wherever
-        // the solution allows. The step is carried over the output times —
-        // those hold a step back, they do not reset it.
-        double dt = (t_end - times.front()) / 1000.0;
-        // Below this the error cannot be met by shrinking the step any more,
-        // and the interval is one the estimate cannot resolve.
-        const double smallest = (t_end - times.front()) * 1e-10;
+        // The step is carried over the output times — those hold a step back,
+        // they do not reset it.
+        double dt = span * first_step_fraction;
+        const double smallest = span * smallest_step_fraction;
         double t = times.front();
         std::size_t output = 1;
         int order = 1;
@@ -192,8 +187,8 @@ namespace hellofem::app {
         }
 
         spdlog::info(
-            "transient: {} steps over {} s ({} rejected, order {})", steps,
-            t_end - times.front(), rejected, order);
+            "transient: {} steps over {} s ({} rejected, order {})", steps, span,
+            rejected, order);
     }
 
     // -------------------------------------------------------------------------

@@ -85,8 +85,9 @@ namespace hellofem::app::kernels {
     void joule_heat_load(double* Ae, const CellKernelData<double>& d)
     {
         const int nq = d.num_points, nd = d.num_dofs0;
-        // Physical dimension from the coefficient-gradient buffer size.
-        const int gdim = nq > 0 ? static_cast<int>(d.dcoeffs.size() / (2 * nq)) : 3;
+        // The coefficient gradients hold the physical dimension of the
+        // geometry (see `CellKernelData::dcoeffs`).
+        constexpr int gdim = 3;
         std::memset(Ae, 0, nd * sizeof(double));
         for (int q = 0; q < nq; ++q) {
             const double w = d.w[q] * d.detJ[q];
@@ -180,7 +181,7 @@ namespace hellofem::app::kernels {
         const int nq = d.num_points, nd = d.num_dofs0, tdim = d.tdim;
         // Blocked vector element: local dof = scalar_dof * vdim + component.
         const int nds = nd / vdim;
-        const double Tref = d.constants ? d.constants[0] : 0.0;
+        const double Tref = d.constants[0];
         std::memset(Ae, 0, nd * sizeof(double));
         for (int q = 0; q < nq; ++q) {
             const double w = d.w[q] * d.detJ[q];

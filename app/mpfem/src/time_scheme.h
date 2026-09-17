@@ -126,6 +126,18 @@ namespace hellofem::app {
     /// makes it second order.
     TimeWeights cn_weights(double dt);
 
+    /// The first step of a run, as a fraction of the span it integrates: a
+    /// first step has no history for the error estimate to read, so it has to
+    /// be small enough that its own error cannot escape the tolerance, and
+    /// the controller raises it within a few steps wherever the solution
+    /// allows.
+    inline constexpr double first_step_fraction = 1e-3;
+
+    /// The smallest step of a run, as a fraction of the span it integrates:
+    /// below this the error cannot be met by shrinking the step any more, and
+    /// the interval is one the estimate cannot resolve.
+    inline constexpr double smallest_step_fraction = 1e-10;
+
     /// The factor the next step is multiplied by after a step whose local
     /// error measured `error` against the tolerance (1 = exactly at it),
     /// following the controller of the COMSOL BDF solver:

@@ -142,9 +142,9 @@ namespace {
         stepper.start(0.0);
 
         const int max_order = find_time_scheme("bdf2").order;
-        // The scheduler starts at a thousandth of the span (a first step has
-        // no history for the estimate), and doubles from there.
-        double dt = t_end / 1000.0;
+        // The same first step and controller the scheduler takes: the rules
+        // under test are the ones it drives the fields with.
+        double dt = t_end * first_step_fraction;
         double t = 0.0;
         int order = 1;
         RunResult run;

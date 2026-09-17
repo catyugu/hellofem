@@ -3,6 +3,7 @@
 
 #include "solid.h"
 
+#include "defaults.h"
 #include "kernels.h"
 #include "physics_field.h"
 
@@ -60,8 +61,7 @@ namespace hellofem::app {
                     if (not temperature)
                         throw std::runtime_error(
                             "ThermalExpansion without a temperature 'T'");
-                    // COMSOL's heat-transfer reference temperature default.
-                    double t_ref = 293.15;
+                    double t_ref = reference_temperature;
                     if (coupling.properties.contains(
                             "minput_strainreferencetemperature"))
                         t_ref = ctx

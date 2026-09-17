@@ -40,7 +40,8 @@ namespace hellofem::app {
             return 0;
         }
 
-        NonlinearSettings cfg;
+        const LinearSettings linear;
+        const NonlinearSettings cfg;
         nls::AndersonConfig picard;
         picard.depth = cfg.depth;
         picard.warmup_iters = cfg.warmup_iterations;
@@ -49,11 +50,11 @@ namespace hellofem::app {
         picard.relative_tolerance = cfg.relative_tolerance;
         picard.absolute_tolerance = cfg.absolute_tolerance;
         picard.max_iterations = cfg.max_iterations;
-        picard.linear_solver_type = LinearSettings {}.solver_type;
-        picard.preconditioner_type = LinearSettings {}.preconditioner_type;
-        picard.krylov_rtol = LinearSettings {}.rtol;
-        picard.krylov_atol = LinearSettings {}.atol;
-        picard.krylov_max_iter = LinearSettings {}.max_iterations;
+        picard.linear_solver_type = linear.solver_type;
+        picard.preconditioner_type = linear.preconditioner_type;
+        picard.krylov_rtol = linear.rtol;
+        picard.krylov_atol = linear.atol;
+        picard.krylov_max_iter = linear.max_iterations;
         picard.warm_start_linear_solve = cfg.warm_start;
 
         auto result = nls::anderson_picard<double>(

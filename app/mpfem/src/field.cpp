@@ -79,6 +79,11 @@ namespace hellofem::app {
         using Integrals = std::map<std::pair<fem::IntegralType, int>,
             std::vector<fem::Form<double>::integral_data>>;
 
+        /// Degree the quadrature rule of a cell or facet integral must
+        /// integrate exactly: the app's weak forms are of degree 2 at most, so
+        /// both paths take the same rule.
+        constexpr int quadrature_degree = 2;
+
         /// Facet indices carrying the given 1-based boundary ids.
         std::vector<std::int32_t> tagged_facets(
             const mesh::MeshTags<int>& tags, const std::set<int>& ids)
@@ -278,7 +283,8 @@ namespace hellofem::app {
     {
         return std::make_shared<fem::PrecomputeData<double>>(
             mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
-            coefficient_elements(coeffs), mesh_->geometry().cmaps().front(), 2);
+            coefficient_elements(coeffs), mesh_->geometry().cmaps().front(),
+            quadrature_degree);
     }
 
     std::shared_ptr<const fem::FacetPrecomputeData<double>>
@@ -286,7 +292,8 @@ namespace hellofem::app {
     {
         return std::make_shared<fem::FacetPrecomputeData<double>>(
             mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
-            coefficient_elements(coeffs), mesh_->geometry().cmaps().front(), 2);
+            coefficient_elements(coeffs), mesh_->geometry().cmaps().front(),
+            quadrature_degree);
     }
 
     void FieldSolver::assemble_into(la::MatrixCSR<double>& A,
