@@ -12,9 +12,9 @@
 namespace hellofem::app {
 
     HeatTimeStepper::HeatTimeStepper(std::shared_ptr<HeatTransferSolver> solver,
-        std::unique_ptr<const TimeScheme> scheme)
+        std::string_view scheme)
         : solver_(std::move(solver))
-        , scheme_(std::move(scheme))
+        , scheme_(find_time_scheme(scheme))
     {
     }
 
@@ -28,8 +28,8 @@ namespace hellofem::app {
     void HeatTimeStepper::step(double t)
     {
         const double dt = t - t_;
-        TimeWeights w;
-        scheme_->weights(dt, static_cast<int>(history_.size()), w);
+        const int previous = static_cast<int>(history_.size());
+        const TimeWeights w = time_weights(scheme_, dt, previous);
 
         std::vector<const la::Vector<double>*> history;
         for (std::size_t k = 1; k < w.a.size() and k <= history_.size(); ++k)
@@ -52,13 +52,13 @@ namespace hellofem::app {
             /*warm_start=*/true);
 
         spdlog::info("stepping '{}' to t = {} s (dt = {} s, {} iterations)",
-            scheme_->name(), t, dt, iterations);
+            scheme_.name, t, dt, iterations);
 
         source_ = source;
         history_.insert(history_.begin(),
             la::Vector<double>(*solver_->solution()->x()));
         const std::size_t keep
-            = static_cast<std::size_t>(scheme_->levels() - 1);
+            = static_cast<std::size_t>(scheme_.levels - 1);
         if (history_.size() > keep)
             history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(keep),
                 history_.end());

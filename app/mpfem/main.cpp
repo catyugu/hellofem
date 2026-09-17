@@ -12,19 +12,6 @@
 #include <filesystem>
 #include <string>
 
-namespace {
-
-    /// Comma-separated list of the available time stepping schemes.
-    std::string scheme_list()
-    {
-        std::string out;
-        for (const std::string& name : hellofem::app::time_scheme_names())
-            out += (out.empty() ? "" : ", ") + name;
-        return out;
-    }
-
-} // namespace
-
 int main(int argc, char* argv[])
 {
     using namespace hellofem::app;
@@ -47,7 +34,7 @@ int main(int argc, char* argv[])
         std::fprintf(stderr,
             "usage: mpfem_app <clean_model.java> <mesh.mphtxt> <result.txt> "
             "[--scheme <%s>]\n",
-            scheme_list().c_str());
+            time_scheme_names().c_str());
         return 2;
     }
 

@@ -20,8 +20,10 @@ namespace hellofem::app {
     /// one — for the nonlinear material update and for the Krylov solve.
     class HeatTimeStepper {
     public:
+        /// Advance a heat-transfer solve in time with the scheme named
+        /// `scheme` (see `time_schemes`).
         HeatTimeStepper(std::shared_ptr<HeatTransferSolver> solver,
-            std::unique_ptr<const TimeScheme> scheme);
+            std::string_view scheme);
 
         /// Record the current solution (the initial state, already
         /// prepared by the caller) as the first level, at time `t0`.
@@ -31,11 +33,11 @@ namespace hellofem::app {
         /// difference from the previous level).
         void step(double t);
 
-        const TimeScheme& scheme() const { return *scheme_; }
+        const TimeScheme& scheme() const { return scheme_; }
 
     private:
         std::shared_ptr<HeatTransferSolver> solver_;
-        std::unique_ptr<const TimeScheme> scheme_;
+        const TimeScheme& scheme_;
         std::vector<la::Vector<double>> history_;
         std::optional<la::Vector<double>> source_;
         double t_ = 0.0;

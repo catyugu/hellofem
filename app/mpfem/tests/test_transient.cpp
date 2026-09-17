@@ -44,7 +44,7 @@ namespace {
         solver->set_initial_temperature(ScalarExpression(0.0));
         solver->apply_initial_condition();
 
-        HeatTimeStepper stepper(solver, make_time_scheme(scheme));
+        HeatTimeStepper stepper(solver, scheme);
         stepper.start(0.0);
         const int steps = static_cast<int>(std::llround(t_end / dt));
         for (int n = 1; n <= steps; ++n)
@@ -99,11 +99,10 @@ namespace {
 TEST_CASE("TimeScheme: weights, consistency and start-up", "[app][transient]")
 {
     const double dt = 0.5;
-    TimeWeights w;
 
-    auto bdf1 = make_time_scheme("bdf1");
-    REQUIRE(bdf1->order() == 1);
-    bdf1->weights(dt, 1, w);
+    const TimeScheme& bdf1 = find_time_scheme("bdf1");
+    REQUIRE(bdf1.order == 1);
+    TimeWeights w = time_weights(bdf1, dt, bdf1.levels - 1);
     REQUIRE(w.a.size() == 2);
     REQUIRE(w.a[0] == Approx(2.0));
     REQUIRE(w.a[1] == Approx(-2.0));
@@ -111,17 +110,17 @@ TEST_CASE("TimeScheme: weights, consistency and start-up", "[app][transient]")
     REQUIRE(w.b[1] == Approx(0.0));
     REQUIRE(w.c_new == Approx(1.0));
 
-    auto cn = make_time_scheme("cn");
-    REQUIRE(cn->order() == 2);
-    cn->weights(dt, 1, w);
+    const TimeScheme& cn = find_time_scheme("cn");
+    REQUIRE(cn.order == 2);
+    w = time_weights(cn, dt, cn.levels - 1);
     REQUIRE(w.b[0] == Approx(0.5));
     REQUIRE(w.b[1] == Approx(0.5));
     REQUIRE(w.c_new == Approx(0.5));
     REQUIRE(w.c_old == Approx(0.5));
 
-    auto bdf2 = make_time_scheme("bdf2");
-    REQUIRE(bdf2->order() == 2);
-    bdf2->weights(dt, 2, w);
+    const TimeScheme& bdf2 = find_time_scheme("bdf2");
+    REQUIRE(bdf2.order == 2);
+    w = time_weights(bdf2, dt, bdf2.levels - 1);
     REQUIRE(w.a.size() == 3);
     REQUIRE(w.a[0] == Approx(3.0)); // 3 / (2 dt)
     REQUIRE(w.a[1] == Approx(-4.0)); // -2 / dt
@@ -130,27 +129,27 @@ TEST_CASE("TimeScheme: weights, consistency and start-up", "[app][transient]")
     REQUIRE(w.b[1] == Approx(0.0));
 
     // A scheme that lacks its history falls back to a first-order step.
-    bdf2->weights(dt, 1, w);
+    w = time_weights(bdf2, dt, 1);
     REQUIRE(w.a.size() == 2);
     REQUIRE(w.a[0] == Approx(2.0));
 
     // Consistency: the mass weights sum to zero (a constant state has no
     // time derivative) and the stiffness weights to one.
-    for (const std::string& name : time_scheme_names()) {
-        auto scheme = make_time_scheme(name);
-        scheme->weights(dt, scheme->levels(), w);
+    for (const TimeScheme& scheme : time_schemes()) {
+        w = time_weights(scheme, dt, scheme.levels - 1);
         double sum_a = 0, sum_b = 0;
         for (double value : w.a)
             sum_a += value;
         for (double value : w.b)
             sum_b += value;
-        INFO("scheme " << name << ": sum(a) = " << sum_a << ", sum(b) = " << sum_b);
+        INFO("scheme " << scheme.name << ": sum(a) = " << sum_a
+                       << ", sum(b) = " << sum_b);
         REQUIRE(sum_a == Approx(0.0).margin(1e-12));
         REQUIRE(sum_b == Approx(1.0).margin(1e-12));
         REQUIRE(w.c_new + w.c_old == Approx(1.0).margin(1e-12));
     }
 
-    REQUIRE_THROWS(make_time_scheme("rk4"));
+    REQUIRE_THROWS(find_time_scheme("rk4"));
 }
 
 TEST_CASE("Transient heat: time scheme order on a manufactured solution", "[app][transient]")
@@ -210,7 +209,7 @@ TEST_CASE("Transient heat: a solution-independent nonlinear law matches the line
         solver->apply_initial_condition();
         REQUIRE(solver->nonlinear() == field_dependent);
 
-        HeatTimeStepper stepper(solver, make_time_scheme("bdf2"));
+        HeatTimeStepper stepper(solver, "bdf2");
         stepper.start(0.0);
         for (int n = 1; n <= 20; ++n)
             stepper.step(0.05 * n);

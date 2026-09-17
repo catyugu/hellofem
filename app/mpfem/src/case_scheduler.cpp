@@ -313,12 +313,10 @@ namespace hellofem::app {
             throw std::runtime_error(
                 "CaseScheduler: a transient study needs at least two output times");
         if (ht_)
-            stepper_ = std::make_unique<HeatTimeStepper>(ht_,
-                make_time_scheme(scheme_name_));
+            stepper_ = std::make_unique<HeatTimeStepper>(ht_, scheme_name_);
         if (stepper_)
             spdlog::info("transient: {} output times, scheme '{}' (order {})",
-                times.size(), stepper_->scheme().name(),
-                stepper_->scheme().order());
+                times.size(), stepper_->scheme().name, stepper_->scheme().order);
 
         // Initial state: the initial values of the heat equation (the
         // evolutionary field) and the solution of the algebraic, quasi-static

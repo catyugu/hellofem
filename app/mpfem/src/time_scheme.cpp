@@ -4,6 +4,7 @@
 #include "time_scheme.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <stdexcept>
 
@@ -19,75 +20,57 @@ namespace hellofem::app {
             return out;
         }
 
-        /// Backward Euler: (M/dt + K) u^{n+1} = M u^n/dt + f^{n+1}.
-        class Bdf1Scheme final : public TimeScheme {
-        public:
-            std::string_view name() const override { return "bdf1"; }
-            int order() const override { return 1; }
-            int levels() const override { return 2; }
-            void weights(double dt, int, TimeWeights& w) const override
-            {
-                w.a = {1.0 / dt, -1.0 / dt};
-                w.b = {1.0, 0.0};
-                w.c_new = 1.0;
-                w.c_old = 0.0;
-            }
-        };
-
-        /// Crank-Nicolson (trapezoidal): the stiffness and the source are
-        /// averaged between the two levels, so the scheme is second order.
-        class CrankNicolsonScheme final : public TimeScheme {
-        public:
-            std::string_view name() const override { return "cn"; }
-            int order() const override { return 2; }
-            int levels() const override { return 2; }
-            void weights(double dt, int, TimeWeights& w) const override
-            {
-                w.a = {1.0 / dt, -1.0 / dt};
-                w.b = {0.5, 0.5};
-                w.c_new = 0.5;
-                w.c_old = 0.5;
-            }
-        };
-
-        /// Second-order backward differentiation with a constant step. The
-        /// first step has no u^{n-1}, so it falls back to backward Euler.
-        class Bdf2Scheme final : public TimeScheme {
-        public:
-            std::string_view name() const override { return "bdf2"; }
-            int order() const override { return 2; }
-            int levels() const override { return 3; }
-            void weights(double dt, int history, TimeWeights& w) const override
-            {
-                if (history < 2) {
-                    Bdf1Scheme {}.weights(dt, history, w);
-                    return;
-                }
-                w.a = {1.5 / dt, -2.0 / dt, 0.5 / dt};
-                w.b = {1.0, 0.0, 0.0};
-                w.c_new = 1.0;
-                w.c_old = 0.0;
-            }
-        };
+        // The schemes: their weights, and the scheme a start-up step falls
+        // back on while the history is shorter than they need.
+        const std::array<TimeScheme, 3> schemes {{
+            // Backward Euler: (M/dt + K) u^{n+1} = M u^n / dt + f^{n+1}.
+            {"bdf1", 1, 2, {1.0, -1.0}, {1.0, 0.0}, 1.0, 0.0, {}},
+            // Crank-Nicolson: the stiffness and the load are the average of
+            // the two levels, which is what makes it second order.
+            {"cn", 2, 2, {1.0, -1.0}, {0.5, 0.5}, 0.5, 0.5, {}},
+            // BDF2, at a constant step.
+            {"bdf2", 2, 3, {1.5, -2.0, 0.5}, {1.0, 0.0, 0.0}, 1.0, 0.0, "bdf1"},
+        }};
 
     } // namespace
 
-    std::unique_ptr<const TimeScheme> make_time_scheme(std::string_view name)
+    std::span<const TimeScheme> time_schemes()
     {
-        const std::string key = lower(name);
-        if (key == "bdf1" or key == "backward-euler" or key == "be")
-            return std::make_unique<const Bdf1Scheme>();
-        if (key == "cn" or key == "crank-nicolson" or key == "trapezoidal")
-            return std::make_unique<const CrankNicolsonScheme>();
-        if (key == "bdf2")
-            return std::make_unique<const Bdf2Scheme>();
-        throw std::runtime_error("unknown time stepping scheme '" + std::string(name)
-            + "' (expected bdf1, cn or bdf2)");
+        return schemes;
     }
 
-    std::vector<std::string> time_scheme_names()
+    const TimeScheme& find_time_scheme(std::string_view name)
     {
-        return {"bdf1", "cn", "bdf2"};
+        const std::string key = lower(name);
+        for (const TimeScheme& scheme : schemes)
+            if (scheme.name == key)
+                return scheme;
+        throw std::runtime_error("unknown time stepping scheme '" + std::string(name)
+            + "'; the available ones are " + time_scheme_names());
+    }
+
+    TimeWeights time_weights(const TimeScheme& scheme, double dt, int previous)
+    {
+        if (previous < scheme.levels - 1 and not scheme.startup.empty())
+            return time_weights(find_time_scheme(scheme.startup), dt, previous);
+        TimeWeights w;
+        w.a.resize(scheme.a.size());
+        w.b.resize(scheme.b.size());
+        for (std::size_t k = 0; k < scheme.a.size(); ++k) {
+            w.a[k] = scheme.a[k] / dt;
+            w.b[k] = scheme.b[k];
+        }
+        w.c_new = scheme.c_new;
+        w.c_old = scheme.c_old;
+        return w;
+    }
+
+    std::string time_scheme_names()
+    {
+        std::string names;
+        for (const TimeScheme& scheme : schemes)
+            names += (names.empty() ? "" : ", ") + std::string(scheme.name);
+        return names;
     }
 
 } // namespace hellofem::app

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-#include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -23,36 +23,40 @@ namespace hellofem::app {
         double c_old = 0.0;
     };
 
-    /// A time stepping scheme: the temporal discretization of a
-    /// first-order-in-time field equation.
-    class TimeScheme {
-    public:
-        virtual ~TimeScheme() = default;
-
-        /// Scheme name ("bdf1", "cn", "bdf2").
-        virtual std::string_view name() const = 0;
-
+    /// A time stepping scheme, described by its weights alone: a scheme is a
+    /// row of the table returned by `time_schemes()`.
+    struct TimeScheme {
+        /// Name the `--scheme` option accepts.
+        std::string_view name;
         /// Order of accuracy in dt.
-        virtual int order() const = 0;
-
-        /// Number of solution levels the scheme uses (the new one included).
-        virtual int levels() const = 0;
-
-        /// Weights of the step from `t_n` to `t_n + dt`.
-        /// @param[in] dt Step size.
-        /// @param[in] history Number of previous solution levels available
-        ///   (0 when only the initial state exists). A scheme that needs
-        ///   more levels falls back to a lower-order step for the start-up.
-        /// @param[out] w The weights.
-        virtual void weights(double dt, int history, TimeWeights& w) const = 0;
+        int order = 1;
+        /// Solution levels the scheme uses, the new one included.
+        int levels = 2;
+        /// Mass weights, 1/dt not applied yet; index 0 is the new level.
+        std::vector<double> a;
+        /// Stiffness weights.
+        std::vector<double> b;
+        /// Load coefficients of the new and of the previous level.
+        double c_new = 1.0;
+        double c_old = 0.0;
+        /// Scheme to fall back on while fewer than `levels` solutions are
+        /// available (BDF2 starts on backward Euler); empty when the scheme
+        /// applies from the first step.
+        std::string_view startup;
     };
 
-    /// Select a scheme by name (case-insensitive): "bdf1" (backward Euler),
-    /// "cn" (Crank-Nicolson) or "bdf2" (second-order backward
-    /// differentiation). Throws for an unknown name.
-    std::unique_ptr<const TimeScheme> make_time_scheme(std::string_view name);
+    /// The available schemes.
+    std::span<const TimeScheme> time_schemes();
 
-    /// Names of the available schemes.
-    std::vector<std::string> time_scheme_names();
+    /// The scheme named `name`, case-insensitive. Throws for an unknown name.
+    const TimeScheme& find_time_scheme(std::string_view name);
+
+    /// Weights of the step from `t_n` to `t_n + dt`, with `previous` past
+    /// solutions available (fewer than the scheme needs selects its start-up
+    /// fallback).
+    TimeWeights time_weights(const TimeScheme& scheme, double dt, int previous);
+
+    /// Comma-separated names of the available schemes.
+    std::string time_scheme_names();
 
 } // namespace hellofem::app
