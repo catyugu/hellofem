@@ -76,7 +76,7 @@ TEST_CASE("CellProperty: a law reading no field does not evaluate a bound one",
 
     const auto& dofmap = *property.function()->function_space()->dofmap();
     REQUIRE(property.function()->x()->array()[static_cast<std::size_t>(
-        dofmap.cell_dofs(0).front())]
+                dofmap.cell_dofs(0).front())]
         == Approx(3.0));
 }
 

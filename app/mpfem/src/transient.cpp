@@ -14,21 +14,6 @@
 namespace hellofem::app {
     namespace {
 
-        /// The leading coefficient of the local truncation error of a BDF step
-        /// of order `order`, against the divided differences the estimate
-        /// reads: that error is `C_q dt^(q+1) u^(q+1)` with C_1 = 1/2 and
-        /// C_2 = 2/9, and `u^(q+1) = (q+1)! DD_{q+1}`, so the estimate is
-        /// `c_q dt^(q+1) DD_(q+1)` with c_1 = 2! / 2 = 1 and
-        /// c_2 = 3! * 2/9 = 4/3. The estimate is the leading term only, and
-        /// it is what the step size is controlled by.
-        double error_coefficient(int order)
-        {
-            return order <= 1 ? 1.0 : 4.0 / 3.0;
-        }
-
-        /// The absolute part of the error weight, as a fraction of the
-        /// field's own scale: the weight is
-        /// `tolerance |u| + tolerance * weight_floor * magnitude`.
         constexpr double weight_floor = 1e-3;
 
     } // namespace
@@ -37,13 +22,7 @@ namespace hellofem::app {
         : field_(field)
         , scheme_(find_time_scheme(settings.scheme))
         , tolerance_(settings.tolerance)
-        , adaptive_(settings.adaptive)
     {
-        // The estimate is the leading term of the BDF truncation error; the
-        // trapezoidal scheme has no such estimate installed.
-        if (adaptive_ and scheme_.family != TimeFamily::bdf)
-            throw std::runtime_error("adaptive step control needs a BDF scheme: '"
-                + std::string(scheme_.name) + "' has no truncation error estimate");
     }
 
     void TimeStepper::start(double t0)
@@ -76,12 +55,10 @@ namespace hellofem::app {
     {
         if (scheme_.family == TimeFamily::crank_nicolson)
             return cn_weights(steps.dt);
-        // The order is the driver's only where the step control selects it;
+        // The order is the driver's, up to the one the scheme integrates at;
         // a step with no history behind it (or no step at all) is first order
         // whatever the request.
-        const int taken = adaptive_ ? std::min(order, scheme_.order)
-                                    : scheme_.order;
-        return bdf_weights(taken, steps);
+        return bdf_weights(std::min(order, scheme_.order), steps);
     }
 
     void TimeStepper::step(double t, int order)
@@ -159,7 +136,7 @@ namespace hellofem::app {
         const std::size_t n = u.size();
         const double floor = tolerance_ * weight_floor * magnitude_;
 
-        const double coefficient = error_coefficient(order_);
+        const double coefficient = error_coefficient(scheme_.family, order_);
         double sum = 0.0;
         for (std::size_t i = 0; i < n; ++i) {
             const double weight = tolerance_ * std::abs(u[i]) + floor;

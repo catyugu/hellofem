@@ -141,10 +141,9 @@ TEST_CASE("CaseScheduler: the model's physics drives the solved fields",
     const int steps = 20;
     auto box = test::make_box_fixture({0, 0, 0}, {1, 0.2, 0.2}, {4, 1, 1});
 
-    for (const TimeSettings& settings :
-        {TimeSettings {"bdf2", false, 1e-3}, TimeSettings {"bdf2", true, 1e-3}}) {
+    {
         CaseScheduler scheduler(manufactured_heat_model(steps), loaded(box),
-            settings);
+            TimeSettings {"bdf2", 1e-3});
         scheduler.run();
 
         const auto path = scratch_file("hellofem_scheduler_result.txt");
@@ -170,9 +169,8 @@ TEST_CASE("CaseScheduler: the model's physics drives the solved fields",
                     max_err, std::abs(row[static_cast<std::size_t>(3 + n)] - exact));
             }
         }
-        INFO((settings.adaptive ? "adaptive steps" : "output-time steps")
-            << ": manufactured T = t^3, max error over the vertices and levels = "
-            << max_err);
+        INFO("steps selected by the error test: manufactured T = t^3, max error "
+            << "over the vertices and levels = " << max_err);
         REQUIRE(max_err < 5e-3);
         // A field that merely holds the boundary data would be exact: the
         // interior has to be solved, and no scheme of the app is exact here.

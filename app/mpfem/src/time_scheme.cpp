@@ -86,6 +86,13 @@ namespace hellofem::app {
         return w;
     }
 
+    double error_coefficient(TimeFamily family, int order)
+    {
+        if (family == TimeFamily::crank_nicolson)
+            return 0.5; // 3! * 1/12
+        return order <= 1 ? 1.0 : 4.0 / 3.0; // 2! * 1/2, 3! * 2/9
+    }
+
     double step_factor(double error, int order)
     {
         if (error > 1.0) {

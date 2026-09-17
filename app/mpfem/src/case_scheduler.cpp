@@ -94,22 +94,10 @@ namespace hellofem::app {
             if (TimeStepper* stepper = field->stepper())
                 steppers.push_back(stepper);
 
-        const TimeScheme& scheme = find_time_scheme(time_.scheme);
-        if (model_.study.transient and time_.adaptive) {
+        // A transient study is stepped by the error test of its scheme: the
+        // output times are the times its steps are held to, not its steps.
+        if (model_.study.transient)
             advance_adaptive(steppers, times);
-            return;
-        }
-
-        for (std::size_t i = 1; i < times.size(); ++i) {
-            // A scheme of a fixed order is stepped straight to every output
-            // time, at the size of the interval.
-            for (TimeStepper* stepper : steppers)
-                stepper->step(times[i], scheme.order);
-            for (const auto& field : fields_)
-                if (not field->stepper())
-                    field->solve_level(times[i]);
-            record(times[i]);
-        }
     }
 
     void CaseScheduler::advance_adaptive(
@@ -193,7 +181,11 @@ namespace hellofem::app {
             // A step that the next output time held back says nothing about
             // the size the solution allows, so the proposal stands.
             const double basis = held ? std::max(dt, h) : h;
-            const int next = next_order(order, scheme.order, norms);
+            // The order is the BDF family's to select; a family of a fixed
+            // order is stepped at the order of its scheme.
+            const int next = scheme.family == TimeFamily::bdf
+                ? next_order(order, scheme.order, norms)
+                : order;
             dt = basis * step_factor(error, order);
             order = next;
             ++steps;

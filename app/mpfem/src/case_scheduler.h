@@ -21,7 +21,7 @@ namespace hellofem::app {
     /// every field prepares the first level, then solves one level per
     /// output time, which is a step of its time scheme for the fields a
     /// transient study advances, at a step size and order the local error
-    /// estimate selects when the study asks for it — and exports the result
+    /// estimate selects — and exports the result
     /// in COMSOL's Data format.
     ///
     /// The scheduler names no physics: the fields, their order (the order of
@@ -29,8 +29,8 @@ namespace hellofem::app {
     /// time come from the field kinds that registered themselves.
     class CaseScheduler {
     public:
-        /// @param[in] time Time stepping of a transient study: its scheme,
-        /// its step control and its tolerance (see `TimeSettings`).
+        /// @param[in] time Time stepping of a transient study: its scheme
+        /// and the tolerance its steps are held to (see `TimeSettings`).
         CaseScheduler(const ModelScript& model, const LoadedMesh& mesh,
             TimeSettings time);
 

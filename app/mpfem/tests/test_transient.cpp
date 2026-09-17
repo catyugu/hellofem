@@ -90,7 +90,7 @@ namespace {
         const Manufactured problem = cubic_problem();
         auto solver = manufactured_solver(problem);
 
-        TimeStepper stepper(*solver, TimeSettings {std::string(scheme), false, 1e-3});
+        TimeStepper stepper(*solver, TimeSettings {std::string(scheme), 1e-3});
         stepper.start(0.0);
         const int steps = static_cast<int>(std::llround(t_end / dt));
         double worst = 0.0;
@@ -116,7 +116,7 @@ namespace {
     RunResult run_uniform(const Manufactured& problem, double dt, double t_end)
     {
         auto solver = manufactured_solver(problem);
-        TimeStepper stepper(*solver, TimeSettings {"bdf2", false, 1e-3});
+        TimeStepper stepper(*solver, TimeSettings {"bdf2", 1e-3});
         stepper.start(0.0);
 
         RunResult run;
@@ -138,7 +138,7 @@ namespace {
         const Manufactured& problem, double tolerance, double t_end)
     {
         auto solver = manufactured_solver(problem);
-        TimeStepper stepper(*solver, TimeSettings {"bdf2", true, tolerance});
+        TimeStepper stepper(*solver, TimeSettings {"bdf2", tolerance});
         stepper.start(0.0);
 
         const int max_order = find_time_scheme("bdf2").order;
@@ -290,13 +290,13 @@ TEST_CASE("TimeScheme: the BDF weights follow the steps, the controller the erro
     REQUIRE(find_time_scheme("BDF2").family == TimeFamily::bdf);
     REQUIRE(find_time_scheme("cn").family == TimeFamily::crank_nicolson);
 
-    // The step control is not the scheme: adaptive steps are the BDF family's
-    // alone, and asking another family for them is an error rather than a
-    // quietly wrong estimate.
+    // The step control is every family's: Crank-Nicolson is held to its own
+    // (trapezoidal) truncation error, and only the order selection is the BDF
+    // family's, its order being the variable one.
     auto solver = manufactured_solver(cubic_problem());
-    REQUIRE_NOTHROW(TimeStepper(*solver, TimeSettings {"bdf2", true, 1e-3}));
-    REQUIRE_NOTHROW(TimeStepper(*solver, TimeSettings {"bdf1", true, 1e-3}));
-    REQUIRE_THROWS(TimeStepper(*solver, TimeSettings {"cn", true, 1e-3}));
+    REQUIRE_NOTHROW(TimeStepper(*solver, TimeSettings {"bdf1", 1e-3}));
+    REQUIRE_NOTHROW(TimeStepper(*solver, TimeSettings {"bdf2", 1e-3}));
+    REQUIRE_NOTHROW(TimeStepper(*solver, TimeSettings {"cn", 1e-3}));
 }
 
 TEST_CASE("Transient heat: time scheme order on a manufactured solution", "[app][transient]")
@@ -378,7 +378,7 @@ TEST_CASE("Transient heat: the adaptive controller earns its accuracy per step",
         }
     }
     INFO("the cheapest uniform run as accurate as the adaptive one takes "
-         << cheapest << " steps");
+        << cheapest << " steps");
     REQUIRE(cheapest > 0);
     REQUIRE(cheapest > adaptive.steps);
 }
@@ -438,7 +438,7 @@ TEST_CASE("Transient heat: a solution-independent nonlinear law matches the line
         solver->apply_initial_condition();
         REQUIRE(solver->nonlinear() == field_dependent);
 
-        TimeStepper stepper(*solver, TimeSettings {"bdf2", false, 1e-3});
+        TimeStepper stepper(*solver, TimeSettings {"bdf2", 1e-3});
         stepper.start(0.0);
         for (int n = 1; n <= 20; ++n)
             stepper.step(0.05 * n, 2);

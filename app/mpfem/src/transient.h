@@ -32,11 +32,11 @@ namespace hellofem::app {
         /// by the caller) as the first level, at time `t0`.
         void start(double t0);
 
-        /// Advance one step, to time `t`, of BDF order `order` (1 or 2). The
-        /// size of the step is the difference from the level the stepper is
-        /// at; a stepper without adaptive control takes every step at the
-        /// order of its scheme, and a scheme of another family than BDF
-        /// ignores the order and its own weights are used.
+        /// Advance one step, to time `t`, of BDF order `order` (1 or 2): the
+        /// order the driver selects the step at, which a scheme of a fixed
+        /// order takes as its own, and a scheme of another family than BDF
+        /// ignores, its own weights being used. The size of the step is the
+        /// difference from the level the stepper is at.
         void step(double t, int order);
 
         /// The local truncation error of the step just taken, weighted per
@@ -77,10 +77,6 @@ namespace hellofem::app {
         TimeDependentField& field_;
         const TimeScheme& scheme_;
         double tolerance_ = 1e-3;
-        /// Whether the step size and the order of every step are the
-        /// driver's, i.e. whether it may read `error` and
-        /// `scaled_derivatives` for them.
-        bool adaptive_ = false;
         /// Solutions of the levels, most recent first, and their times.
         std::vector<la::Vector<double>> history_;
         std::vector<double> times_;

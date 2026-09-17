@@ -23,8 +23,6 @@ int main(int argc, char* argv[])
         const std::string arg = argv[i];
         if (arg == "--scheme" and i + 1 < argc)
             time.scheme = argv[++i];
-        else if (arg == "--adaptive")
-            time.adaptive = true;
         else if (arg == "--tol" and i + 1 < argc)
             time.tolerance = std::stod(argv[++i]);
         else if (npos < 3)
@@ -37,7 +35,7 @@ int main(int argc, char* argv[])
     if (npos < 3) {
         std::fprintf(stderr,
             "usage: mpfem_app <clean_model.java> <mesh.mphtxt> <result.txt> "
-            "[--scheme <%s>] [--adaptive] [--tol <time stepping tolerance>]\n",
+            "[--scheme <%s>] [--tol <time stepping tolerance>]\n",
             time_scheme_names().c_str());
         return 2;
     }

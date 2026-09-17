@@ -65,31 +65,27 @@ namespace hellofem::app {
         std::string_view name;
         TimeFamily family = TimeFamily::bdf;
         /// Order of accuracy in dt at a constant step: the order the scheme
-        /// is taken at, or — with adaptive step control — the highest order
-        /// the driver may select for it.
+        /// is taken at, or, for the BDF family, the highest order the driver
+        /// may select for it.
         int order = 1;
     };
 
-    /// The time stepping of a case: the discretization, and whether its steps
-    /// are its own.
+    /// The time stepping of a case: the discretization, and the accuracy its
+    /// steps are held to.
     ///
-    /// The two are separate settings, as they are in the COMSOL
-    /// time-dependent solver: the scheme says how a level is discretized,
-    /// the step control says how far apart the levels are. Without it the
-    /// steps are the output times of the study, at the order of the scheme;
-    /// with it the step size and the order of every step follow from the
-    /// local truncation error, and the output times are held to (see
+    /// The scheme says how a level is discretized: its family, and the order
+    /// it is taken at — or, for the BDF family, the highest order the driver
+    /// may select. How far apart the levels are is not the scheme's: the step
+    /// size and the order of every step follow from the local truncation
+    /// error, and the output times are the times they are held to (see
     /// `CaseScheduler::advance_adaptive`).
     struct TimeSettings {
         std::string scheme = "bdf2";
-        /// Select the step size and the order of every step from the local
-        /// truncation error, as the COMSOL solver's "free" time stepping
-        /// does. Only the BDF family has the estimate it needs.
-        bool adaptive = false;
-        /// The relative tolerance the truncation error is held to, weighted
-        /// per dof by `tolerance |u|` plus a small absolute part. It bounds
-        /// the error of a step, so it is the accuracy of the time
-        /// discretization — not of the linear or the nonlinear solver.
+        /// The relative tolerance the truncation error of a step is held to,
+        /// weighted per dof by `tolerance |u|` plus a small absolute part
+        /// (see `TimeStepper::error`). It bounds the error of a step, so it
+        /// is the accuracy of the time discretization — not of the linear or
+        /// the nonlinear solver.
         double tolerance = 1e-3;
     };
 
@@ -116,6 +112,15 @@ namespace hellofem::app {
     /// what keeps a BDF2 run second order when the step size changes.
     TimeWeights bdf_weights(int order, TimeSteps steps);
 
+    /// The leading coefficient of the local truncation error of a step of
+    /// `order` of `family`, against the divided difference it is estimated
+    /// from: that error is `C dt^(order+1) u^(order+1)`, and
+    /// `u^(order+1) = (order+1)! DD_(order+1)`, so the estimate the step is
+    /// controlled by is `c dt^(order+1) DD_(order+1)` with
+    /// `c = (order+1)! C`. The constants are the textbook ones: 1/2 for
+    /// backward Euler, 2/9 for BDF2, 1/12 for the trapezoidal rule.
+    double error_coefficient(TimeFamily family, int order);
+
     /// The Crank-Nicolson weights of a step of `dt`: the trapezoidal average
     /// of the stiffness and of the load over the two levels, which is what
     /// makes it second order.
@@ -136,7 +141,8 @@ namespace hellofem::app {
     /// The factor is clamped to [0.1, 2].
     double step_factor(double error, int order);
 
-    /// The order the next step is taken at, from the scaled derivative norms
+    /// The order the next step is taken at — the BDF family's, a scheme of a
+    /// fixed order keeping its own — from the scaled derivative norms
     /// `derivative_scale[k - 1] = |dt^k DD_k u|`, DD being the Newton divided
     /// difference and the levels the last ones: the terms of the Taylor
     /// expansion of the solution in the step. The higher order is worth

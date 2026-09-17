@@ -65,7 +65,7 @@ namespace hellofem::app {
         /// Apply the multiphysics couplings this physics owns. Called once,
         /// after every field of the case is built, so the solutions the other
         /// fields published are available through the context.
-        virtual void bind_couplings(CaseContext&) {}
+        virtual void bind_couplings(CaseContext&) { }
 
         /// The quantities the model's export can name.
         virtual std::span<const Variable> variables() const = 0;
