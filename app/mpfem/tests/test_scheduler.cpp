@@ -124,7 +124,7 @@ TEST_CASE("CaseScheduler: a physics without a registered field is an error",
     "[app][scheduler]")
 {
     ModelScript model;
-    model.physics.push_back(Physics {"ff", "FluidFlow", {}});
+    model.physics.push_back(Physics {"ff", "FluidFlow", {}, {}});
     auto box = test::make_box_fixture({0, 0, 0}, {1, 1, 1}, {1, 1, 1});
     REQUIRE_THROWS(CaseScheduler(model, loaded(box), TimeSettings {}));
 }

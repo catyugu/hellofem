@@ -161,6 +161,7 @@ namespace hellofem::app {
         std::shared_ptr<fem::Function<double>> u_;
         std::shared_ptr<la::SparsityPattern> pattern_;
         double t_ = 0.0; // time of the last refresh
+        int order_ = 1; // element order of the field, sizes the quadrature
     };
 
     /// A field with a time derivative: it assembles one step of the time

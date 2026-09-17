@@ -10,4 +10,9 @@ namespace hellofem::app {
     /// feature may override.
     inline constexpr double reference_temperature = 293.15;
 
+    /// COMSOL's element order for a physics interface the model does not
+    /// give one: quadratic. It is independent of the geometry's order, so a
+    /// linear mesh carries a quadratic field unless the model says otherwise.
+    inline constexpr int default_element_order = 2;
+
 } // namespace hellofem::app

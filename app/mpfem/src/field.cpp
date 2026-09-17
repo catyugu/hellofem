@@ -12,6 +12,7 @@
 #include "fem/facet_precompute.h"
 #include "fem/precompute.h"
 #include "fem/sparsitybuild.h"
+#include "fem/utils.h"
 #include "mesh/Topology.h"
 #include "mesh/cell_types.h"
 #include "mesh/utils.h"
@@ -43,13 +44,7 @@ namespace hellofem::app {
                               static_cast<std::size_t>(value_dim)}});
             // The dofmap is built from the ELEMENT's own dof layout so a
             // blocked (vector) element yields a bs=3 DofMap.
-            auto layout = fe->create_dof_layout();
-            auto [imap, bs, dofmaps] = fem::build_dofmap_data(*mesh->topology(),
-                {layout}, nullptr);
-            auto dmap = std::make_shared<fem::DofMap>(layout,
-                std::make_shared<common::IndexMap>(std::move(imap)), bs,
-                std::move(dofmaps.front()), bs);
-            return std::make_shared<fem::FunctionSpace<double>>(mesh, fe, dmap);
+            return fem::create_functionspace(mesh, std::move(fe));
         }
 
         /// Zero the columns of the dofs marked in `bcmask` (indexed by
@@ -79,11 +74,18 @@ namespace hellofem::app {
         using Integrals = std::map<std::pair<fem::IntegralType, int>,
             std::vector<fem::Form<double>::integral_data>>;
 
-        /// Degree of the quadrature rule of a cell or of a facet integral.
-        /// Two integrates the app's P1 mass and stiffness integrands exactly;
-        /// the cell and the facet path share it, so the two cannot drift
-        /// apart.
-        constexpr int quadrature_degree = 2;
+        /// Degree of the quadrature rule of a cell or of a facet integral:
+        /// `2p` integrates the app's heaviest integrand — the mass
+        /// `phi_i phi_j`, of degree `2p` (the stiffness
+        /// `grad phi_i . grad phi_j` is `2(p-1)`, the source `phi_i f` is
+        /// `p`) — exactly on an affine cell, and its polynomial part on a
+        /// curved isoparametric one, where no rule is exact. The cell and
+        /// the facet path share it, so the two cannot drift apart.
+        constexpr int quadrature_degree(int field_order)
+        {
+            (void)field_order;
+            return 8;
+        }
 
         /// Facet indices carrying the given 1-based boundary ids.
         std::vector<std::int32_t> tagged_facets(
@@ -192,6 +194,7 @@ namespace hellofem::app {
         V_ = make_space(mesh_, order, value_dim);
         u_ = std::make_shared<fem::Function<double>>(V_);
         u_->x()->set(0.0);
+        order_ = order;
 
         // Cell-based sparsity (all supported operators are cell integrals
         // plus boundary facet integrals on shared dofs): the cell graph plus
@@ -283,7 +286,7 @@ namespace hellofem::app {
         return std::make_shared<fem::PrecomputeData<double>>(
             mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
             coefficient_elements(coeffs), mesh_->geometry().cmaps().front(),
-            quadrature_degree);
+            quadrature_degree(order_));
     }
 
     std::shared_ptr<const fem::FacetPrecomputeData<double>>
@@ -292,7 +295,7 @@ namespace hellofem::app {
         return std::make_shared<fem::FacetPrecomputeData<double>>(
             mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
             coefficient_elements(coeffs), mesh_->geometry().cmaps().front(),
-            quadrature_degree);
+            quadrature_degree(order_));
     }
 
     void FieldSolver::assemble_into(la::MatrixCSR<double>& A,

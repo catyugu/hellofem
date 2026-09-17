@@ -30,6 +30,13 @@ namespace hellofem::app {
         const LoadedMesh& mesh() const { return mesh_; }
         const TimeSettings& time_settings() const { return time_; }
 
+        /// The element order of a physics interface's dependent variable:
+        /// what the model's `ShapeProperty` sets for it, or COMSOL's own
+        /// default. The order belongs to the physics, not to the mesh — a
+        /// linear geometry carries a quadratic field.
+        int element_order(
+            const Physics& physics, std::string_view variable) const;
+
         /// Compile a model expression with the parameters bound by value.
         ScalarExpression expression(std::string_view text) const;
 

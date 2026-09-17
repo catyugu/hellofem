@@ -18,7 +18,7 @@ namespace hellofem::app {
             ElectricField(const Physics& physics, CaseContext& ctx)
                 : solver_(std::make_shared<ElectrostaticsSolver>(
                       ctx.mesh().mesh, ctx.mesh().facet_tags, ctx.mesh().cell_tags,
-                      ctx.mesh().order))
+                      ctx.element_order(physics, "electricpotential")))
                 , variables_ {scalar_variable("V", "(V)", solver_->solution())}
             {
                 // A material law of this physics may read its own dependent

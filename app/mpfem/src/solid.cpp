@@ -24,7 +24,7 @@ namespace hellofem::app {
             SolidField(const Physics& physics, CaseContext& ctx)
                 : solver_(std::make_shared<SolidMechanicsSolver>(
                       ctx.mesh().mesh, ctx.mesh().facet_tags, ctx.mesh().cell_tags,
-                      ctx.mesh().order))
+                      ctx.element_order(physics, "displacement")))
                 , variables_ {Variable {"solid.disp", "(m)",
                       [displacement = solver_->solution()](
                           std::span<const double> points,

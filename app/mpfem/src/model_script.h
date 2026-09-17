@@ -50,6 +50,11 @@ namespace hellofem::app {
     struct Physics {
         std::string tag; // "ec", "ht", "solid"
         std::string type; // "ConductiveMedia", "HeatTransfer", "SolidMechanics"
+        /// Element order per dependent variable, as the model's
+        /// `ShapeProperty` sets it (`order_<variable>` -> order). A physics
+        /// the model leaves alone is absent, and the app uses COMSOL's own
+        /// default (see `defaults.h`).
+        std::map<std::string, int> element_order;
         std::vector<PhysicsFeature> features;
     };
 

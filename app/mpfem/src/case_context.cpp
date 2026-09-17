@@ -3,6 +3,8 @@
 
 #include "case_context.h"
 
+#include "defaults.h"
+
 #include <set>
 
 namespace hellofem::app {
@@ -18,6 +20,14 @@ namespace hellofem::app {
         }
 
     } // namespace
+
+    int CaseContext::element_order(
+        const Physics& physics, std::string_view variable) const
+    {
+        const auto it = physics.element_order.find(std::string(variable));
+        return it == physics.element_order.end() ? default_element_order
+                                                : it->second;
+    }
 
     CaseContext::CaseContext(const ModelScript& model, const LoadedMesh& mesh,
         TimeSettings time)

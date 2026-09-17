@@ -479,6 +479,20 @@ namespace hellofem::app {
                 auto* ph = find_tagged(model.physics, ptag);
                 if (ph == nullptr)
                     return;
+                // physics(tag).prop("ShapeProperty").set("order_<var>", "N"):
+                // the element order of one of the interface's dependent
+                // variables. COMSOL writes `2s` for its quadratic serendipity
+                // form, whose leading digit is the order the app's Lagrange
+                // basis answers for.
+                if (c.size() >= 4 and c[2].method == "prop"
+                    and c[3].method == "set"
+                    and arg_string(c[2].args[0]) == "ShapeProperty") {
+                    const std::string key = arg_string(c[3].args[0]);
+                    if (c[3].args.size() > 1 and key.starts_with("order_"))
+                        ph->element_order[key.substr(6)]
+                            = std::stoi(arg_string(c[3].args[1]));
+                    return;
+                }
                 // physics(tag).create(feat, type, dim)
                 if (c.size() >= 3 and c[2].method == "create") {
                     PhysicsFeature f;

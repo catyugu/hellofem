@@ -24,7 +24,7 @@ namespace hellofem::app {
             HeatField(const Physics& physics, CaseContext& ctx)
                 : solver_(std::make_shared<HeatTransferSolver>(
                       ctx.mesh().mesh, ctx.mesh().facet_tags, ctx.mesh().cell_tags,
-                      ctx.mesh().order))
+                      ctx.element_order(physics, "temperature")))
                 , variables_ {scalar_variable("T", "(K)", solver_->solution())}
             {
                 ctx.publish("T", solver_->solution());
