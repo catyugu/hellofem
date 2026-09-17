@@ -6,6 +6,7 @@
 #include "electric.h"
 #include "fixture.h"
 #include "heat.h"
+#include "la/KrylovSolver.h"
 #include "mesh/generation.h"
 #include "mesh/utils.h"
 #include "solid.h"
@@ -294,4 +295,64 @@ TEST_CASE("SolidMechanics: uniform thermal expansion of a clamped bar", "[app][p
     REQUIRE(ux_max < 1.1e-3);
     REQUIRE(ux_at_1 > 0.9e-3); // end face essentially alpha*DT*L
     REQUIRE(max_lat < 2e-3); // bounded lateral deformation
+}
+
+TEST_CASE("SolidMechanics: AMG preconditioning keeps the block structure",
+    "[app][physics]")
+{
+    // Elasticity is a vector operator: the three components of a node are
+    // strongly coupled, so a hierarchy that coarsens the scalar expansion of
+    // the matrix splits them over different aggregates and barely helps.
+    // Both solves below must converge on the same displacement; the blocked
+    // one must do it in a fraction of the iterations.
+    auto f = make_box_fixture({0, 0, 0}, {1, 0.3, 0.05}, {32, 10, 3});
+    SolidMechanicsSolver sm(f.mesh, f.boundary, f.cells, 1);
+    auto E = constant_property(f.mesh, f.cells, 200e9);
+    auto nu = constant_property(f.mesh, f.cells, 0.3);
+    auto alpha = constant_property(f.mesh, f.cells, 1e-5);
+    auto T = constant_property(f.mesh, f.cells, 393.15); // DT = 100
+    sm.set_elastic(E, nu);
+    sm.set_thermal_expansion(T->function(), alpha, 293.15);
+    sm.add_fixed_bc(1); // x- face clamped
+    sm.add_fixed_bc(2); // x+ face clamped
+    sm.refresh(0.0);
+
+    la::MatrixCSR<double> A(sm.pattern());
+    la::Vector<double> b(sm.space()->dofmap()->index_map,
+        sm.space()->dofmap()->index_map_bs());
+    sm.assemble_steady(A, b);
+
+    // The AMG-preconditioned CG solve of a matrix, from a zero guess.
+    auto solve = [](const la::MatrixCSR<double>& M, const la::Vector<double>& rhs,
+                     la::Vector<double>& x) {
+        x.set(0);
+        la::KrylovSolver<double> solver;
+        solver.set_operator(M);
+        solver.set_solver_type("cg");
+        solver.set_preconditioner_type("amg");
+        solver.set_tolerances(1e-10, 1e-14, 4000);
+        return solver.solve(x, rhs);
+    };
+
+    la::Vector<double> x_blocked(b.index_map(), b.bs());
+    const int blocked = solve(A, b, x_blocked);
+
+    // The same system as a scalar matrix, i.e. with every component of a
+    // node a dof of its own, on a scalar index map of the physical dofs.
+    la::MatrixCSR<double> S = A.to_scalar();
+    const std::int32_t ndofs = 3 * b.index_map()->size_local();
+    auto scalar_map = std::make_shared<hellofem::common::IndexMap>(0, ndofs);
+    la::Vector<double> b_scalar(scalar_map, 1);
+    for (std::size_t i = 0; i < b.array().size(); ++i)
+        b_scalar.array()[i] = b.array()[i];
+    la::Vector<double> x_scalar(scalar_map, 1);
+    const int scalar = solve(S, b_scalar, x_scalar);
+
+    INFO("blocked AMG: " << blocked << " iterations, scalar expansion: "
+                         << scalar);
+    REQUIRE(blocked > 0);
+    REQUIRE(scalar > 0);
+    REQUIRE(2 * blocked <= scalar);
+    for (std::size_t i = 0; i < x_scalar.array().size(); ++i)
+        REQUIRE(std::abs(x_blocked.array()[i] - x_scalar.array()[i]) < 1e-12);
 }

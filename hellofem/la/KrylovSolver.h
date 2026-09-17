@@ -120,7 +120,7 @@ namespace hellofem::la {
                 if (!_matrix)
                     throw std::runtime_error("AMG preconditioner requires a "
                                              "matrix (set_operator).");
-                _P = std::make_shared<AmgPreconditioner<T>>(*_matrix);
+                _P = make_amg_preconditioner<T>(*_matrix);
             }
             else if (type == "ilu") {
                 if (!_matrix)

@@ -9,10 +9,12 @@
 #include <Eigen/Sparse>
 #include <Eigen/SparseLU>
 
+#include <amgcl/adapter/block_matrix.hpp>
 #include <amgcl/amg.hpp>
 #include <amgcl/backend/builtin.hpp>
 #include <amgcl/coarsening/smoothed_aggregation.hpp>
 #include <amgcl/relaxation/damped_jacobi.hpp>
+#include <amgcl/value_type/static_matrix.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -232,78 +234,130 @@ namespace hellofem::la {
         Eigen::IncompleteLUT<T> _ilu;
     };
 
-    /// Algebraic multigrid preconditioner via amgcl. The matrix is
-    /// copied into a scalar CSR for amgcl; blocked matrices are expanded
-    /// to scalar entries first.
-    template <typename T>
+    /// Algebraic multigrid preconditioner via amgcl.
+    ///
+    /// A scalar matrix is handed to amgcl as it is. A blocked matrix keeps
+    /// its block structure: amgcl gets the block-valued view of the same
+    /// entries, so that the aggregation and the smoother both work on whole
+    /// blocks — the dofs of one node of a vector field. Coarsening the
+    /// scalar expansion of the same matrix instead splits a node's
+    /// components over different aggregates, and the hierarchy then barely
+    /// helps: for a vector operator such as elasticity the Krylov iteration
+    /// needs a multiple of the iterations of the block hierarchy for the
+    /// same solution.
+    ///
+    /// @tparam T Scalar type of the system.
+    /// @tparam Block Block size of the matrix. A matrix of another block
+    /// size is preconditioned on its scalar expansion.
+    template <typename T, unsigned Block = 1>
     class AmgPreconditioner : public Preconditioner<T> {
     public:
         /// Build the AMG hierarchy from a matrix.
         /// @param[in] A The matrix to precondition.
         explicit AmgPreconditioner(const MatrixCSR<T>& A)
         {
-            using Backend = amgcl::backend::builtin<T>;
-            using Matrix = typename Backend::matrix;
-
             const auto [bs0, bs1] = A.block_size();
             if (bs0 == 1 and bs1 == 1) {
                 // Scalar matrix: hand amgcl the CSR arrays directly
                 // (amgcl's crs view constructor deep-copies).
-                auto M = std::make_shared<Matrix>(
+                auto M = std::make_shared<ScalarMatrix>(
                     static_cast<std::size_t>(A.num_owned_rows()),
                     static_cast<std::size_t>(A.index_map(1)->size_local()),
                     A.row_ptr(), A.cols(), A.values());
-                _amg = std::make_shared<AMG>(M);
+                _amg = std::make_shared<ScalarAmg>(M);
+                return;
             }
-            else {
-                // Blocked matrix: expand blocks to scalar CSR.
-                const std::size_t nrows = static_cast<std::size_t>(
-                    A.num_owned_rows());
-                const std::size_t nrows_b = nrows * bs0;
-                const std::size_t ncols_b = static_cast<std::size_t>(
-                                                A.index_map(1)->size_local())
-                    * bs1;
-                std::vector<std::int64_t> row_ptr2(nrows_b + 1, 0);
-                std::vector<std::int32_t> cols2;
-                std::vector<T> values2;
-                cols2.reserve(A.cols().size() * bs1);
-                values2.reserve(A.values().size());
 
-                for (std::size_t r = 0; r < nrows; ++r) {
-                    for (int i0 = 0; i0 < bs0; ++i0) {
-                        row_ptr2[r * bs0 + i0 + 1] = row_ptr2[r * bs0 + i0];
-                        for (std::int64_t j = A.row_ptr()[r]; j < A.row_ptr()[r + 1];
-                            ++j) {
-                            for (int i1 = 0; i1 < bs1; ++i1) {
-                                cols2.push_back(A.cols()[j] * bs1 + i1);
-                                values2.push_back(A.values()[j * bs0 * bs1
-                                    + i0 * bs1 + i1]);
-                                ++row_ptr2[r * bs0 + i0 + 1];
-                            }
+            // Blocked matrix: expand the blocks to scalar CSR, which is the
+            // layout amgcl's block adapter reads its blocks back from.
+            const std::size_t nrows = static_cast<std::size_t>(
+                A.num_owned_rows());
+            const std::size_t nrows_b = nrows * bs0;
+            const std::size_t ncols_b = static_cast<std::size_t>(
+                                            A.index_map(1)->size_local())
+                * bs1;
+            std::vector<std::int64_t> row_ptr2(nrows_b + 1, 0);
+            std::vector<std::int32_t> cols2;
+            std::vector<T> values2;
+            cols2.reserve(A.cols().size() * bs1);
+            values2.reserve(A.values().size());
+
+            for (std::size_t r = 0; r < nrows; ++r) {
+                for (int i0 = 0; i0 < bs0; ++i0) {
+                    row_ptr2[r * bs0 + i0 + 1] = row_ptr2[r * bs0 + i0];
+                    for (std::int64_t j = A.row_ptr()[r]; j < A.row_ptr()[r + 1];
+                        ++j) {
+                        for (int i1 = 0; i1 < bs1; ++i1) {
+                            cols2.push_back(A.cols()[j] * bs1 + i1);
+                            values2.push_back(
+                                A.values()[j * bs0 * bs1 + i0 * bs1 + i1]);
+                            ++row_ptr2[r * bs0 + i0 + 1];
                         }
                     }
                 }
-
-                auto M = std::make_shared<Matrix>(nrows_b, ncols_b, row_ptr2,
-                    cols2, values2);
-                _amg = std::make_shared<AMG>(M);
             }
+
+            auto M = std::make_shared<ScalarMatrix>(
+                nrows_b, ncols_b, row_ptr2, cols2, values2);
+            if (bs0 == static_cast<int>(Block)
+                and bs1 == static_cast<int>(Block))
+                _block = std::make_shared<BlockAmg>(
+                    amgcl::adapter::block_matrix<BlockValue>(*M),
+                    typename BlockAmg::params {});
+            else
+                _amg = std::make_shared<ScalarAmg>(M);
         }
 
         /// Apply one AMG V-cycle: `y = AMG(x)` (clears y internally).
         void apply(const Vector<T>& x, Vector<T>& y) const override
         {
-            _amg->apply(x.array(), y.array());
+            if constexpr (Block == 1) {
+                _amg->apply(x.array(), y.array());
+            }
+            else {
+                if (_block) {
+                    _block->apply(
+                        amgcl::backend::reinterpret_as_rhs<BlockValue>(x.array()),
+                        amgcl::backend::reinterpret_as_rhs<BlockValue>(y.array()));
+                    return;
+                }
+                _amg->apply(x.array(), y.array());
+            }
         }
 
     private:
-        using Backend = amgcl::backend::builtin<T>;
-        using AMG = amgcl::amg<Backend,
+        using ScalarBackend = amgcl::backend::builtin<T>;
+        using ScalarMatrix = typename ScalarBackend::matrix;
+        using ScalarAmg = amgcl::amg<ScalarBackend,
+            amgcl::coarsening::smoothed_aggregation,
+            amgcl::relaxation::damped_jacobi>;
+        using BlockValue = amgcl::static_matrix<T, Block, Block>;
+        using BlockBackend = amgcl::backend::builtin<BlockValue>;
+        using BlockAmg = amgcl::amg<BlockBackend,
             amgcl::coarsening::smoothed_aggregation,
             amgcl::relaxation::damped_jacobi>;
 
-        // The AMG hierarchy
-        std::shared_ptr<AMG> _amg;
+        // The hierarchies: `_amg` on the scalar system, `_block` on the
+        // block-valued one. A blocked matrix of a size other than `Block`
+        // falls back to `_amg`, so a preconditioner whose `Block` does not
+        // match its matrix still works.
+        std::shared_ptr<ScalarAmg> _amg;
+        std::shared_ptr<BlockAmg> _block;
     };
+
+    /// The AMG preconditioner of a matrix, on the block structure of the
+    /// matrix where it has one (see `AmgPreconditioner`). The block sizes are
+    /// the ones the block-Jacobi preconditioner inverts.
+    template <typename T>
+    std::shared_ptr<Preconditioner<T>> make_amg_preconditioner(
+        const MatrixCSR<T>& A)
+    {
+        const auto [bs0, bs1] = A.block_size();
+        if (bs0 == bs1 and bs0 == 2)
+            return std::make_shared<AmgPreconditioner<T, 2>>(A);
+        if (bs0 == bs1 and bs0 == 3)
+            return std::make_shared<AmgPreconditioner<T, 3>>(A);
+        return std::make_shared<AmgPreconditioner<T>>(A);
+    }
 
 } // namespace hellofem::la

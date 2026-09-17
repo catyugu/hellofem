@@ -23,7 +23,8 @@ namespace hellofem::app {
         solver.set_preconditioner_type(cfg.preconditioner_type);
         solver.set_tolerances(cfg.rtol, cfg.atol, cfg.max_iterations);
         solver.set_initial_guess(warm_start);
-        solver.solve(x, b);
+        const int iterations = solver.solve(x, b);
+        spdlog::debug("linear: {} iterations", iterations);
     }
 
     int solve_system(
