@@ -334,11 +334,37 @@ TEST_CASE("SolidMechanics: AMG preconditioning keeps the block structure",
     la::Vector<double> x_scalar(scalar_map, 1);
     const int scalar = solve(S, b_scalar, x_scalar);
 
-    INFO("blocked AMG: " << blocked << " iterations, scalar expansion: "
-                         << scalar);
+    // Both representations hold the same operator, so the two solves must
+    // agree on the displacement: the difference is what the two Krylov
+    // residuals buy, which is orders below what a wrong representation (a
+    // mis-assembled block, a mis-expanded matrix) would show.
+    double displacement = 0.0;
+    double difference = 0.0;
+    for (std::size_t i = 0; i < x_scalar.array().size(); ++i) {
+        displacement = std::max(displacement, std::abs(x_scalar.array()[i]));
+        difference = std::max(difference,
+            std::abs(x_blocked.array()[i] - x_scalar.array()[i]));
+    }
+    INFO("blocked AMG: " << blocked << " iterations, scalar expansion: " << scalar
+                         << ", max |u| = " << displacement
+                         << ", blocked vs scalar difference = " << difference);
+    REQUIRE(displacement > 0.0);
     REQUIRE(blocked > 0);
     REQUIRE(scalar > 0);
-    REQUIRE(2 * blocked <= scalar);
-    for (std::size_t i = 0; i < x_scalar.array().size(); ++i)
-        REQUIRE(std::abs(x_blocked.array()[i] - x_scalar.array()[i]) < 1e-12);
+
+    // The blocked hierarchy has to beat the scalar expansion clearly, but not
+    // by a fixed factor: the AMG coarsening depends on the order its parallel
+    // reductions complete in, so the iteration counts move by tens of percent
+    // between runs of the same binary (blocked 630..900, scalar 1600..2900 for
+    // this case). A reverted block-aware coarsening is what makes the two
+    // counts meet, and that this still catches.
+    REQUIRE(3 * blocked <= 2 * scalar);
+
+    // The agreement of the two solves is the Krylov residual's own, amplified
+    // by the inverse of the elasticity operator: it measures ~100x the
+    // relative tolerance they stop at (median 1e-9, worst 1e-8 over 60 runs
+    // here), while a wrong representation stands out by orders. The bound
+    // leaves room above that measured floor.
+    constexpr double agreement = 1e-6;
+    REQUIRE(difference < agreement * displacement);
 }
