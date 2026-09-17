@@ -13,6 +13,11 @@
 
 namespace hellofem::app {
 
+    bool converged(int iterations, int max_iterations)
+    {
+        return iterations < max_iterations;
+    }
+
     void solve_linear(const la::MatrixCSR<double>& A, la::Vector<double>& x,
         const la::Vector<double>& b, bool warm_start)
     {
@@ -24,6 +29,11 @@ namespace hellofem::app {
         solver.set_tolerances(cfg.rtol, cfg.atol, cfg.max_iterations);
         solver.set_initial_guess(warm_start);
         const int iterations = solver.solve(x, b);
+        if (not converged(iterations, cfg.max_iterations))
+            throw std::runtime_error("solve_linear: " + cfg.solver_type
+                + " with " + cfg.preconditioner_type + " preconditioning did not "
+                + "converge in " + std::to_string(cfg.max_iterations)
+                + " iterations at rtol " + std::to_string(cfg.rtol));
         spdlog::debug("linear: {} iterations", iterations);
     }
 

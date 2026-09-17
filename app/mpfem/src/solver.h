@@ -21,9 +21,19 @@ namespace hellofem::app {
         int max_iterations = 2000;
     };
 
+    /// Whether a Krylov solve that used `iterations` of `max_iterations`
+    /// solved its system.
+    ///
+    /// A solver that stops at its iteration cap has not: it returns the cap
+    /// and leaves an intermediate iterate in `x`. Reading that iterate as the
+    /// field's value reports a non-solution as a result — a field that is
+    /// silently wrong, in a run that looks like it succeeded.
+    bool converged(int iterations, int max_iterations);
+
     /// Solve `A x = b`, taking the current `x` as the initial guess when
     /// `warm_start` is set (a previous time level or the previous
-    /// linearization is a good starting point).
+    /// linearization is a good starting point). Throws when the solve does
+    /// not converge within the iteration cap.
     void solve_linear(const la::MatrixCSR<double>& A, la::Vector<double>& x,
         const la::Vector<double>& b, bool warm_start = false);
 

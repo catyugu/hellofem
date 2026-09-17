@@ -3,18 +3,27 @@
 
 #include "catch2/catch_approx.hpp"
 #include "catch2/catch_test_macros.hpp"
+#include "common/IndexMap.h"
 #include "electric.h"
 #include "fixture.h"
 #include "heat.h"
 #include "la/KrylovSolver.h"
+#include "la/MatrixCSR.h"
+#include "la/SparsityPattern.h"
+#include "la/Vector.h"
 #include "mesh/generation.h"
 #include "mesh/utils.h"
 #include "solid.h"
+#include "solver.h"
 
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <numeric>
+#include <random>
+#include <string>
+#include <tuple>
+#include <vector>
 
 namespace la = hellofem::la;
 
@@ -431,4 +440,72 @@ TEST_CASE("SolidMechanics: AMG preconditioning keeps the block structure",
     // bound leaves room above that measured floor.
     constexpr double agreement = 1e-6;
     REQUIRE(difference < agreement * displacement);
+}
+
+namespace {
+
+    /// A pure-Neumann 1D Laplacian: every row sums to zero, so the constant
+    /// vector is in its null space.
+    la::MatrixCSR<double> make_neumann_laplacian(std::int32_t n)
+    {
+        auto imap = std::make_shared<hellofem::common::IndexMap>(0, n);
+        la::SparsityPattern pattern(imap);
+        for (std::int32_t i = 0; i < n; ++i) {
+            pattern.insert(i, i);
+            if (i > 0)
+                pattern.insert(i, i - 1);
+            if (i + 1 < n)
+                pattern.insert(i, i + 1);
+        }
+        pattern.finalize();
+
+        la::MatrixCSR<double> A(pattern);
+        for (std::int32_t i = 0; i < n; ++i) {
+            // Every row sums to zero: the constant vector is the null space.
+            const double diag = (i > 0 ? 1.0 : 0.0) + (i + 1 < n ? 1.0 : 0.0);
+            std::vector<std::int32_t> row {i};
+            std::vector<std::int32_t> cols {i};
+            std::vector<double> vals {diag};
+            if (i > 0) {
+                cols.push_back(i - 1);
+                vals.push_back(-1.0);
+            }
+            if (i + 1 < n) {
+                cols.push_back(i + 1);
+                vals.push_back(-1.0);
+            }
+            A.set(vals, row, cols);
+        }
+        return A;
+    }
+
+} // namespace
+
+TEST_CASE("solve_linear: an iterate left at the iteration cap is not a solution",
+    "[app][solver]")
+{
+    // A pure-Neumann Laplacian is singular, and a right-hand side whose mean
+    // lies in its null space is one no iterate can reproduce: the Krylov
+    // residual never reaches the tolerance and the solve stops at its cap.
+    constexpr std::int32_t n = 400;
+    auto A = make_neumann_laplacian(n);
+    auto imap = std::make_shared<hellofem::common::IndexMap>(0, n);
+    la::Vector<double> b(imap, 1);
+    b.set(1.0);
+    la::Vector<double> x(imap, 1);
+    x.set(0.0);
+
+    // What the library reports for such a solve: the cap, not an exception.
+    la::KrylovSolver<double> solver;
+    solver.set_operator(A);
+    solver.set_solver_type("cg");
+    solver.set_tolerances(1e-12, 1e-14, 2000);
+    REQUIRE(solver.solve(x, b) == 2000);
+
+    // Which the app must read as a failure: a field whose solve stopped at
+    // the cap is a field that was never solved, and exporting its iterate
+    // reports a non-solution as a result.
+    REQUIRE_FALSE(converged(2000, 2000));
+    REQUIRE(converged(165, 2000));
+    REQUIRE(converged(1, 2000));
 }
