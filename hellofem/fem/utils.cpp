@@ -133,10 +133,14 @@ namespace hellofem::fem {
         DofPermutation permute_inv;
         if (element->needs_dof_permutations())
             permute_inv = element->dof_permutation_fn(/*inverse=*/false);
+        // The dofmap is built from the element before either argument is
+        // moved into the space: the order in which a call's arguments are
+        // evaluated is unspecified, so `*mesh` and `element` must not be
+        // read in the same call that moves them.
+        auto dofmap = std::make_shared<const DofMap>(create_dofmap(*mesh,
+            element->create_dof_layout(), permute_inv, reorder_fn));
         return std::make_shared<FunctionSpace<double>>(std::move(mesh),
-            std::move(element),
-            std::make_shared<const DofMap>(create_dofmap(*mesh,
-                element->create_dof_layout(), permute_inv, reorder_fn)));
+            std::move(element), std::move(dofmap));
     }
 
 } // namespace hellofem::fem
