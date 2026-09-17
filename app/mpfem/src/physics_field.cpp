@@ -25,10 +25,10 @@ namespace hellofem::app {
     {
         return Variable {std::move(name), std::move(unit),
             [field = std::move(field)](std::span<const double> points,
+                std::span<const std::int32_t> cells,
                 std::span<double> values) {
-                auto [scalars, shape] = field->eval(points, {values.size(), 3});
-                for (std::size_t i = 0; i < values.size(); ++i)
-                    values[i] = scalars[i];
+                field->eval(points, {values.size(), 3}, cells, values,
+                    {values.size(), 1});
             }};
     }
 
@@ -46,26 +46,6 @@ namespace hellofem::app {
             if (kind.physics_type == physics_type)
                 return &kind;
         return nullptr;
-    }
-
-    // Each physics registers its own kind next to the physics it binds; the
-    // linker keeps a registration-only object out of a static library, so
-    // the list of the shipped fields has to be named here.
-    void register_electric_field();
-    void register_heat_field();
-    void register_solid_field();
-
-    void register_builtin_fields()
-    {
-        // A driver and a test may both set the app up, and the kinds are
-        // process-wide: the registration happens once.
-        static const bool registered = [] {
-            register_electric_field();
-            register_heat_field();
-            register_solid_field();
-            return true;
-        }();
-        (void)registered;
     }
 
 } // namespace hellofem::app

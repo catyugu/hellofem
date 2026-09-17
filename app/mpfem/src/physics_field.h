@@ -18,10 +18,12 @@ namespace hellofem::app {
     struct Variable {
         std::string name; // "T", "solid.disp", ...
         std::string unit; // "(K)", "(m)", ...
-        /// Write the value at every point into `values`, one entry per point;
-        /// `points` holds three coordinates per point.
+        /// Write the value at every point into `values`, one entry per
+        /// point; `points` holds three coordinates per point and `cells`
+        /// the cell each point is read on (negative for a point that has
+        /// none), so that no cell has to be searched for.
         std::function<void(std::span<const double> points,
-            std::span<double> values)>
+            std::span<const std::int32_t> cells, std::span<double> values)>
             eval;
     };
 
@@ -37,11 +39,22 @@ namespace hellofem::app {
     public:
         virtual ~PhysicsField() = default;
 
-        /// Bring the field to its initial state at `t0`: the initial values
-        /// of a field the scheme advances (see `solve_level`), and the
-        /// pointwise constraints, which a state that is not the result of a
-        /// solve does not satisfy. Called once, before the first level.
+        /// Bring the field to its state at the first level of the study,
+        /// which the scheduler prepares before it solves anything: the
+        /// initial values of a field the study advances (see `solve_level`),
+        /// and the pointwise constraints, which a state that is not the
+        /// result of a solve does not satisfy. Called once per study.
         virtual void initialize(double t0) = 0;
+
+        /// Whether the study advances this field in time, i.e. whether
+        /// `solve_level` steps the field's time scheme rather than solving
+        /// its steady system.
+        ///
+        /// The first level of a study is a solved one for every field this
+        /// returns false for — a state that is algebraic has to be solved
+        /// there like at any other level — and the state `initialize`
+        /// prepared for the others.
+        virtual bool advances_in_time() const { return false; }
 
         /// Solve the level at time `t`: the steady system, or one step of the
         /// time scheme for a field the study advances in time.
@@ -58,9 +71,12 @@ namespace hellofem::app {
 
     /// A physics the app can solve: the COMSOL physics interface type it
     /// answers for and the factory that binds it to a case.
+    using FieldFactory = std::unique_ptr<PhysicsField> (*)(
+        const Physics&, CaseContext&);
+
     struct FieldKind {
         std::string_view physics_type; // "HeatTransfer", "ConductiveMedia", ...
-        std::unique_ptr<PhysicsField> (*create)(const Physics&, CaseContext&);
+        FieldFactory create;
     };
 
     /// Register a field kind. The fields of a case are built from the kinds
@@ -71,8 +87,20 @@ namespace hellofem::app {
     /// The kind answering for `physics_type`, or nullptr.
     const FieldKind* field_kind(std::string_view physics_type);
 
-    /// Register the fields the app ships (the `register_*_field` function of
-    /// each physics).
-    void register_builtin_fields();
+    /// Registration of a field kind at program start-up: a physics holds one
+    /// of these next to the physics it binds, so that the app knows the
+    /// field without naming it anywhere else.
+    ///
+    /// @note An object that nothing else refers to is dropped from a static
+    /// library, so the consumers link the app library whole (see
+    /// `app/CMakeLists.txt`); without that the field would silently never
+    /// load.
+    class FieldRegistration {
+    public:
+        FieldRegistration(std::string_view physics_type, FieldFactory create)
+        {
+            register_field(FieldKind {physics_type, create});
+        }
+    };
 
 } // namespace hellofem::app

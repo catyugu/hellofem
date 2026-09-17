@@ -11,7 +11,6 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
-#include <array>
 #include <numeric>
 #include <stdexcept>
 
@@ -110,8 +109,9 @@ namespace hellofem::app {
         auto expr = std::make_shared<Expression>();
         expr->parse(text, var_ptrs_);
         for (const std::string& used : expr->variables())
-            for (const auto& field : fields_)
+            for (auto& field : fields_)
                 if (field.symbol == used) {
+                    field.used = true;
                     field_dependent_ = true;
                     spdlog::debug("property on domain {}: '{}' reads the field '{}'",
                         dom, text, used);
@@ -139,6 +139,7 @@ namespace hellofem::app {
         const std::size_t nv = vshape[1];
         const std::int32_t nc = num_cells();
         centroids_.assign(static_cast<std::size_t>(3 * nc), 0.0);
+        centroid_cells_.resize(static_cast<std::size_t>(nc));
         for (std::int32_t c = 0; c < nc; ++c) {
             auto verts = c_to_v->links(c);
             for (auto v : verts)
@@ -148,6 +149,7 @@ namespace hellofem::app {
             for (int d = 0; d < 3; ++d)
                 centroids_[static_cast<std::size_t>(3 * c + d)]
                     /= static_cast<double>(verts.size());
+            centroid_cells_[static_cast<std::size_t>(c)] = c;
         }
         centroids_ready_ = true;
     }
@@ -159,16 +161,18 @@ namespace hellofem::app {
         cell_centroids();
         const std::int32_t nc = num_cells();
 
-        if (not fields_.empty()) {
-            const std::array<std::size_t, 2> shape {
-                static_cast<std::size_t>(nc), 3};
-            for (auto& field : fields_) {
-                auto [vals, vshape] = field.function->eval(centroids_, shape);
-                if (vshape[1] != 1)
-                    throw std::runtime_error(
-                        "CellProperty: a bound field must be scalar");
-                field.values = std::move(vals);
-            }
+        for (auto& field : fields_) {
+            if (not field.used)
+                continue;
+            // A law reads its field through one variable, so only a scalar
+            // solution has a value to bind.
+            if (field.function->function_space()->element()->value_size() != 1)
+                throw std::runtime_error(
+                    "CellProperty: a bound field must be scalar");
+            field.values.assign(static_cast<std::size_t>(nc), 0.0);
+            field.function->eval(centroids_, {static_cast<std::size_t>(nc), 3},
+                centroid_cells_, field.values,
+                {static_cast<std::size_t>(nc), 1});
         }
 
         for (std::int32_t c = 0; c < nc; ++c) {
@@ -176,8 +180,9 @@ namespace hellofem::app {
             if (it == values_.end())
                 continue;
             for (auto& field : fields_)
-                *var_ptrs_[field.symbol]
-                    = field.values[static_cast<std::size_t>(c)];
+                if (field.used)
+                    *var_ptrs_[field.symbol]
+                        = field.values[static_cast<std::size_t>(c)];
             cell_entry(c) = it->second->eval(centroids_[3 * c],
                 centroids_[3 * c + 1], centroids_[3 * c + 2], t);
         }

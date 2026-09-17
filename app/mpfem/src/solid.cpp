@@ -29,9 +29,11 @@ namespace hellofem::app {
                 , variables_ {Variable {"solid.disp", "(m)",
                       [displacement = solver_->solution()](
                           std::span<const double> points,
+                          std::span<const std::int32_t> cells,
                           std::span<double> values) {
-                          auto [components, shape]
-                              = displacement->eval(points, {values.size(), 3});
+                          std::vector<double> components(values.size() * 3, 0.0);
+                          displacement->eval(points, {values.size(), 3}, cells,
+                              components, {values.size(), 3});
                           for (std::size_t i = 0; i < values.size(); ++i)
                               values[i] = std::sqrt(
                                   components[3 * i] * components[3 * i]
@@ -77,7 +79,6 @@ namespace hellofem::app {
             void initialize(double t0) override
             {
                 solver_->constrain_solution(t0);
-                solve_level(t0);
             }
 
             void solve_level(double t) override
@@ -88,7 +89,7 @@ namespace hellofem::app {
                         solver_->assemble_steady(A, b);
                     },
                     *solver_->solution()->x(), solver_->pattern(),
-                    solver_->nonlinear());
+                    solver_->nonlinear(), /*warm_start=*/true);
                 spdlog::info("solid: u solved at t = {} s", t);
             }
 
@@ -109,12 +110,9 @@ namespace hellofem::app {
             return std::make_unique<SolidField>(physics, ctx);
         }
 
-    } // namespace
+        const FieldRegistration solid_field {"SolidMechanics", make_solid_field};
 
-    void register_solid_field()
-    {
-        register_field(FieldKind {"SolidMechanics", make_solid_field});
-    }
+    } // namespace
 
     // ---------------------------------------------------------------------------
     // SolidMechanicsSolver

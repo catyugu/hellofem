@@ -114,11 +114,18 @@ namespace hellofem::app {
                     ctx.material_property("electricconductivity"));
             }
 
+            bool advances_in_time() const override { return stepper_ != nullptr; }
+
             void initialize(double t0) override
             {
-                // The initial values are the state at t0; the scheme advances
-                // it from there. Only a transient study initializes a field,
-                // and such a study always has a stepper.
+                if (not stepper_) {
+                    // A field the study does not advance starts from the
+                    // constraints alone; the level's solve provides its
+                    // values.
+                    solver_->constrain_solution(t0);
+                    return;
+                }
+                // The scheme advances the model's initial values from t0.
                 solver_->apply_initial_condition();
                 solver_->constrain_solution(t0);
                 stepper_->start(t0);
@@ -136,7 +143,7 @@ namespace hellofem::app {
                         solver_->assemble_steady(A, b);
                     },
                     *solver_->solution()->x(), solver_->pattern(),
-                    solver_->nonlinear());
+                    solver_->nonlinear(), /*warm_start=*/true);
                 spdlog::info("heat: T solved at t = {} s", t);
             }
 
@@ -158,12 +165,9 @@ namespace hellofem::app {
             return std::make_unique<HeatField>(physics, ctx);
         }
 
-    } // namespace
+        const FieldRegistration heat_field {"HeatTransfer", make_heat_field};
 
-    void register_heat_field()
-    {
-        register_field(FieldKind {"HeatTransfer", make_heat_field});
-    }
+    } // namespace
 
     // ---------------------------------------------------------------------------
     // HeatTransferSolver

@@ -68,6 +68,9 @@ namespace hellofem::app {
 
         /// Bind the solution field that `symbol` refers to in the
         /// expressions (scalar field). Call before `set_expression`.
+        ///
+        /// The field is read at the cell centroids of the mesh this property
+        /// was built on, so it must live on that same mesh.
         void bind_field(std::string symbol,
             std::shared_ptr<const fem::Function<double>> field);
 
@@ -101,11 +104,17 @@ namespace hellofem::app {
             std::string symbol;
             std::shared_ptr<const fem::Function<double>> function;
             std::vector<double> values; // one per cell
+            /// Whether an expression reads the field. A field no expression
+            /// reads is never evaluated.
+            bool used = false;
         };
         std::vector<BoundField> fields_;
 
-        // Cell centroids, filled on first use (3 per cell, cell-major).
+        // Cell centroids (3 per cell, cell-major) and the cell each of them
+        // belongs to, filled on first use. The centroids are read on their
+        // own cell, so no search for a containing cell is needed.
         std::vector<double> centroids_;
+        std::vector<std::int32_t> centroid_cells_;
         bool centroids_ready_ = false;
 
         std::int32_t num_cells() const;

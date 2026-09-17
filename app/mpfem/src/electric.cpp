@@ -47,7 +47,6 @@ namespace hellofem::app {
             void initialize(double t0) override
             {
                 solver_->constrain_solution(t0);
-                solve_level(t0);
             }
 
             void solve_level(double t) override
@@ -58,7 +57,7 @@ namespace hellofem::app {
                         solver_->assemble_steady(A, b);
                     },
                     *solver_->solution()->x(), solver_->pattern(),
-                    solver_->nonlinear());
+                    solver_->nonlinear(), /*warm_start=*/true);
                 spdlog::info("electric: V solved at t = {} s", t);
             }
 
@@ -79,12 +78,10 @@ namespace hellofem::app {
             return std::make_unique<ElectricField>(physics, ctx);
         }
 
-    } // namespace
+        const FieldRegistration electric_field {
+            "ConductiveMedia", make_electric_field};
 
-    void register_electric_field()
-    {
-        register_field(FieldKind {"ConductiveMedia", make_electric_field});
-    }
+    } // namespace
 
     // ---------------------------------------------------------------------------
     // ElectrostaticsSolver

@@ -26,22 +26,19 @@ TEST_CASE("CellProperty: sparse domains and field-dependent values", "[app][phys
 {
     // 3x1x1 box: cell 1 belongs to domain 2, cell 2 to domain 1, cell 0 to
     // neither (its value stays at the initial zero).
-    auto mesh = hellofem::mesh::create_box(
-        std::array<double, 3> {0, 0, 0}, std::array<double, 3> {3, 1, 1},
-        std::array<int, 3> {3, 1, 1});
+    auto fixture = make_box_fixture({0, 0, 0}, {3, 1, 1}, {3, 1, 1});
     auto tags = std::make_shared<hellofem::mesh::MeshTags<int>>(
-        mesh->topology(), 3, std::vector<std::int32_t> {1, 2},
+        fixture.mesh->topology(), 3, std::vector<std::int32_t> {1, 2},
         std::vector<int> {2, 1}, "sparse cells");
 
     // A temperature field that varies along x: T = x.
-    auto fixture = make_box_fixture({0, 0, 0}, {3, 1, 1}, {3, 1, 1});
     HeatTransferSolver ht(fixture.mesh, fixture.boundary, fixture.cells, 1);
     auto& field = *ht.solution();
     const auto coords = ht.space()->tabulate_dof_coordinates(false);
     for (std::int32_t d = 0; d < ht.space()->dofmap()->index_map->size_local(); ++d)
         field.x()->array()[static_cast<std::size_t>(d)] = coords[3 * d];
 
-    CellProperty property(mesh, tags, {});
+    CellProperty property(fixture.mesh, tags, {});
     property.bind_field("T", ht.solution());
     property.set_expression(2, "7.0"); // domain 2: constant
     property.set_expression(1, "2*T"); // domain 1: 2x
@@ -59,6 +56,27 @@ TEST_CASE("CellProperty: sparse domains and field-dependent values", "[app][phys
     REQUIRE(value_on_cell(2) == Approx(5.0));
     // Untagged cell: untouched.
     REQUIRE(value_on_cell(0) == Approx(0.0));
+}
+
+TEST_CASE("CellProperty: a law reading no field does not evaluate a bound one",
+    "[app][physics]")
+{
+    // A physics publishes its solution for every material law that may read
+    // it. A law that reads none must not pay for evaluating it — and must
+    // not be refused a field whose value shape it never asked for.
+    auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {2, 2, 1});
+    SolidMechanicsSolver sm(f.mesh, f.boundary, f.cells, 1); // vector solution
+    CellProperty property(f.mesh, f.cells, {});
+    property.bind_field("u", sm.solution());
+    property.set_expression(1, "3.0");
+    REQUIRE_FALSE(property.field_dependent());
+
+    property.update(0.0);
+
+    const auto& dofmap = *property.function()->function_space()->dofmap();
+    REQUIRE(property.function()->x()->array()[static_cast<std::size_t>(
+        dofmap.cell_dofs(0).front())]
+        == Approx(3.0));
 }
 
 TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[app][physics]")

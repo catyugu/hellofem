@@ -110,10 +110,11 @@ namespace {
 
 } // namespace
 
-TEST_CASE("FieldKind registration: the shipped fields register once", "[app][scheduler]")
+TEST_CASE("FieldKind registration: the shipped fields register themselves",
+    "[app][scheduler]")
 {
-    register_builtin_fields();
-    register_builtin_fields(); // a second setup of the app is not an error
+    // Every physics registers its kind at program start-up, from its own
+    // translation unit — nothing lists them (see `FieldRegistration`).
     for (const char* type : {"ConductiveMedia", "HeatTransfer", "SolidMechanics"})
         REQUIRE(field_kind(type) != nullptr);
     REQUIRE(field_kind("FluidFlow") == nullptr);

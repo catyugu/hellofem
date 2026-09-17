@@ -7,6 +7,7 @@
 #include "model_script.h"
 #include "physics_field.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -15,11 +16,11 @@
 namespace hellofem::app {
 
     /// Drives a parsed COMSOL model over a loaded mesh: builds one field per
-    /// physics interface of the model (see `register_field`, which the fields
-    /// of the app do from their own translation units), solves the model's
-    /// study — each field once for a stationary one, and each field once per
-    /// output time, with the scheme for the fields a transient study advances
-    /// in time — and exports the result in COMSOL's Data format.
+    /// physics interface of the model (see `FieldRegistration`, which each
+    /// physics holds in its own translation unit), solves the model's study —
+    /// every field prepares the first level, then solves one level per
+    /// output time, a field a transient study advances stepping its scheme —
+    /// and exports the result in COMSOL's Data format.
     ///
     /// The scheduler names no physics: the fields, their order (the order of
     /// the model's physics interfaces), what they export and how they step
@@ -47,6 +48,12 @@ namespace hellofem::app {
         /// The unit of the variable `name`, as COMSOL writes it.
         std::string unit(std::string_view name) const;
 
+        /// The cell every mesh vertex is read on (a vertex is a dof of each
+        /// cell around it, so any one of them reads the same value), with
+        /// the vertex coordinates in the point-major layout `Variable::eval`
+        /// takes. Both are fixed for the whole run.
+        void resolve_vertices();
+
         // --- result export ---
         struct Snapshot {
             double time = 0.0;
@@ -54,9 +61,6 @@ namespace hellofem::app {
         };
         std::vector<double> evaluate_columns() const;
         void record(double t);
-
-        void run_stationary();
-        void run_transient();
 
         // --- data ---
         ModelScript model_;
@@ -66,6 +70,11 @@ namespace hellofem::app {
         std::shared_ptr<const mesh::Mesh<double>> mesh_;
         std::vector<std::unique_ptr<PhysicsField>> fields_;
         std::vector<Snapshot> snapshots_;
+
+        // Export points: the vertex coordinates, and the cell each of them
+        // is read on.
+        std::vector<double> vertex_points_;
+        std::vector<std::int32_t> vertex_cells_;
     };
 
 } // namespace hellofem::app
