@@ -42,50 +42,39 @@ namespace hellofem::app {
                         + capacity->scalar_value() + ")";
                 }));
 
-                // Volumetric heat sources on the domains of a HeatSource
-                // feature (a domain without one keeps the zero source).
+                // The model's features, each binding the part of the physics
+                // it owns: the volumetric heat sources, the temperature
+                // Dirichlet data (COMSOL 6.2 names the feature
+                // TemperatureBoundary), the convective heat flux and the
+                // initial values of a transient study ("Tinit").
                 auto source = ctx.zero_property();
-                for (const PhysicsFeature& feature : physics.features)
-                    if (feature.type == "HeatSource"
-                        and feature.properties.contains("Q0"))
-                        for (int dom : feature.selection)
-                            source->set_expression(dom, feature.properties.at("Q0"));
-                solver_->set_source(source);
-
-                // Temperature Dirichlet data (COMSOL 6.2 names the feature
-                // TemperatureBoundary).
-                for (const PhysicsFeature& feature : physics.features)
-                    if ((feature.type == "TemperatureBoundary"
-                            or feature.type == "Temperature")
-                        and feature.properties.contains("T0"))
-                        for (int id : feature.selection)
-                            solver_->add_temperature_bc(id,
-                                ctx.expression(feature.properties.at("T0")));
-
-                // Convective heat flux.
                 for (const PhysicsFeature& feature : physics.features) {
-                    if (feature.type != "HeatFluxBoundary")
-                        continue;
                     const auto& props = feature.properties;
-                    if (props.contains("HeatFluxType")
-                        and props.at("HeatFluxType") != "ConvectiveHeatFlux")
-                        continue;
-                    if (not props.contains("h"))
-                        continue;
-                    auto h = ctx.uniform_property(props.at("h"));
-                    auto t_inf = ctx.uniform_property(
-                        props.contains("minput_temperature")
-                            ? props.at("minput_temperature")
-                            : "0");
-                    for (int id : feature.selection)
-                        solver_->add_convection(id, h, t_inf);
-                }
-
-                // Initial values of a transient study ("Tinit").
-                for (const PhysicsFeature& feature : physics.features)
-                    if (feature.properties.contains("Tinit"))
+                    if (feature.type == "HeatSource") {
+                        // A domain without a source keeps the zero one.
+                        for (int dom : feature.selection)
+                            source->set_expression(dom, props.at("Q0"));
+                    }
+                    else if (feature.type == "TemperatureBoundary"
+                        or feature.type == "Temperature") {
+                        for (int id : feature.selection)
+                            solver_->add_temperature_bc(
+                                id, ctx.expression(props.at("T0")));
+                    }
+                    else if (feature.type == "HeatFluxBoundary"
+                        and props.contains("HeatFluxType")
+                        and props.at("HeatFluxType") == "ConvectiveHeatFlux") {
+                        auto h = ctx.uniform_property(props.at("h"));
+                        auto t_inf = ctx.uniform_property(
+                            props.at("minput_temperature"));
+                        for (int id : feature.selection)
+                            solver_->add_convection(id, h, t_inf);
+                    }
+                    if (props.contains("Tinit"))
                         solver_->set_initial_temperature(
-                            ctx.expression(feature.properties.at("Tinit")));
+                            ctx.expression(props.at("Tinit")));
+                }
+                solver_->set_source(source);
 
                 if (ctx.model().study.transient)
                     stepper_ = std::make_unique<TimeStepper>(*solver_, ctx.time_settings());
