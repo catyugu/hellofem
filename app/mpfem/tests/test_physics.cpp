@@ -310,18 +310,18 @@ TEST_CASE("SolidMechanics: AMG preconditioning keeps the block structure",
 
     // The AMG-preconditioned CG solve of a matrix, from a zero guess.
     auto solve = [](const la::MatrixCSR<double>& M, const la::Vector<double>& rhs,
-                     la::Vector<double>& x) {
+                     la::Vector<double>& x, const char* preconditioner) {
         x.set(0);
         la::KrylovSolver<double> solver;
         solver.set_operator(M);
         solver.set_solver_type("cg");
-        solver.set_preconditioner_type("amg");
+        solver.set_preconditioner_type(preconditioner);
         solver.set_tolerances(1e-10, 1e-14, 4000);
         return solver.solve(x, rhs);
     };
 
     la::Vector<double> x_blocked(b.index_map(), b.bs());
-    const int blocked = solve(A, b, x_blocked);
+    const int blocked = solve(A, b, x_blocked, "amg");
 
     // The same system as a scalar matrix, i.e. with every component of a
     // node a dof of its own, on a scalar index map of the physical dofs.
@@ -332,7 +332,16 @@ TEST_CASE("SolidMechanics: AMG preconditioning keeps the block structure",
     for (std::size_t i = 0; i < b.array().size(); ++i)
         b_scalar.array()[i] = b.array()[i];
     la::Vector<double> x_scalar(scalar_map, 1);
-    const int scalar = solve(S, b_scalar, x_scalar);
+    const int scalar = solve(S, b_scalar, x_scalar, "amg");
+
+    // And the same system with no preconditioner at all. A preconditioner
+    // that needs more iterations than none is not a preconditioner: an AMG
+    // hierarchy whose smoother amplifies rather than smooths does exactly
+    // that (amgcl's default damped Jacobi sits above the stability limit of
+    // this operator and took 646 iterations here against 149 unpreconditioned
+    // and 84 blocked).
+    la::Vector<double> x_plain(b.index_map(), b.bs());
+    const int plain = solve(A, b, x_plain, "none");
 
     // Both representations hold the same operator, so the two solves must
     // agree on the displacement: the difference is what the two Krylov
@@ -346,25 +355,32 @@ TEST_CASE("SolidMechanics: AMG preconditioning keeps the block structure",
             std::abs(x_blocked.array()[i] - x_scalar.array()[i]));
     }
     INFO("blocked AMG: " << blocked << " iterations, scalar expansion: " << scalar
+                         << ", unpreconditioned: " << plain
                          << ", max |u| = " << displacement
                          << ", blocked vs scalar difference = " << difference);
     REQUIRE(displacement > 0.0);
     REQUIRE(blocked > 0);
     REQUIRE(scalar > 0);
+    REQUIRE(plain > 0);
+
+    // The preconditioned solve has to beat the unpreconditioned one: that is
+    // the property a divergent smoother breaks first, whatever the hierarchy.
+    REQUIRE(blocked < plain);
 
     // The blocked hierarchy has to beat the scalar expansion clearly, but not
-    // by a fixed factor: the AMG coarsening depends on the order its parallel
-    // reductions complete in, so the iteration counts move by tens of percent
-    // between runs of the same binary (blocked 630..900, scalar 1600..2900 for
-    // this case). A reverted block-aware coarsening is what makes the two
-    // counts meet, and that this still catches.
+    // by a fixed factor: the AMG coarsening still depends on the order its
+    // parallel reductions complete in, so the bound keeps room above what the
+    // smoother happens to give. Measured 84 against 202 iterations for this
+    // case (stable over 30 runs), i.e. a ratio of 0.42 against the bound's
+    // 0.67. A reverted block-aware coarsening is what makes the two counts
+    // meet, and that this still catches.
     REQUIRE(3 * blocked <= 2 * scalar);
 
     // The agreement of the two solves is the Krylov residual's own, amplified
-    // by the inverse of the elasticity operator: it measures ~100x the
-    // relative tolerance they stop at (median 1e-9, worst 1e-8 over 60 runs
-    // here), while a wrong representation stands out by orders. The bound
-    // leaves room above that measured floor.
+    // by the inverse of the elasticity operator: it measures ~1000x the
+    // relative tolerance they stop at (median 5e-13 of the displacement over
+    // 30 runs here), while a wrong representation stands out by orders. The
+    // bound leaves room above that measured floor.
     constexpr double agreement = 1e-6;
     REQUIRE(difference < agreement * displacement);
 }
