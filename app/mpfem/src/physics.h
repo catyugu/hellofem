@@ -9,6 +9,8 @@
 #include "fem/Form.h"
 #include "fem/Function.h"
 #include "fem/FunctionSpace.h"
+#include "fem/facet_precompute.h"
+#include "fem/precompute.h"
 #include "la/MatrixCSR.h"
 #include "la/SparsityPattern.h"
 #include "la/Vector.h"
@@ -87,6 +89,53 @@ namespace hellofem::app {
         /// Dirichlet conditions of `(boundary id -> value)` at time `t`.
         std::vector<fem::DirichletBC<double>> make_bcs(
             const std::map<int, ScalarExpression>& values, double t) const;
+
+        /// The Functions a weak form reads, in the order its kernel expects
+        /// them (material properties, then fields).
+        using Coefficients
+            = std::vector<std::shared_ptr<const fem::Function<double>>>;
+        /// Constants a weak form reads after its coefficients.
+        using Constants
+            = std::vector<std::shared_ptr<const fem::Constant<double>>>;
+        /// Dirichlet marker per physical dof, as `DirichletBC::mark_dofs`
+        /// writes it.
+        using DirichletRows = std::vector<std::int8_t>;
+
+        /// The marker of the given conditions.
+        DirichletRows marked_rows(
+            const std::vector<fem::DirichletBC<double>>& bcs) const;
+
+        /// Reference data of a cell integral whose coefficients are `coeffs`,
+        /// in the order the kernel reads them.
+        std::shared_ptr<const fem::PrecomputeData<double>> cell_precompute(
+            const Coefficients& coeffs) const;
+
+        /// Facet counterpart of `cell_precompute`.
+        std::shared_ptr<const fem::FacetPrecomputeData<double>> facet_precompute(
+            const Coefficients& coeffs) const;
+
+        /// Add the assembled form `a` to `A`, masking the Dirichlet rows.
+        void assemble_into(la::MatrixCSR<double>& A, const fem::Form<double>& a,
+            const DirichletRows& bc_rows) const;
+
+        /// Add the integral of the weak form `w`, whose coefficients are
+        /// `coeffs` in order, to the matrix `A` with the rows in `bc_rows`
+        /// masked — over every cell, or over the exterior facets of
+        /// `boundary`. Returns the form, which names the spaces that
+        /// imposing the Dirichlet data needs.
+        fem::Form<double> add_operator(la::MatrixCSR<double>& A,
+            const DirichletRows& bc_rows, const Coefficients& coeffs,
+            fem::cell_kernel_weak_fn_t<double> w) const;
+        fem::Form<double> add_operator(la::MatrixCSR<double>& A,
+            const DirichletRows& bc_rows, const Coefficients& coeffs,
+            fem::facet_kernel_weak_fn_t<double> w, int boundary) const;
+
+        /// Add the integral of the weak form `w` (coefficients `coeffs`,
+        /// constants after them) to the load `b`.
+        void add_load(la::Vector<double>& b, const Coefficients& coeffs,
+            fem::cell_kernel_weak_fn_t<double> w, Constants constants = {}) const;
+        void add_load(la::Vector<double>& b, const Coefficients& coeffs,
+            fem::facet_kernel_weak_fn_t<double> w, int boundary) const;
 
         std::shared_ptr<const mesh::Mesh<double>> mesh_;
         std::shared_ptr<const mesh::MeshTags<int>> facet_tags_;
