@@ -510,6 +510,75 @@ TEST_CASE("solve_linear: an iterate left at the iteration cap is not a solution"
     REQUIRE(converged(1, 2000));
 }
 
+TEST_CASE("SolidMechanics: a linear displacement is exact on a tetrahedral mesh",
+    "[app][physics]")
+{
+    // The blocked space on tetrahedra. Every other solid test uses a box of
+    // hexahedra, and the field solver's patch tests on tetrahedra are all
+    // scalar, so this is the one combination neither covers. A linear
+    // displacement is in every Lagrange space, so the discrete solution must
+    // reproduce it exactly at any order — including at the orders where the
+    // element's dofs need permuting into the reference order, which for a
+    // tetrahedron first happens at the third.
+    using hellofem::mesh::CellType;
+    const std::vector<double> x {0, 0, 0, /**/ 1, 0, 0, /**/ 0, 1, 0,
+        /**/ 1, 1, 0, /**/ 0, 0, 1, /**/ 1, 0, 1, /**/ 0, 1, 1, /**/ 1, 1, 1};
+    const std::vector<std::int64_t> cells {0, 1, 3, 7, /**/ 0, 1, 5, 7,
+        /**/ 0, 2, 3, 7, /**/ 0, 2, 6, 7, /**/ 0, 4, 5, 7, /**/ 0, 4, 6, 7};
+    auto mesh = std::make_shared<hellofem::mesh::Mesh<double>>(
+        hellofem::mesh::create_mesh(std::span<const std::int64_t>(cells),
+            CellType::tetrahedron, x, 3));
+    auto boundary = hellofem::app::test::boundary_tags(*mesh);
+    const std::size_t nc = mesh->topology()->index_map(3)->size_local();
+    std::vector<std::int32_t> cell_idx(nc);
+    std::iota(cell_idx.begin(), cell_idx.end(), 0);
+    auto cell_tags = std::make_shared<hellofem::mesh::MeshTags<int>>(
+        mesh->topology(), 3, std::move(cell_idx), std::vector<int>(nc, 1), "cells");
+
+    for (const int order : {1, 2, 3, 4}) {
+        SolidMechanicsSolver sm(mesh, boundary, cell_tags, order);
+        sm.set_elastic(constant_property(mesh, cell_tags, 200e9),
+            constant_property(mesh, cell_tags, 0.3));
+        sm.add_fixed_bc(1); // x- face clamped
+        sm.refresh(0.0);
+
+        auto u = sm.solution();
+        const std::int32_t nnodes = sm.space()->dofmap()->index_map->size_local();
+        auto coords = sm.space()->tabulate_dof_coordinates(false);
+
+        // u = (x, 0, 0): linear, and zero on the clamped face.
+        la::Vector<double> exact(u->x()->index_map(), u->x()->bs());
+        for (std::int32_t d = 0; d < nnodes; ++d) {
+            exact.array()[static_cast<std::size_t>(3 * d)]
+                = coords[static_cast<std::size_t>(9 * d)];
+            exact.array()[static_cast<std::size_t>(3 * d + 1)] = 0.0;
+            exact.array()[static_cast<std::size_t>(3 * d + 2)] = 0.0;
+        }
+
+        la::MatrixCSR<double> A(sm.pattern());
+        la::Vector<double> b(u->x()->index_map(), u->x()->bs());
+        sm.assemble_steady(A, b);
+        A.mult(exact, b); // solve for the field we already know
+
+        la::Vector<double> sol(u->x()->index_map(), u->x()->bs());
+        la::KrylovSolver<double> solver;
+        solver.set_operator(A);
+        solver.set_solver_type("cg");
+        solver.set_preconditioner_type("amg");
+        solver.set_tolerances(1e-10, 0.0, 5000);
+        const int iters = solver.solve(sol, b);
+
+        double err = 0.0, mag = 0.0;
+        for (std::size_t i = 0; i < sol.array().size(); ++i) {
+            err = std::max(err, std::abs(sol.array()[i] - exact.array()[i]));
+            mag = std::max(mag, std::abs(exact.array()[i]));
+        }
+        INFO("order " << order << ": " << iters << " iterations, max error "
+                      << err << " against max |u| = " << mag);
+        REQUIRE(err < 1e-8 * mag);
+    }
+}
+
 namespace {
 
     /// Krylov iterations of the electrostatic system on an `n`-divided unit
