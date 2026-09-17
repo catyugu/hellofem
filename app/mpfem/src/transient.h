@@ -76,7 +76,7 @@ namespace hellofem::app {
 
         TimeDependentField& field_;
         const TimeScheme& scheme_;
-        double tolerance_ = 1e-3;
+        double tolerance_;
         /// Solutions of the levels, most recent first, and their times.
         std::vector<la::Vector<double>> history_;
         std::vector<double> times_;
