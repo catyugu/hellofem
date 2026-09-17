@@ -29,10 +29,34 @@ namespace hellofem::app {
             {"bdf2", TimeFamily::bdf, 2},
         }};
 
-        /// The highest divided difference the app reads: a scheme of order 2
-        /// and the truncation error estimate one order above it. Its Newton
-        /// table therefore never needs more than the four newest levels.
-        constexpr std::size_t difference_order_limit = 3;
+        /// The Newton table of a divided difference: one row of level values
+        /// per level, most recent first, rewritten in place by the passes of
+        /// ascending order.
+        using LevelTable = std::vector<std::vector<double>>;
+
+        /// The newest `rows` levels as the starting rows of a table.
+        LevelTable level_rows(
+            std::span<const la::Vector<double>* const> levels, std::size_t rows)
+        {
+            LevelTable d(rows);
+            for (std::size_t i = 0; i < rows; ++i)
+                d[i].assign(levels[i]->array().begin(), levels[i]->array().end());
+            return d;
+        }
+
+        /// The pass of order `m` of the table: afterwards `d[i]` holds the
+        /// divided difference of order m over times[i] ... times[i + m], for
+        /// every row the table holds an `i + m` for.
+        void newton_pass(
+            LevelTable& d, std::span<const double> times, std::size_t m)
+        {
+            for (std::size_t i = 0; i + m < d.size(); ++i) {
+                const double span = times[i] - times[i + m];
+                const double factor = span == 0.0 ? 0.0 : 1.0 / span;
+                for (std::size_t j = 0; j < d[i].size(); ++j)
+                    d[i][j] = (d[i][j] - d[i + 1][j]) * factor;
+            }
+        }
 
     } // namespace
 
@@ -135,25 +159,13 @@ namespace hellofem::app {
         out.set(0);
         const std::size_t n = levels[0]->array().size();
         if (n == 0 or levels.size() != times.size() or k < 1
-            or k > static_cast<int>(difference_order_limit)
             or levels.size() < static_cast<std::size_t>(k) + 1)
             return out;
 
-        // Newton divided differences, ascending in the level order: after the
-        // pass of order m, `d[i]` holds DD_m over times[i] ... times[i + m].
         // DD_k reads the newest k + 1 levels and no further ones.
-        const std::size_t rows = static_cast<std::size_t>(k) + 1;
-        std::array<std::vector<double>, difference_order_limit + 1> d;
-        for (std::size_t i = 0; i < rows; ++i)
-            d[i].assign(levels[i]->array().begin(), levels[i]->array().end());
-
-        for (std::size_t m = 1; m < rows; ++m)
-            for (std::size_t i = 0; i + m < rows; ++i) {
-                const double span = times[i] - times[i + m];
-                const double factor = span == 0.0 ? 0.0 : 1.0 / span;
-                for (std::size_t j = 0; j < n; ++j)
-                    d[i][j] = (d[i][j] - d[i + 1][j]) * factor;
-            }
+        LevelTable d = level_rows(levels, static_cast<std::size_t>(k) + 1);
+        for (std::size_t m = 1; m < d.size(); ++m)
+            newton_pass(d, times, m);
 
         // Scale by the step into the newest level, so that the result is the
         // term of the Taylor expansion the order selection compares.
@@ -169,28 +181,17 @@ namespace hellofem::app {
         std::span<const la::Vector<double>* const> levels,
         std::span<const double> times)
     {
-        std::vector<double> scale(difference_order_limit, 0.0);
+        // One entry per order the level set supports: a set too short for an
+        // order has no entry for it rather than a zero (see `next_order`).
         if (levels.size() != times.size() or levels.size() < 2)
-            return scale;
+            return {};
 
-        // Every order comes out of one Newton table: the pass of order m
-        // leaves `d[0]` at the term the order selection compares (see
-        // `divided_difference`), and a level set too short for an order leaves
-        // that order at zero.
         const std::size_t n = levels[0]->array().size();
-        const std::size_t rows = std::min(levels.size(), difference_order_limit + 1);
-        std::array<std::vector<double>, difference_order_limit + 1> d;
-        for (std::size_t i = 0; i < rows; ++i)
-            d[i].assign(levels[i]->array().begin(), levels[i]->array().end());
-
+        std::vector<double> scale(levels.size() - 1, 0.0);
+        LevelTable d = level_rows(levels, levels.size());
         const double dt = times[0] - times[1];
-        for (std::size_t m = 1; m < rows; ++m) {
-            for (std::size_t i = 0; i + m < rows; ++i) {
-                const double span = times[i] - times[i + m];
-                const double factor = span == 0.0 ? 0.0 : 1.0 / span;
-                for (std::size_t j = 0; j < n; ++j)
-                    d[i][j] = (d[i][j] - d[i + 1][j]) * factor;
-            }
+        for (std::size_t m = 1; m < levels.size(); ++m) {
+            newton_pass(d, times, m);
             const double weight = std::pow(dt, static_cast<double>(m));
             for (std::size_t j = 0; j < n; ++j)
                 scale[m - 1]

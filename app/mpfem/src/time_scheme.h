@@ -166,8 +166,9 @@ namespace hellofem::app {
     /// The scaled derivative norms `derivative_scale[k - 1] = |dt^k DD_k u|`
     /// of the solution levels `levels` (most recent first, that one being the
     /// new level) at the times `times`: the terms of the Taylor expansion of
-    /// the solution in the step, maximized over the dofs. A level set too
-    /// short for the order leaves the higher norms at zero.
+    /// the solution in the step, maximized over the dofs. One entry per order
+    /// the level set supports — a set of n levels has n - 1 of them, so a
+    /// short one simply lacks the higher orders.
     std::vector<double> derivative_scale(
         std::span<const la::Vector<double>* const> levels,
         std::span<const double> times);

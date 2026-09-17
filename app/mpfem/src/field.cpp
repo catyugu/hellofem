@@ -79,9 +79,10 @@ namespace hellofem::app {
         using Integrals = std::map<std::pair<fem::IntegralType, int>,
             std::vector<fem::Form<double>::integral_data>>;
 
-        /// Degree the quadrature rule of a cell or facet integral must
-        /// integrate exactly: the app's weak forms are of degree 2 at most, so
-        /// both paths take the same rule.
+        /// Degree of the quadrature rule of a cell or of a facet integral.
+        /// Two integrates the app's P1 mass and stiffness integrands exactly;
+        /// the cell and the facet path share it, so the two cannot drift
+        /// apart.
         constexpr int quadrature_degree = 2;
 
         /// Facet indices carrying the given 1-based boundary ids.

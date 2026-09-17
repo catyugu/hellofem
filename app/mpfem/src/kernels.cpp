@@ -85,9 +85,9 @@ namespace hellofem::app::kernels {
     void joule_heat_load(double* Ae, const CellKernelData<double>& d)
     {
         const int nq = d.num_points, nd = d.num_dofs0;
-        // The coefficient gradients hold the physical dimension of the
-        // geometry (see `CellKernelData::dcoeffs`).
-        constexpr int gdim = 3;
+        // The coefficient gradients hold the physical dimension the
+        // precomputed data is built for (see `CellKernelData::dcoeffs`).
+        constexpr int gdim = fem::PrecomputeData<double>::gdim();
         std::memset(Ae, 0, nd * sizeof(double));
         for (int q = 0; q < nq; ++q) {
             const double w = d.w[q] * d.detJ[q];
