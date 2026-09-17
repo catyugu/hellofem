@@ -91,7 +91,7 @@ TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[a
     es.add_voltage_bc(2, ScalarExpression(1.0)); // x+ : V=1
     es.add_voltage_bc(1, ScalarExpression(0.0)); // x- : V=0
 
-    test::solve_steady(es);
+    es.solve_steady(0.0);
     auto V = es.solution();
 
     // V = x at every dof coordinate.
@@ -129,14 +129,7 @@ TEST_CASE("Electrostatics: voltage-dependent conductivity drives a nonlinear sol
     es.set_conductivity(sigma);
     REQUIRE(es.nonlinear());
 
-    la::MatrixCSR<double> A(es.pattern());
-    la::Vector<double> b(es.space()->dofmap()->index_map, 1);
-    solve_system(
-        [&](la::MatrixCSR<double>& mat, la::Vector<double>& rhs) {
-            es.refresh(0.0);
-            es.assemble_steady(mat, rhs);
-        },
-        *es.solution()->x(), es.pattern(), es.nonlinear());
+    es.solve_steady(0.0);
 
     auto coords = es.space()->tabulate_dof_coordinates(false);
     double err_exact = 0, err_linear = 0;
@@ -169,7 +162,7 @@ TEST_CASE("HeatTransfer: steady -div(k grad T)=0 with Robin convection", "[app][
     ht.add_temperature_bc(1, ScalarExpression(1.0)); // x- : T=1
     ht.add_convection(2, h, t_inf); // x+ : h=1, Tinf=0
 
-    test::solve_steady(ht);
+    ht.solve_steady(0.0);
     auto T = ht.solution();
 
     auto coords = ht.space()->tabulate_dof_coordinates(false);
@@ -213,14 +206,7 @@ TEST_CASE("HeatTransfer: nonlinear k(T) matches the analytic steady profile", "[
     ht.add_temperature_bc(2, ScalarExpression(t1));
     REQUIRE(ht.nonlinear());
 
-    la::MatrixCSR<double> A(ht.pattern());
-    la::Vector<double> b(ht.space()->dofmap()->index_map, 1);
-    solve_system(
-        [&](la::MatrixCSR<double>& mat, la::Vector<double>& rhs) {
-            ht.refresh(0.0);
-            ht.assemble_steady(mat, rhs);
-        },
-        *ht.solution()->x(), ht.pattern(), ht.nonlinear());
+    ht.solve_steady(0.0);
 
     auto coords = ht.space()->tabulate_dof_coordinates(false);
     double max_err = 0;
@@ -243,7 +229,7 @@ TEST_CASE("SolidMechanics: blocked assembly — no load with Fixed gives u=0", "
     sm.set_elastic(E, nu);
     sm.add_fixed_bc(1); // x- face: u=v=w=0
 
-    test::solve_steady(sm);
+    sm.solve_steady(0.0);
     auto u = sm.solution();
     double max_mag = 0;
     for (double v : u->x()->array())
@@ -268,7 +254,7 @@ TEST_CASE("SolidMechanics: uniform thermal expansion of a clamped bar", "[app][p
     sm.set_thermal_expansion(T->function(), alpha, 293.15);
     sm.add_fixed_bc(1); // x- face clamped
 
-    test::solve_steady(sm);
+    sm.solve_steady(0.0);
     auto u = sm.solution();
     const auto& xa = u->x()->array();
 

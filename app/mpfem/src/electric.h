@@ -30,7 +30,7 @@ namespace hellofem::app {
         void refresh(double t) override;
         bool nonlinear() const override
         {
-            return sigma_ and sigma_->field_dependent();
+            return solution_dependent(sigma_);
         }
         void assemble_steady(la::MatrixCSR<double>& A,
             la::Vector<double>& b) const override;

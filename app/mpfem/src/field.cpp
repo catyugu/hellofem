@@ -3,6 +3,8 @@
 
 #include "field.h"
 
+#include "solver.h"
+
 #include "basis/element-families.h"
 #include "fem/CoordinateElement.h"
 #include "fem/assembler.h"
@@ -107,13 +109,12 @@ namespace hellofem::app {
             return indices;
         }
 
-        /// `make_cell_kernel` reads the precomputed data by reference, so the
-        /// kernel has to keep it alive next to itself.
-        fem::kernel_t<double> keeping_cell_kernel(
-            std::shared_ptr<const fem::PrecomputeData<double>> pre,
-            fem::cell_kernel_weak_fn_t<double> w)
+        /// A weak-form kernel together with the reference data it reads by
+        /// reference, kept alive for as long as the returned kernel lives.
+        template <class Precompute>
+        fem::kernel_t<double> keeping_alive(std::shared_ptr<const Precompute> pre,
+            fem::kernel_t<double> kernel)
         {
-            auto kernel = fem::make_cell_kernel(*pre, w);
             return [pre = std::move(pre),
                        kernel = std::move(kernel)](double* Ae, const double* coeffs,
                        const double* constants, const double* cds, const int* perm,
@@ -122,18 +123,34 @@ namespace hellofem::app {
             };
         }
 
+        /// The kernel of the cell weak form `w`, on the reference data of
+        /// `coeffs`.
+        fem::kernel_t<double> keeping_cell_kernel(
+            std::shared_ptr<const fem::PrecomputeData<double>> pre,
+            fem::cell_kernel_weak_fn_t<double> w)
+        {
+            auto kernel = fem::make_cell_kernel(*pre, w);
+            return keeping_alive(std::move(pre), std::move(kernel));
+        }
+
         /// Facet counterpart of `keeping_cell_kernel`.
         fem::kernel_t<double> keeping_facet_kernel(
             std::shared_ptr<const fem::FacetPrecomputeData<double>> pre,
             fem::facet_kernel_weak_fn_t<double> w)
         {
             auto kernel = fem::make_facet_kernel(*pre, w);
-            return [pre = std::move(pre),
-                       kernel = std::move(kernel)](double* Ae, const double* coeffs,
-                       const double* constants, const double* cds, const int* perm,
-                       const std::uint8_t* entity, void* ctx) mutable {
-                kernel(Ae, coeffs, constants, cds, perm, entity, ctx);
-            };
+            return keeping_alive(std::move(pre), std::move(kernel));
+        }
+
+        /// The facets of the mesh and their neighbouring cells, created on
+        /// demand: every boundary query below needs both connectivities.
+        void ensure_facet_topology(const mesh::Mesh<double>& m)
+        {
+            const int tdim = m.topology()->dim();
+            auto topo = m.topology_mutable();
+            topo->create_entities(tdim - 1);
+            topo->create_connectivity(tdim - 1, tdim);
+            topo->create_connectivity(tdim, tdim - 1);
         }
 
         /// Integrals of one cell or exterior-facet block of the given kernel.
@@ -201,31 +218,24 @@ namespace hellofem::app {
             facets = tagged_facets(*facet_tags_, ids);
         if (facets.empty())
             return {};
-        const int tdim = mesh_->topology()->dim();
-        auto topo = mesh_->topology_mutable();
-        topo->create_entities(tdim - 1);
-        topo->create_connectivity(tdim - 1, tdim);
-        topo->create_connectivity(tdim, tdim - 1);
-        return fem::DirichletBC<double>::locate_dofs_topological(
-            *mesh_->topology(), *V_->dofmap(), tdim - 1, facets);
+        ensure_facet_topology(*mesh_);
+        return fem::DirichletBC<double>::locate_dofs_topological(*mesh_->topology(),
+            *V_->dofmap(), mesh_->topology()->dim() - 1, facets);
     }
 
     std::vector<std::int32_t> FieldSolver::boundary_facets(
         const std::set<int>& ids) const
     {
+        if (!facet_tags_)
+            return {};
+        ensure_facet_topology(*mesh_);
         const int tdim = mesh_->topology()->dim();
-        auto topo = mesh_->topology_mutable();
-        topo->create_entities(tdim - 1);
-        topo->create_connectivity(tdim, tdim - 1);
-        topo->create_connectivity(tdim - 1, tdim);
-        auto c_to_f = topo->connectivity(tdim, tdim - 1);
-        auto e_to_c = topo->connectivity(tdim - 1, tdim);
+        auto c_to_f = mesh_->topology()->connectivity(tdim, tdim - 1);
+        auto e_to_c = mesh_->topology()->connectivity(tdim - 1, tdim);
 
         // Flattened (cell, local facet) pairs; the cell-local facet index
         // comes from the (tdim, tdim-1) connectivity.
         std::vector<std::int32_t> entities;
-        if (!facet_tags_)
-            return entities;
         for (std::int32_t f : tagged_facets(*facet_tags_, ids)) {
             if (e_to_c->num_links(f) != 1) // interior facet
                 continue;
@@ -380,6 +390,16 @@ namespace hellofem::app {
         std::vector<std::reference_wrapper<const fem::DirichletBC<double>>> bref(
             bcs.begin(), bcs.end());
         fem::set_bc(x, bref, std::optional<std::span<const double>> {}, 1.0);
+    }
+
+    int FieldSolver::solve_steady(double t)
+    {
+        return solve_system(
+            [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
+                refresh(t);
+                assemble_steady(A, b);
+            },
+            *u_->x(), *pattern_, nonlinear(), /*warm_start=*/true);
     }
 
 } // namespace hellofem::app

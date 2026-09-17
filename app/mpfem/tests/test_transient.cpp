@@ -84,15 +84,7 @@ namespace {
             solver->add_temperature_bc(2, ScalarExpression(373.15));
         }
 
-        int solve()
-        {
-            return solve_system(
-                [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
-                    solver->refresh(0.0);
-                    solver->assemble_steady(A, b);
-                },
-                *solver->solution()->x(), solver->pattern(), solver->nonlinear());
-        }
+        int solve() { return solver->solve_steady(0.0); }
     };
 
 } // namespace

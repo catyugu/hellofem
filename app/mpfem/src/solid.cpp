@@ -5,7 +5,6 @@
 
 #include "kernels.h"
 #include "physics_field.h"
-#include "solver.h"
 
 #include <spdlog/spdlog.h>
 
@@ -22,8 +21,7 @@ namespace hellofem::app {
         class SolidField : public PhysicsField {
         public:
             SolidField(const Physics& physics, CaseContext& ctx)
-                : physics_(physics)
-                , solver_(std::make_shared<SolidMechanicsSolver>(
+                : solver_(std::make_shared<SolidMechanicsSolver>(
                       ctx.mesh().mesh, ctx.mesh().facet_tags, ctx.mesh().cell_tags,
                       ctx.mesh().order))
                 , variables_ {Variable {"solid.disp", "(m)",
@@ -44,7 +42,7 @@ namespace hellofem::app {
                 solver_->set_elastic(ctx.material_property("E"),
                     ctx.material_property("nu"));
 
-                for (const PhysicsFeature& feature : physics_.features)
+                for (const PhysicsFeature& feature : physics.features)
                     if (feature.type == "Fixed")
                         for (int id : feature.selection)
                             solver_->add_fixed_bc(id);
@@ -83,13 +81,7 @@ namespace hellofem::app {
 
             void solve_level(double t) override
             {
-                solve_system(
-                    [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
-                        solver_->refresh(t);
-                        solver_->assemble_steady(A, b);
-                    },
-                    *solver_->solution()->x(), solver_->pattern(),
-                    solver_->nonlinear(), /*warm_start=*/true);
+                solver_->solve_steady(t);
                 spdlog::info("solid: u solved at t = {} s", t);
             }
 
@@ -99,7 +91,6 @@ namespace hellofem::app {
             }
 
         private:
-            const Physics& physics_;
             std::shared_ptr<SolidMechanicsSolver> solver_;
             std::vector<Variable> variables_;
         };
@@ -147,8 +138,7 @@ namespace hellofem::app {
 
     bool SolidMechanicsSolver::nonlinear() const
     {
-        return solution_dependent(E_) or solution_dependent(nu_)
-            or (thermal_ and solution_dependent(thermal_->alpha));
+        return solution_dependent(E_, nu_, thermal_ ? thermal_->alpha : nullptr);
     }
 
     void SolidMechanicsSolver::assemble_steady(la::MatrixCSR<double>& A,

@@ -5,7 +5,6 @@
 
 #include "kernels.h"
 #include "physics_field.h"
-#include "solver.h"
 #include "transient.h"
 
 #include <spdlog/spdlog.h>
@@ -23,8 +22,7 @@ namespace hellofem::app {
         class HeatField : public PhysicsField {
         public:
             HeatField(const Physics& physics, CaseContext& ctx)
-                : physics_(physics)
-                , solver_(std::make_shared<HeatTransferSolver>(
+                : solver_(std::make_shared<HeatTransferSolver>(
                       ctx.mesh().mesh, ctx.mesh().facet_tags, ctx.mesh().cell_tags,
                       ctx.mesh().order))
                 , variables_ {scalar_variable("T", "(K)", solver_->solution())}
@@ -47,7 +45,7 @@ namespace hellofem::app {
                 // Volumetric heat sources on the domains of a HeatSource
                 // feature (a domain without one keeps the zero source).
                 auto source = ctx.zero_property();
-                for (const PhysicsFeature& feature : physics_.features)
+                for (const PhysicsFeature& feature : physics.features)
                     if (feature.type == "HeatSource"
                         and feature.properties.contains("Q0"))
                         for (int dom : feature.selection)
@@ -56,7 +54,7 @@ namespace hellofem::app {
 
                 // Temperature Dirichlet data (COMSOL 6.2 names the feature
                 // TemperatureBoundary).
-                for (const PhysicsFeature& feature : physics_.features)
+                for (const PhysicsFeature& feature : physics.features)
                     if ((feature.type == "TemperatureBoundary"
                             or feature.type == "Temperature")
                         and feature.properties.contains("T0"))
@@ -65,7 +63,7 @@ namespace hellofem::app {
                                 ctx.expression(feature.properties.at("T0")));
 
                 // Convective heat flux.
-                for (const PhysicsFeature& feature : physics_.features) {
+                for (const PhysicsFeature& feature : physics.features) {
                     if (feature.type != "HeatFluxBoundary")
                         continue;
                     const auto& props = feature.properties;
@@ -84,7 +82,7 @@ namespace hellofem::app {
                 }
 
                 // Initial values of a transient study ("Tinit").
-                for (const PhysicsFeature& feature : physics_.features)
+                for (const PhysicsFeature& feature : physics.features)
                     if (feature.properties.contains("Tinit"))
                         solver_->set_initial_temperature(
                             ctx.expression(feature.properties.at("Tinit")));
@@ -137,13 +135,7 @@ namespace hellofem::app {
                     stepper_->step(t);
                     return;
                 }
-                solve_system(
-                    [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
-                        solver_->refresh(t);
-                        solver_->assemble_steady(A, b);
-                    },
-                    *solver_->solution()->x(), solver_->pattern(),
-                    solver_->nonlinear(), /*warm_start=*/true);
+                solver_->solve_steady(t);
                 spdlog::info("heat: T solved at t = {} s", t);
             }
 
@@ -153,7 +145,6 @@ namespace hellofem::app {
             }
 
         private:
-            const Physics& physics_;
             std::shared_ptr<HeatTransferSolver> solver_;
             std::unique_ptr<TimeStepper> stepper_;
             std::vector<Variable> variables_;
@@ -209,8 +200,7 @@ namespace hellofem::app {
 
     bool HeatTransferSolver::nonlinear() const
     {
-        return solution_dependent(k_) or solution_dependent(rho_cp_)
-            or solution_dependent(Q_) or solution_dependent(joule_sigma_);
+        return solution_dependent(k_, rho_cp_, Q_, joule_sigma_);
     }
 
     void HeatTransferSolver::constrain_solution(double t)

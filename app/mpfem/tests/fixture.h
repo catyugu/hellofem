@@ -7,7 +7,6 @@
 #include "mesh/MeshTags.h"
 #include "mesh/generation.h"
 #include "mesh/utils.h"
-#include "solver.h"
 
 #include <array>
 #include <memory>
@@ -106,17 +105,6 @@ namespace hellofem::app::test {
         property->set_expression(1, std::to_string(value));
         property->update(0.0); // values are otherwise written on refresh
         return property;
-    }
-
-    /// Assemble and solve a field solver's steady system at time `t`.
-    inline void solve_steady(FieldSolver& solver, double t = 0.0)
-    {
-        solver.refresh(t);
-        la::MatrixCSR<double> A(solver.pattern());
-        la::Vector<double> b(solver.space()->dofmap()->index_map,
-            solver.space()->dofmap()->index_map_bs());
-        solver.assemble_steady(A, b);
-        solve_linear(A, *solver.solution()->x(), b);
     }
 
 } // namespace hellofem::app::test

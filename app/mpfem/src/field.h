@@ -28,6 +28,13 @@ namespace hellofem::app {
     /// physics it belongs to has to be linearized and iterated.
     bool solution_dependent(const std::shared_ptr<CellProperty>& property);
 
+    /// Whether any of the given material properties reads the solution.
+    template <class... Properties>
+    bool solution_dependent(const Properties&... properties)
+    {
+        return (... or solution_dependent(properties));
+    }
+
     /// Base for a single-physics field solver: owns the function space, the
     /// solution, the sparsity pattern of the linearized system and the mesh
     /// topology queries the physics needs.
@@ -53,6 +60,13 @@ namespace hellofem::app {
         /// state, with the Dirichlet conditions imposed.
         virtual void assemble_steady(la::MatrixCSR<double>& A,
             la::Vector<double>& b) const = 0;
+
+        /// Solve the steady system at time `t`, starting from the current
+        /// solution (the previous level, or the previous linearization — both
+        /// are good initial guesses). A solution-dependent material law makes
+        /// the system nonlinear, and the solve iterates it to convergence.
+        /// @return Iterations used (0 for the single solve of a linear one).
+        int solve_steady(double t);
 
         /// Impose the Dirichlet data of time `t` on the current solution. A
         /// state that is not the result of a solve (the initial one of a
