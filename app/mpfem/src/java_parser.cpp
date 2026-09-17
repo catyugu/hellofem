@@ -2,13 +2,17 @@
 // SPDX-License-Identifier: MIT
 
 #include "java_parser.h"
+
+#include "Expression.h"
 #include "units.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 
 namespace hellofem::app {
@@ -345,6 +349,70 @@ namespace hellofem::app {
             return parse_selection(flat);
         }
 
+        /// Split a comma-separated argument list.
+        std::vector<std::string> split_commas(const std::string& text)
+        {
+            std::vector<std::string> parts;
+            std::string current;
+            for (char c : text) {
+                if (c == ',') {
+                    parts.push_back(current);
+                    current.clear();
+                }
+                else
+                    current += c;
+            }
+            if (not current.empty())
+                parts.push_back(current);
+            return parts;
+        }
+
+        /// Evaluate a numeric model expression (a parameter reference or a
+        /// literal with an optional unit) at the model parameters.
+        double eval_value(const std::string& text,
+            const std::unordered_map<std::string, double>& params)
+        {
+            if (text.empty())
+                throw std::runtime_error("java: empty value");
+            std::unordered_map<std::string, double> vars = params;
+            std::unordered_map<std::string, double*> bound;
+            for (auto& [name, value] : vars)
+                bound[name] = &value;
+            Expression expression;
+            expression.parse(text, bound);
+            return expression.eval(0, 0, 0, 0);
+        }
+
+        /// Resolve a time list into its levels: `range(t0, dt, t1)` (a
+        /// constant step over a closed interval, as COMSOL's range) or an
+        /// explicit comma-separated list of times. Each entry is a model
+        /// expression, so it may name parameters.
+        std::vector<double> resolve_time_list(const std::string& text,
+            const std::unordered_map<std::string, double>& params)
+        {
+            std::vector<double> times;
+            const std::size_t open = text.find('(');
+            if (text.starts_with("range") and open != std::string::npos
+                and text.back() == ')') {
+                auto parts = split_commas(text.substr(open + 1, text.size() - open - 2));
+                if (parts.size() != 3)
+                    throw std::runtime_error("java: range() needs three arguments");
+                const double t0 = eval_value(parts[0], params);
+                const double dt = eval_value(parts[1], params);
+                const double t1 = eval_value(parts[2], params);
+                const double count = std::floor((t1 - t0) / dt + 1e-9);
+                if (count < 1.0 or count > 1e6)
+                    throw std::runtime_error("java: invalid time list '" + text + "'");
+                for (int i = 0; i <= static_cast<int>(count); ++i)
+                    times.push_back(t0 + i * dt);
+                return times;
+            }
+            for (const std::string& part : split_commas(text))
+                if (not part.empty())
+                    times.push_back(eval_value(part, params));
+            return times;
+        }
+
         /// Interpret one chain and update `model`.
         void interpret(const Chain& chain, ModelScript& model)
         {
@@ -527,24 +595,27 @@ namespace hellofem::app {
                 }
             }
 
-            // study().create / study(tag).create / study(tag).feature(feat).set / study(tag).run
+            // study().create / study(tag).create / study(tag).feature(feat).set
             if (c[0].method == "study") {
-                if (c[0].args.empty() and c.size() >= 3 and c[1].method == "create")
-                    return; // study creation
-                const std::string stag = c[0].args.empty() ? "" : arg_string(c[0].args[0]);
-                if (c.size() >= 3 and c[1].method == "create") {
-                    const std::string feat_type = arg_string(c[2].args[1]);
-                    if (feat_type == "Stationary")
-                        model.study.type = "Stationary";
-                    else if (feat_type == "Transient")
-                        model.study.type = "Transient";
+                if (c.size() < 2)
+                    return;
+                // study(tag).create(step, type): the study step, whose type
+                // selects the stationary or the transient driver.
+                if (c[1].method == "create") {
+                    if (c[1].args.size() < 2)
+                        return; // study().create(tag): the study itself
+                    const std::string step_type = arg_string(c[1].args[1]);
+                    if (step_type == "Stationary")
+                        model.study.transient = false;
+                    else if (step_type == "Transient")
+                        model.study.transient = true;
                     return;
                 }
                 if (c.size() >= 3 and c[1].method == "feature" and c[2].method == "set") {
                     const std::string key = arg_string(c[2].args[0]);
                     const std::string value = c[2].args.size() > 1 ? arg_string(c[2].args[1]) : "";
                     if (key == "tlist")
-                        model.study.times = {}; // parsed from the range(...) expression
+                        model.study.times_expr = value;
                     return;
                 }
                 return;
@@ -589,6 +660,14 @@ namespace hellofem::app {
         model.name = filename.stem().string();
         for (const auto& chain : chains)
             interpret(chain, model);
+        // The time list may reference parameters, so it resolves once the
+        // whole script has been read.
+        if (not model.study.times_expr.empty()) {
+            std::unordered_map<std::string, double> params;
+            for (const Parameter& p : model.parameters)
+                params[p.name] = p.si;
+            model.study.times = resolve_time_list(model.study.times_expr, params);
+        }
         return model;
     }
 

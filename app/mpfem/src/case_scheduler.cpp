@@ -3,84 +3,20 @@
 
 #include "case_scheduler.h"
 
+#include "solver.h"
+
 #include "Expression.h"
-#include "basis/element-families.h"
-#include "fem/DirichletBC.h"
-#include "fem/assembler.h"
-#include "fem/dofmapbuilder.h"
-#include "fem/precompute.h"
-#include "fem/sparsitybuild.h"
-#include "kernels.h"
-#include "la/KrylovSolver.h"
-#include "la/SparsityPattern.h"
-#include "la/Vector.h"
-#include "mesh/Topology.h"
-#include "mesh/cell_types.h"
 #include "mesh/utils.h"
-#include "nls/AndersonPicard.h"
 #include "spdlog/spdlog.h"
 
 #include <algorithm>
-#include <cmath>
 #include <fstream>
 #include <iomanip>
-#include <numeric>
 #include <set>
-#include <span>
+#include <stdexcept>
 
 namespace hellofem::app {
     namespace {
-
-        double eval_prop(const std::unordered_map<std::string, double>& params,
-            const std::string& text)
-        {
-            const std::string first = text.substr(0, text.find(' '));
-            std::unordered_map<std::string, double*> vars;
-            std::vector<double> storage;
-            storage.reserve(params.size());
-            for (const auto& [k, v] : params) {
-                storage.push_back(v);
-                vars[k] = &storage.back();
-            }
-            Expression e;
-            e.parse(first, vars);
-            return e.eval(0, 0, 0, 0);
-        }
-
-        std::set<int> domain_ids(const mesh::MeshTags<int>& cell_tags)
-        {
-            std::set<int> out;
-            for (int v : cell_tags.values())
-                out.insert(v);
-            return out;
-        }
-
-        std::optional<double> prop_on_domain(const ModelScript& m, int dom,
-            const std::unordered_map<std::string, double>& params,
-            const std::string& prop)
-        {
-            const Material* mat = m.material_on_domain(dom);
-            if (!mat)
-                return std::nullopt;
-            for (const auto& p : mat->properties)
-                if (p.name == prop)
-                    return eval_prop(params, p.value);
-            return std::nullopt;
-        }
-
-        std::shared_ptr<CellProperty> make_property(
-            const std::shared_ptr<const mesh::Mesh<double>>& mesh,
-            const std::shared_ptr<const mesh::MeshTags<int>>& cell_tags,
-            const std::unordered_map<std::string, double>& params,
-            const ModelScript& m, const std::string& prop)
-        {
-            auto cp = std::make_shared<CellProperty>(mesh, cell_tags);
-            for (int dom : domain_ids(*cell_tags)) {
-                if (auto v = prop_on_domain(m, dom, params, prop))
-                    cp->set_domain(dom, *v);
-            }
-            return cp;
-        }
 
         const char* expr_unit(const std::string& name)
         {
@@ -99,9 +35,35 @@ namespace hellofem::app {
             return "(1)";
         }
 
-        /// Locate the dofs on the given boundary facets.
+        std::set<int> domain_ids(const mesh::MeshTags<int>& cell_tags)
+        {
+            std::set<int> out;
+            for (int v : cell_tags.values())
+                out.insert(v);
+            return out;
+        }
 
-    } // anonymous namespace
+        /// The material property `name` on `material`, if it defines one.
+        const MaterialProperty* material_property(const Material& material,
+            const std::string& name)
+        {
+            for (const auto& p : material.properties)
+                if (p.name == name)
+                    return &p;
+            return nullptr;
+        }
+
+        /// A material property value as a scalar expression. COMSOL stores a
+        /// tensor-valued property as a space-separated component list; the
+        /// isotropic case uses the leading component.
+        std::string scalar_value(const MaterialProperty& property)
+        {
+            const std::size_t space = property.value.find(' ');
+            return space == std::string::npos ? property.value
+                                              : property.value.substr(0, space);
+        }
+
+    } // namespace
 
     // =========================================================================
     // CaseScheduler
@@ -119,263 +81,338 @@ namespace hellofem::app {
             params_[p.name] = p.si;
     }
 
-    void CaseScheduler::run()
+    void CaseScheduler::set_time_scheme(std::string_view name)
     {
-        solve_electric();
-        solve_heat();
-        solve_solid();
+        scheme_name_ = std::string(name);
+    }
+
+    ScalarExpression CaseScheduler::expr(std::string_view text) const
+    {
+        return ScalarExpression(text, params_);
     }
 
     // -------------------------------------------------------------------------
-    // Electric currents
+    // Model binding
     // -------------------------------------------------------------------------
 
-    void CaseScheduler::solve_electric()
+    std::shared_ptr<CellProperty> CaseScheduler::make_property(
+        const std::string& name)
     {
-        if (!model_.physics_by_type("ConductiveMedia"))
-            return;
+        auto property = std::make_shared<CellProperty>(mesh_, cell_tags_, params_);
+        // A material expression may read the solution: bind the fields first,
+        // so a field symbol shadows a parameter of the same name.
+        if (T_)
+            property->bind_field("T", T_);
+        if (V_)
+            property->bind_field("V", V_);
+        for (int dom : domain_ids(*cell_tags_))
+            if (const Material* material = model_.material_on_domain(dom))
+                if (const MaterialProperty* p = material_property(*material, name))
+                    property->set_expression(dom, scalar_value(*p));
+        return property;
+    }
 
-        es_ = std::make_shared<ElectrostaticsSolver>(
-            mesh_, facet_tags_, cell_tags_, order_);
-
-        auto sigma = make_property(mesh_, cell_tags_, params_, model_,
-            "electricconductivity");
-        ht_sigma_ = sigma;
-        es_->set_conductivity(sigma);
-
-        for (const auto* f : model_.features("Terminal")) {
-            if (f->properties.contains("V0")) {
-                const double v0 = eval_prop(params_, f->properties.at("V0"));
-                for (int id : f->selection)
-                    es_->add_voltage_bc(id, v0);
-            }
+    std::shared_ptr<CellProperty> CaseScheduler::make_thermal_mass()
+    {
+        // The transient heat operator needs the product of the two material
+        // properties (COMSOL's volumetric heat capacity).
+        auto property = std::make_shared<CellProperty>(mesh_, cell_tags_, params_);
+        if (T_)
+            property->bind_field("T", T_);
+        for (int dom : domain_ids(*cell_tags_)) {
+            const Material* material = model_.material_on_domain(dom);
+            if (!material)
+                continue;
+            const MaterialProperty* density = material_property(*material, "density");
+            const MaterialProperty* cp = material_property(*material, "heatcapacity");
+            if (density and cp)
+                property->set_expression(dom,
+                    "(" + scalar_value(*density) + ")*(" + scalar_value(*cp) + ")");
         }
+        return property;
+    }
+
+    std::shared_ptr<CellProperty> CaseScheduler::make_boundary_property(
+        std::string_view text)
+    {
+        // A boundary coefficient is one expression on every cell (the facet
+        // kernels read the coefficient of the adjacent cell).
+        auto property = std::make_shared<CellProperty>(mesh_, cell_tags_, params_);
+        if (T_)
+            property->bind_field("T", T_);
+        for (int dom : domain_ids(*cell_tags_))
+            property->set_expression(dom, text);
+        return property;
+    }
+
+    void CaseScheduler::bind_electric()
+    {
+        if (not model_.physics_by_type("ConductiveMedia"))
+            return;
+        es_ = std::make_shared<ElectrostaticsSolver>(mesh_, facet_tags_,
+            cell_tags_, order_);
+        V_ = es_->solution();
+        sigma_ = make_property("electricconductivity");
+        es_->set_conductivity(sigma_);
+
+        for (const auto* f : model_.features("Terminal"))
+            if (f->properties.contains("V0"))
+                for (int id : f->selection)
+                    es_->add_voltage_bc(id, expr(f->properties.at("V0")));
         for (const auto* f : model_.features("Ground"))
             for (int id : f->selection)
-                es_->add_voltage_bc(id, 0.0);
-
-        es_->solve_steady();
-        V_ = es_->solution();
-        spdlog::info("electric: V solved");
+                es_->add_voltage_bc(id, ScalarExpression(0.0));
+        spdlog::info("electric: bound conductive media");
     }
 
-    // -------------------------------------------------------------------------
-    // Heat transfer
-    // -------------------------------------------------------------------------
-
-    void CaseScheduler::solve_heat()
+    void CaseScheduler::bind_heat()
     {
-        if (!model_.physics_by_type("HeatTransfer"))
+        const Physics* heat = model_.physics_by_type("HeatTransfer");
+        if (not heat)
             return;
-
-        ht_ = std::make_shared<HeatTransferSolver>(
-            mesh_, facet_tags_, cell_tags_, order_);
-
-        ht_joule_ = V_ && std::any_of(model_.couplings.begin(), model_.couplings.end(), [](const MultiphysicsCoupling& c) {
-            return c.type == "ElectromagneticHeating";
-        });
-
-        // Nonlinear k(T) or constant? Check alpha_k to decide.
-        const auto* akp = model_.parameter("alpha_k");
-        if (akp) {
-            spdlog::info("heat: Picard path (k(T) nonlinear)");
-            // k(T) = k0 * (1 + alpha_k * (T - Tref))
-            const double k0val = model_.parameter("k0")->si;
-            const double akval = akp->si;
-            const double tref = model_.parameter("Tref")->si;
-
-            auto cp_k = std::make_shared<CellProperty>(mesh_, cell_tags_);
-            const std::size_t nc = static_cast<std::size_t>(
-                mesh_->topology()->index_map(mesh_->topology()->dim())->size_local());
-            for (std::size_t c = 0; c < nc; ++c)
-                (*cp_k->function()->x())[c] = k0val;
-            ht_->set_conductivity(cp_k);
-
-            fill_heat_bcs();
-            solve_heat_picard(k0val, akval, tref, cp_k);
-        }
-        else {
-            spdlog::info("heat: linear path");
-            auto cp_k = make_property(mesh_, cell_tags_, params_, model_,
-                "thermalconductivity");
-            ht_->set_conductivity(cp_k);
-            fill_heat_bcs();
-            ht_->solve_steady();
-        }
-
+        ht_ = std::make_shared<HeatTransferSolver>(mesh_, facet_tags_,
+            cell_tags_, order_);
         T_ = ht_->solution();
-        spdlog::info("heat: T solved");
-    }
+        ht_->set_conductivity(make_property("thermalconductivity"));
+        ht_->set_thermal_mass(make_thermal_mass());
 
-    void CaseScheduler::solve_heat_picard(double k0, double ak, double tref,
-        std::shared_ptr<CellProperty> cp_k)
-    {
-        const std::size_t nc = static_cast<std::size_t>(
-            mesh_->topology()->index_map(mesh_->topology()->dim())->size_local());
+        const bool joule = std::any_of(model_.couplings.begin(),
+            model_.couplings.end(), [](const MultiphysicsCoupling& c) {
+                return c.type == "ElectromagneticHeating";
+            });
+        if (joule and V_ and sigma_)
+            ht_->set_joule_source(V_, sigma_);
 
-        std::vector<std::int32_t> cells(nc);
-        std::iota(cells.begin(), cells.end(), 0);
+        // Volumetric heat sources on the domains of a HeatSource feature.
+        auto source = std::make_shared<CellProperty>(mesh_, cell_tags_, params_);
+        if (T_)
+            source->bind_field("T", T_);
+        for (const auto* f : model_.features("HeatSource"))
+            if (f->properties.contains("Q0"))
+                for (int dom : f->selection)
+                    source->set_expression(dom, f->properties.at("Q0"));
+        ht_->set_source(source);
 
-        la::SparsityPattern pattern(ht_->space()->dofmap()->index_map, 1);
-        fem::sparsitybuild::cells(pattern, std::pair {cells, cells},
-            {*ht_->space()->dofmap(), *ht_->space()->dofmap()});
-        std::vector<std::int32_t> diag(
-            ht_->space()->dofmap()->index_map->size_local());
-        std::iota(diag.begin(), diag.end(), 0);
-        pattern.insert_diagonal(std::span(diag));
-        pattern.finalize();
+        // Temperature Dirichlet data (COMSOL 6.2 names it TemperatureBoundary).
+        for (const char* type : {"TemperatureBoundary", "Temperature"})
+            for (const auto* f : model_.features(type))
+                if (f->properties.contains("T0"))
+                    for (int id : f->selection)
+                        ht_->add_temperature_bc(id, expr(f->properties.at("T0")));
 
-        auto& karr = cp_k->function()->x()->array();
-        ht_->solution()->x()->set(300.0);
-
-        nls::AndersonConfig cfg;
-        cfg.depth = 5;
-        cfg.warmup_iters = 3;
-        cfg.relative_tolerance = 1e-8;
-        cfg.absolute_tolerance = 1e-12;
-        cfg.max_iterations = 100;
-        cfg.linear_solver_type = "cg";
-        cfg.preconditioner_type = "amg";
-
-        auto result = nls::anderson_picard<double>(
-            [&](const la::Vector<double>& x)
-                -> std::pair<la::MatrixCSR<double>, la::Vector<double>> {
-                for (std::size_t c = 0; c < nc; ++c) {
-                    auto dofs = ht_->space()->dofmap()->cell_dofs(
-                        static_cast<std::int32_t>(c));
-                    double Tavg = 0;
-                    for (auto d : dofs)
-                        Tavg += x[static_cast<std::size_t>(d)];
-                    Tavg /= static_cast<double>(dofs.size());
-                    karr[c] = k0 * (1.0 + ak * (Tavg - tref));
-                }
-                la::MatrixCSR<double> A(pattern);
-                la::Vector<double> b(ht_->space()->dofmap()->index_map,
-                    ht_->space()->dofmap()->index_map_bs());
-                ht_->assemble_system(A, b);
-                return {std::move(A), std::move(b)};
-            },
-            *ht_->solution()->x(), cfg);
-
-        if (!result.converged)
-            throw std::runtime_error(
-                "CaseScheduler: Picard heat solve did not converge");
-        spdlog::info("heat (Picard): {} iterations, {} Krylov iters",
-            result.iterations, result.krylov_iterations);
-    }
-
-    void CaseScheduler::fill_heat_bcs()
-    {
-        // Joule heating source (if coupled).
-        if (ht_joule_)
-            ht_->set_joule_source(V_, ht_sigma_);
-
-        // Temperature Dirichlet BCs (COMSOL 6.2 uses "TemperatureBoundary").
-        // Check both "Temperature" (older COMSOL) and "TemperatureBoundary".
-        auto apply_temp = [&](const std::string& type) {
-            for (const auto* f : model_.features(type)) {
-                const double t0 = eval_prop(params_, f->properties.at("T0"));
-                for (int id : f->selection)
-                    ht_->add_temperature_bc(id, t0);
-            }
-        };
-        apply_temp("Temperature");
-        apply_temp("TemperatureBoundary");
-
-        // Convective heat flux BCs.
+        // Convective heat flux.
         for (const auto* f : model_.features("HeatFluxBoundary")) {
             const auto& props = f->properties;
-            const std::string type = props.contains("HeatFluxType")
-                ? props.at("HeatFluxType")
-                : "HeatFlux";
-            if (type != "ConvectiveHeatFlux")
+            if (props.contains("HeatFluxType")
+                and props.at("HeatFluxType") != "ConvectiveHeatFlux")
                 continue;
-            const double h = eval_prop(params_, props.at("h"));
-            const double tinf = props.contains("minput_temperature")
-                ? eval_prop(params_, props.at("minput_temperature"))
-                : 0.0;
+            if (not props.contains("h"))
+                continue;
+            auto h = make_boundary_property(props.at("h"));
+            auto t_inf = make_boundary_property(props.contains("minput_temperature")
+                    ? props.at("minput_temperature")
+                    : "0");
             for (int id : f->selection)
-                ht_->add_convection(id, h, tinf);
+                ht_->add_convection(id, h, t_inf);
         }
+
+        // Initial values of a transient study ("Tinit").
+        for (const auto& feature : heat->features)
+            if (feature.properties.contains("Tinit"))
+                ht_->set_initial_temperature(expr(feature.properties.at("Tinit")));
+        spdlog::info("heat: bound heat transfer");
     }
 
-    // -------------------------------------------------------------------------
-    // Solid mechanics
-    // -------------------------------------------------------------------------
-
-    void CaseScheduler::solve_solid()
+    void CaseScheduler::bind_solid()
     {
-        if (!model_.physics_by_type("SolidMechanics"))
+        if (not model_.physics_by_type("SolidMechanics"))
             return;
+        sm_ = std::make_shared<SolidMechanicsSolver>(mesh_, facet_tags_,
+            cell_tags_, order_);
+        u_ = sm_->solution();
+        sm_->set_elastic(make_property("E"), make_property("nu"));
 
-        sm_ = std::make_shared<SolidMechanicsSolver>(
-            mesh_, facet_tags_, cell_tags_, order_);
-
-        sm_->set_elastic(
-            make_property(mesh_, cell_tags_, params_, model_, "E"),
-            make_property(mesh_, cell_tags_, params_, model_, "nu"));
-
-        if (T_) {
+        if (T_)
             for (const auto& c : model_.couplings)
                 if (c.type == "ThermalExpansion") {
-                    double tref = 293.15;
+                    // COMSOL's heat-transfer reference temperature default.
+                    double t_ref = 293.15;
                     if (c.properties.contains("minput_strainreferencetemperature"))
-                        tref = eval_prop(params_,
-                            c.properties.at("minput_strainreferencetemperature"));
-                    auto alpha = make_property(mesh_, cell_tags_, params_, model_,
-                        "thermalexpansioncoefficient");
-                    sm_->set_thermal_expansion(T_, alpha, tref);
+                        t_ref = expr(c.properties.at("minput_strainreferencetemperature"))
+                                    .eval(0, 0, 0, 0);
+                    sm_->set_thermal_expansion(T_,
+                        make_property("thermalexpansioncoefficient"), t_ref);
                 }
-        }
 
         for (const auto* f : model_.features("Fixed"))
             for (int id : f->selection)
                 sm_->add_fixed_bc(id);
+        spdlog::info("solid: bound solid mechanics");
+    }
 
-        sm_->solve_steady();
-        u_ = sm_->solution();
-        spdlog::info("solid: u solved");
+    // -------------------------------------------------------------------------
+    // Time levels
+    // -------------------------------------------------------------------------
+
+    void CaseScheduler::solve_electric(double t)
+    {
+        if (not es_)
+            return;
+        solve_system(
+            [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
+                es_->refresh(t);
+                es_->assemble_steady(A, b);
+            },
+            *V_->x(), es_->pattern(), es_->nonlinear());
+        spdlog::info("electric: V solved at t = {} s", t);
+    }
+
+    void CaseScheduler::solve_heat(double t)
+    {
+        if (not ht_)
+            return;
+        solve_system(
+            [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
+                ht_->refresh(t);
+                ht_->assemble_steady(A, b);
+            },
+            *T_->x(), ht_->pattern(), ht_->nonlinear());
+        spdlog::info("heat: T solved at t = {} s", t);
+    }
+
+    void CaseScheduler::solve_solid(double t)
+    {
+        if (not sm_)
+            return;
+        solve_system(
+            [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
+                sm_->refresh(t);
+                sm_->assemble_steady(A, b);
+            },
+            *u_->x(), sm_->pattern(), sm_->nonlinear());
+        spdlog::info("solid: u solved at t = {} s", t);
+    }
+
+    void CaseScheduler::run()
+    {
+        bind_electric();
+        bind_heat();
+        bind_solid();
+        if (model_.study.transient)
+            run_transient();
+        else
+            run_stationary();
+    }
+
+    void CaseScheduler::run_stationary()
+    {
+        solve_electric(0.0);
+        solve_heat(0.0);
+        solve_solid(0.0);
+        record(0.0);
+    }
+
+    void CaseScheduler::run_transient()
+    {
+        const auto& times = model_.study.times;
+        if (times.size() < 2)
+            throw std::runtime_error(
+                "CaseScheduler: a transient study needs at least two output times");
+        if (ht_)
+            stepper_ = std::make_unique<HeatTimeStepper>(ht_,
+                make_time_scheme(scheme_name_));
+        if (stepper_)
+            spdlog::info("transient: {} output times, scheme '{}' (order {})",
+                times.size(), stepper_->scheme().name(),
+                stepper_->scheme().order());
+
+        // Initial state: the initial values of the heat equation (the
+        // evolutionary field) and the solution of the algebraic, quasi-static
+        // fields at t0, which the constraints alone do not determine.
+        const double t0 = times.front();
+        if (ht_)
+            ht_->apply_initial_condition();
+        FieldSolver* fields[] = {es_.get(), ht_.get(), sm_.get()};
+        for (FieldSolver* field : fields)
+            if (field)
+                field->constrain_solution(t0);
+        solve_electric(t0);
+        solve_solid(t0);
+        if (stepper_)
+            stepper_->start(t0);
+        record(t0);
+
+        for (std::size_t i = 1; i < times.size(); ++i) {
+            solve_electric(times[i]);
+            if (stepper_)
+                stepper_->step(times[i]);
+            solve_solid(times[i]);
+            record(times[i]);
+        }
     }
 
     // -------------------------------------------------------------------------
     // Result export
     // -------------------------------------------------------------------------
 
-    void CaseScheduler::export_result(const std::string& path) const
+    std::vector<double> CaseScheduler::evaluate_columns() const
     {
         auto [vc, vshape] = mesh::compute_vertex_coords(*mesh_);
         const std::size_t nv = vshape[1];
         const std::size_t nk = model_.export_config.expressions.size();
-        const std::array<std::size_t, 2> xshape {nv, 3};
+        const std::array<std::size_t, 2> shape {nv, 3};
+        std::vector<double> columns(nv * nk, 0.0);
+
+        // The vertex coordinates are component-major; the evaluator wants
+        // point-major rows.
         std::vector<double> pts(nv * 3);
         for (std::size_t i = 0; i < nv; ++i)
             for (int q = 0; q < 3; ++q)
-                pts[i * 3 + q] = vc[q * nv + i];
+                pts[i * 3 + static_cast<std::size_t>(q)] = vc[q * nv + i];
 
-        std::vector<double> cols(nv * nk, 0.0);
         for (std::size_t k = 0; k < nk; ++k) {
             const std::string& name = model_.export_config.expressions[k];
-            if (name == "V" && V_) {
-                auto [ev, eshape] = V_->eval(pts, xshape);
+            if (name == "V" and V_) {
+                auto [values, vshadow] = V_->eval(pts, shape);
                 for (std::size_t i = 0; i < nv; ++i)
-                    cols[i * nk + k] = ev[i];
+                    columns[i * nk + k] = values[i];
             }
-            else if (name == "T" && T_) {
-                auto [ev, eshape] = T_->eval(pts, xshape);
+            else if (name == "T" and T_) {
+                auto [values, vshadow] = T_->eval(pts, shape);
                 for (std::size_t i = 0; i < nv; ++i)
-                    cols[i * nk + k] = ev[i];
+                    columns[i * nk + k] = values[i];
             }
-            else if (name == "solid.disp" && u_) {
-                auto [ev, eshape] = u_->eval(pts, xshape);
+            else if (name == "solid.disp" and u_) {
+                auto [values, vshadow] = u_->eval(pts, shape);
                 for (std::size_t i = 0; i < nv; ++i)
-                    cols[i * nk + k] = std::sqrt(ev[3 * i] * ev[3 * i]
-                        + ev[3 * i + 1] * ev[3 * i + 1]
-                        + ev[3 * i + 2] * ev[3 * i + 2]);
+                    columns[i * nk + k] = std::sqrt(values[3 * i] * values[3 * i]
+                        + values[3 * i + 1] * values[3 * i + 1]
+                        + values[3 * i + 2] * values[3 * i + 2]);
             }
             else {
                 spdlog::warn("export '{}' not supported; writes 0", name);
             }
         }
+        return columns;
+    }
+
+    void CaseScheduler::record(double t)
+    {
+        Snapshot snapshot;
+        snapshot.time = t;
+        snapshot.columns = evaluate_columns();
+        snapshots_.push_back(std::move(snapshot));
+    }
+
+    void CaseScheduler::export_result(const std::string& path) const
+    {
+        auto [vc, vshape] = mesh::compute_vertex_coords(*mesh_);
+        const std::size_t nv = vshape[1];
+        const std::size_t nk = model_.export_config.expressions.size();
+        const std::size_t nt = snapshots_.size();
+        if (nt == 0)
+            throw std::runtime_error("CaseScheduler: no result to export");
+        const bool per_time = model_.study.transient;
 
         std::ofstream out(path);
         if (!out)
@@ -385,20 +422,26 @@ namespace hellofem::app {
         out << "% Version:            COMSOL 6.2.0.290\n";
         out << "% Dimension:          3\n";
         out << "% Nodes:              " << nv << "\n";
-        out << "% Expressions:        " << nk << "\n";
+        out << "% Expressions:        " << nk * nt << "\n";
         out << "% Description:        ";
         for (std::size_t k = 0; k < nk; ++k)
             out << (k ? ", " : "") << model_.export_config.expressions[k];
         out << "\n% Length unit:        m\n";
         out << "% x                       y                        z                        ";
-        for (std::size_t k = 0; k < nk; ++k)
-            out << model_.export_config.expressions[k] << " "
-                << expr_unit(model_.export_config.expressions[k]) << "  ";
+        for (const Snapshot& snapshot : snapshots_)
+            for (std::size_t k = 0; k < nk; ++k) {
+                out << model_.export_config.expressions[k] << " "
+                    << expr_unit(model_.export_config.expressions[k]);
+                if (per_time)
+                    out << " @ t=" << snapshot.time;
+                out << "  ";
+            }
         out << "\n";
         for (std::size_t i = 0; i < nv; ++i) {
             out << vc[0 * nv + i] << "  " << vc[1 * nv + i] << "  " << vc[2 * nv + i];
-            for (std::size_t k = 0; k < nk; ++k)
-                out << "  " << cols[i * nk + k];
+            for (const Snapshot& snapshot : snapshots_)
+                for (std::size_t k = 0; k < nk; ++k)
+                    out << "  " << snapshot.columns[i * nk + k];
             out << "\n";
         }
     }

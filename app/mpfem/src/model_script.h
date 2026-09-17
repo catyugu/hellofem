@@ -55,8 +55,13 @@ namespace hellofem::app {
 
     /// Study configuration.
     struct StudyConfig {
-        std::string type = "Stationary"; // "Stationary" | "Transient"
-        std::vector<double> times; // transient output times (tlist)
+        /// Time-dependent study (a stationary one otherwise).
+        bool transient = false;
+        /// Output times of a transient study, resolved from `tlist`.
+        std::vector<double> times;
+        /// Raw `tlist` expression, resolved into `times` once every model
+        /// parameter is known.
+        std::string times_expr;
         int mesh_refine = 2; // autoMeshSize hint
     };
 

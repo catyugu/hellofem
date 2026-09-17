@@ -64,6 +64,11 @@ namespace hellofem::nls {
         double krylov_atol = 1e-14;
         int krylov_max_iter = 1000;
 
+        /// Seed the inner linear solve with the current iterate. The
+        /// linearization changes slowly between iterations, so this cuts
+        /// the Krylov work; it does not affect the converged iterate.
+        bool warm_start_linear_solve = false;
+
         /// Called after each inner linear solve, before the mixing step
         /// (e.g. to apply Dirichlet lifting or update auxiliary state).
         std::function<void()> post_linear_solve = [] { };
@@ -280,11 +285,16 @@ namespace hellofem::nls {
             }
 
             // G(x) = solve(A, b). The Krylov solver starts from a zero
-            // initial guess (set_initial_guess is false by default), so the
-            // reused vector must be cleared each solve.
-            G.set(0);
+            // initial guess unless a warm start is requested (the frozen
+            // system moves little between iterations), so a reused vector
+            // must be cleared when starting cold.
+            if (cfg.warm_start_linear_solve)
+                G = x;
+            else
+                G.set(0);
             la::KrylovSolver<T> ks;
             ks.set_operator(A); // copies; enables preconditioner synthesis
+            ks.set_initial_guess(cfg.warm_start_linear_solve);
             if (cfg.preconditioner_type != "none")
                 ks.set_preconditioner_type(cfg.preconditioner_type);
             ks.set_solver_type(cfg.linear_solver_type);

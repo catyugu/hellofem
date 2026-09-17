@@ -179,7 +179,9 @@ def _keep_clean(stmt: str) -> bool:
             # Keep only the Data result export (drop the mesh export).
             return 'export().create("data1", "Data")' in s or 'export("data1")' in s
     if s.startswith("model.study("):
-        return "create" in s
+        # Keep the study steps and their settings: the output times (tlist)
+        # of a transient step are part of the model definition.
+        return "create" in s or re.search(r"\.feature\([^)]*\)\.set\(", s) is not None
     if s.startswith("model.result()"):
         # Keep the Data export (tag "data1") statements only; drop the mesh
         # text export ("mesh1").

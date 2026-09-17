@@ -28,6 +28,7 @@ namespace hellofem::app::kernels {
     void convection_mass(double* Ae, const FacetKernelData<double>& d);
 
     // ---- Convection load (facet): Ae_i = Σ_q w detJ h Tinf φi ----
+    // Coeffs [h, Tinf]: both from d.coeffs (one block per coefficient).
     void convection_load(double* Ae, const FacetKernelData<double>& d);
 
     // ---- Linear elasticity (vector, vdim=3): Ae = Σ_q w detJ B^T C B ----

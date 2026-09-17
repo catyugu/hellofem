@@ -99,7 +99,7 @@ namespace {
         return path;
     }
 
-    const std::string sample = R"(
+    const std::string sample = R"JAVA(
 /* Clean model exported by COMSOL. */
 import com.comsol.model.*;
 import com.comsol.model.util.*;
@@ -113,6 +113,8 @@ public class sample_model {
     model.param().set("L", "9[cm]", "length");
     model.param().set("Vtot", "20[mV]", "voltage");
     model.param().set("htc", "5[W/(m^2*K)]", "convection");
+    model.param().set("dtout", "0.5[s]", "output interval");
+    model.param().set("tend", "2[s]", "end time");
 
     String comp = "comp1";
     model.component().create(comp, true);
@@ -145,8 +147,9 @@ public class sample_model {
     model.component("comp1").mesh("mesh1").run();
 
     model.study().create("std1");
-    model.study("std1").create("stat", "Stationary");
-    model.study("std1").createAutoSequences("stat");
+    model.study("std1").create("time", "Transient");
+    model.study("std1").feature("time").set("tlist", "range(0,dtout,tend)");
+    model.study("std1").createAutoSequences("time");
     model.study("std1").run();
 
     model.result().export().create("data1", "Data");
@@ -158,7 +161,7 @@ public class sample_model {
     model.save("model.mph");
   }
 }
-)";
+)JAVA";
 } // namespace
 
 TEST_CASE("parse_model_java extracts params/materials/physics", "[app][java]")
@@ -166,7 +169,7 @@ TEST_CASE("parse_model_java extracts params/materials/physics", "[app][java]")
     auto path = write_model(sample);
     auto model = parse_model_java(path);
 
-    REQUIRE(model.parameters.size() == 3);
+    REQUIRE(model.parameters.size() == 5);
     REQUIRE(model.parameters[0].name == "L");
     REQUIRE(model.parameters[0].si == Catch::Approx(0.09));
     REQUIRE(model.parameters[1].name == "Vtot");
@@ -190,7 +193,10 @@ TEST_CASE("parse_model_java extracts params/materials/physics", "[app][java]")
     REQUIRE(model.couplings.size() == 1);
     REQUIRE(model.couplings[0].type == "ElectromagneticHeating");
 
-    REQUIRE(model.study.type == "Stationary");
+    REQUIRE(model.study.transient);
+    REQUIRE(model.study.times.size() == 5);
+    REQUIRE(model.study.times[1] == Catch::Approx(0.5));
+    REQUIRE(model.study.times.back() == Catch::Approx(2.0));
     REQUIRE(model.study.mesh_refine == 2);
 
     REQUIRE(model.export_config.expressions.size() == 3);

@@ -19,33 +19,38 @@ import sys
 from pathlib import Path
 
 
-def parse_result(path: Path):
-    """Return (expressions, rows) where rows are (x, y, z, values...).
+_COLUMN_RE = re.compile(r"(\S+?)(?:\s*\(([^)]*)\))?(?:\s+@\s+t=(\S+))?(?=\s|$)")
 
-    Expression names are extracted from the COMSOL-style column-header line
-    (``% x  y  z  expr1  expr2 ...``).  The ``% Description:`` line is
-    ignored — it carries COMSOL display labels which often differ from the
-    storage names.  Fallback: ``f0, f1, ...`` when no header is found.
+
+def parse_header(line: str):
+    """Columns declared by the COMSOL-style header line.
+
+    Each column is ``name (unit)`` optionally followed by ``@ t=<time>``
+    (a stored time level of a transient export). Returns a list of
+    ``(name, unit or None, time or None)``.
     """
-    expressions = []
+    body = line.lstrip("%").strip()
+    # Drop the leading coordinate columns (x y z).
+    body = re.sub(r"^[xXyYzZ]\s+[xXyYzZ]\s+[xXyYzZ]\s*", "", body)
+    columns = []
+    for match in _COLUMN_RE.finditer(body):
+        name, unit, time = match.group(1), match.group(2), match.group(3)
+        columns.append((name, unit, float(time) if time is not None else None))
+    return columns
+
+
+def parse_result(path: Path):
+    """Return (columns, rows) where columns are header entries and rows are
+    (x, y, z, values...)."""
+    columns = []
     rows = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line:
             continue
         if line.startswith("%"):
-            # Column-header line: % x  y  z  expr1 (unit1)  expr2 (unit2) ...
-            # (COMSOL writes the coordinate names in either case).
+            # Column-header line: % x y z expr (unit) [@ t=<time>] ...
             if re.match(r"%\s*[xyzXYZ]\s+[xyzXYZ]\s+[xyzXYZ]\s", line):
-                parts = line.split()
-                # First 3 parts are '%', 'x', 'y', 'z'; the rest are
-                # alternating (name, "(unit)") pairs.
-                expr_parts = parts[4:]
-                expressions = []
-                for i in range(0, len(expr_parts), 2):
-                    if i + 1 < len(expr_parts):
-                        expressions.append(expr_parts[i])
-                    else:
-                        expressions.append(expr_parts[i])
+                columns = parse_header(line)
             continue
         parts = line.split()
         if len(parts) >= 4:
@@ -54,11 +59,9 @@ def parse_result(path: Path):
             except ValueError:
                 continue
             rows.append((nums[0], nums[1], nums[2], nums[3:]))
-    if not expressions:
-        # Fallback: generate f0, f1, ... from the number of data columns.
-        col_count = len(rows[0][3]) if rows else 0
-        expressions = [f"f{i}" for i in range(col_count)]
-    return expressions, rows
+    if not columns:
+        raise SystemExit(f"{path}: no column header found")
+    return columns, rows
 
 
 def align(ref_rows, cur_rows, coord_tol=1e-7):
@@ -117,32 +120,55 @@ def main() -> int:
                     help="max allowed Linf / max|ref| error per field")
     args = ap.parse_args()
 
-    ref_expr, ref_rows = parse_result(args.reference)
-    cur_expr, cur_rows = parse_result(args.current)
+    ref_cols, ref_rows = parse_result(args.reference)
+    cur_cols, cur_rows = parse_result(args.current)
     if len(ref_rows) != len(cur_rows):
         raise SystemExit(f"point count mismatch: ref={len(ref_rows)} cur={len(cur_rows)}")
-    ncol = len(ref_rows[0][3])
-    if args.fields:
-        fields = args.fields.split(",")
-        if len(fields) != ncol:
-            raise SystemExit(f"field count mismatch: --fields has {len(fields)} but data has {ncol} columns")
-    else:
-        # Use reference file's header names; fall back to f0, f1, ... if missing.
-        fields = ref_expr[:ncol] if ref_expr else [f"f{i}" for i in range(ncol)]
+    if len(ref_rows[0][3]) != len(ref_cols):
+        raise SystemExit(f"{args.reference}: header declares {len(ref_cols)} columns "
+                         f"but the data has {len(ref_rows[0][3])}")
+    if len(cur_rows[0][3]) != len(cur_cols):
+        raise SystemExit(f"{args.current}: header declares {len(cur_cols)} columns "
+                         f"but the data has {len(cur_rows[0][3])}")
+
+    def label(column):
+        name, _, time = column
+        return f"{name} @ t={time:g}" if time is not None else name
+
+    if len(ref_cols) != len(cur_cols):
+        raise SystemExit(f"column count mismatch: ref={len(ref_cols)} cur={len(cur_cols)}")
+    for i, (ref_col, cur_col) in enumerate(zip(ref_cols, cur_cols)):
+        if ref_col[0] != cur_col[0] or ref_col[2] != cur_col[2]:
+            raise SystemExit(f"column {i} mismatch: reference '{label(ref_col)}' vs "
+                             f"current '{label(cur_col)}'")
+
+    fields = args.fields.split(",") if args.fields else [label(c) for c in ref_cols]
+    if len(fields) != len(ref_cols):
+        raise SystemExit(f"field count mismatch: --fields has {len(fields)} "
+                         f"but the data has {len(ref_cols)} columns")
 
     ref_aligned, cur_aligned = align(ref_rows, cur_rows)
+
+    # Magnitude of each expression over all of its time levels. A column
+    # whose reference is pure solver noise (an identically zero field at
+    # early times, e.g. a thermal displacement before any heating) cannot be
+    # judged relatively; it passes when the absolute error is negligible
+    # against the expression's own magnitude.
+    scale = {}
+    for i, column in enumerate(ref_cols):
+        values = [r[3][i] for r in ref_aligned]
+        scale[column[0]] = max(scale.get(column[0], 0.0),
+                               max((abs(v) for v in values), default=0.0))
 
     ok = True
     print("field\tL2\tL2_rel\tmax_rel\tLinf\tLinf/max|ref|\tverdict")
     for i, name in enumerate(fields):
-        if i >= ncol:
-            print(f"{name}\t(no column)")
-            ok = False
-            continue
         ref = [r[3][i] for r in ref_aligned]
         cur = [r[3][i] for r in cur_aligned]
         l2, l2_rel, max_rel, linf, linf_scale = metrics(ref, cur)
-        pass_ = l2_rel <= args.l2_rel and linf_scale <= args.linf_rel
+        relative_ok = l2_rel <= args.l2_rel and linf_scale <= args.linf_rel
+        negligible = linf <= args.linf_rel * scale[ref_cols[i][0]]
+        pass_ = relative_ok or negligible
         ok = ok and pass_
         print(f"{name}\t{l2:.6e}\t{l2_rel:.6e}\t{max_rel:.6e}\t{linf:.6e}\t"
               f"{linf_scale:.6e}\t{'PASS' if pass_ else 'FAIL'}")

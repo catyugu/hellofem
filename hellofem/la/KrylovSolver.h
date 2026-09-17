@@ -164,6 +164,11 @@ namespace hellofem::la {
         int solve(Vector<T>& x, const Vector<T>& b, bool transpose = false) const
         {
             (void)transpose; // CG/GMRES/BiCGSTAB do not use the transpose
+            // Without a warm start the value of `x` on entry is irrelevant:
+            // its contract is to hold the solution on exit, and the
+            // iterations below accumulate into it.
+            if (not _use_initial_guess)
+                x.set(0);
             switch (_type) {
             case SolverType::cg:
                 return _cg(x, b);

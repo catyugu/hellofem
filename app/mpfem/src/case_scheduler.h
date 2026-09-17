@@ -5,57 +5,74 @@
 #include "mesh_loader.h"
 #include "model_script.h"
 #include "physics.h"
+#include "time_scheme.h"
+#include "transient.h"
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
 
 namespace hellofem::app {
 
-    /// High-level dispatcher that reads a model script + mesh, selects
-    /// solver strategies for each physics field, drives the solve sequence
-    /// (including nonlinear iterations and multiphysics coupling), and
-    /// exports results in COMSOL-compatible format.
-    ///
-    /// Usage:
-    ///   CaseScheduler sched(model_script, loaded_mesh);
-    ///   sched.run();
-    ///   sched.export_result("result.txt");
+    /// Drives a parsed COMSOL model over a loaded mesh: binds the physics of
+    /// the model's study (materials, boundary conditions, multiphysics
+    /// couplings), solves it — a stationary solve, or a time stepping loop
+    /// with a time scheme for a transient study — and exports the result in
+    /// COMSOL's Data format.
     class CaseScheduler {
     public:
         CaseScheduler(const ModelScript& model, const LoadedMesh& mesh);
 
-        /// Run the full solve sequence:
-        ///   1. Electric currents -> V (if ConductiveMedia present)
-        ///   2. Heat transfer   -> T (if HeatTransfer present; Picard if alpha_k)
-        ///   3. Solid mechanics -> u (if SolidMechanics present)
+        /// Time stepping scheme of a transient study. Default "bdf2".
+        void set_time_scheme(std::string_view name);
+
+        /// Run the study.
         void run();
 
-        /// The solved fields (nullptr if not solved).
+        /// Final solution of each field (nullptr when the model has no such
+        /// physics).
         std::shared_ptr<fem::Function<double>> V() const { return V_; }
         std::shared_ptr<fem::Function<double>> T() const { return T_; }
         std::shared_ptr<fem::Function<double>> u() const { return u_; }
 
-        /// Write a COMSOL-style Data export file.
+        /// Write a COMSOL-style Data export: one column per model
+        /// expression, and one column group per stored time level for a
+        /// transient study.
         void export_result(const std::string& path) const;
 
-        /// Access the loaded mesh.
         std::shared_ptr<const mesh::Mesh<double>> mesh() const { return mesh_; }
 
     private:
-        // --- Per-field solvers ---
-        void solve_electric();
-        void solve_heat();
-        void solve_solid();
+        // --- model binding (once, before the first solve) ---
+        std::shared_ptr<CellProperty> make_property(const std::string& name);
+        std::shared_ptr<CellProperty> make_thermal_mass();
+        std::shared_ptr<CellProperty> make_boundary_property(std::string_view text);
+        ScalarExpression expr(std::string_view text) const;
 
-        // --- Nonlinear heat dispatch ---
-        void solve_heat_picard(double k0, double ak, double tref,
-            std::shared_ptr<CellProperty> cp_k);
+        void bind_electric();
+        void bind_heat();
+        void bind_solid();
 
-        // --- Helpers ---
-        void fill_heat_bcs();
-        std::shared_ptr<CellProperty> make_ht_property(const std::string& prop);
+        // --- one time level ---
+        void solve_electric(double t);
+        void solve_heat(double t);
+        void solve_solid(double t);
 
-        // --- Data ---
+        void run_stationary();
+        void run_transient();
+
+        // --- result export ---
+        struct Snapshot {
+            double time = 0.0;
+            std::vector<double> columns; // expression-major, per vertex
+        };
+        std::vector<double> evaluate_columns() const;
+        void record(double t);
+
+        // --- data ---
         ModelScript model_;
         LoadedMesh lm_;
 
@@ -63,22 +80,21 @@ namespace hellofem::app {
         std::shared_ptr<const mesh::MeshTags<int>> facet_tags_;
         std::shared_ptr<const mesh::MeshTags<int>> cell_tags_;
         int order_;
-
         std::unordered_map<std::string, double> params_;
 
-        // Solver instances
         std::shared_ptr<ElectrostaticsSolver> es_;
         std::shared_ptr<HeatTransferSolver> ht_;
         std::shared_ptr<SolidMechanicsSolver> sm_;
+        std::shared_ptr<CellProperty> sigma_;
 
-        // Solved fields
         std::shared_ptr<fem::Function<double>> V_;
         std::shared_ptr<fem::Function<double>> T_;
         std::shared_ptr<fem::Function<double>> u_;
 
-        // Heat-transfer BC/coupling state
-        bool ht_joule_ = false;
-        std::shared_ptr<CellProperty> ht_sigma_;
+        // Transient state.
+        std::string scheme_name_ = "bdf2";
+        std::unique_ptr<HeatTimeStepper> stepper_;
+        std::vector<Snapshot> snapshots_;
     };
 
 } // namespace hellofem::app

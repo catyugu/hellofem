@@ -119,7 +119,8 @@ namespace hellofem::app::kernels {
         std::memset(Ae, 0, nd * sizeof(double));
         for (int q = 0; q < nq; ++q) {
             const double w = d.w[q] * d.detJ[q];
-            const double hT = d.coeffs[q]; // coeffs[0] = h*Tinf
+            // Coeffs [h, Tinf].
+            const double hT = d.coeffs[q] * d.coeffs[nq + q];
             for (int i = 0; i < nd; ++i)
                 Ae[i] += w * hT * d.phi0[q * nd + i];
         }

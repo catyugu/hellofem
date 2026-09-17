@@ -1,8 +1,9 @@
-// hellofem::app — physics solver tests: electrostatics manufactured solution
+// hellofem::app — physics solver tests: manufactured and analytic solutions
 // SPDX-License-Identifier: MIT
 
 #include "catch2/catch_approx.hpp"
 #include "catch2/catch_test_macros.hpp"
+#include "fixture.h"
 #include "mesh/generation.h"
 #include "mesh/utils.h"
 #include "physics.h"
@@ -12,118 +13,49 @@
 #include <cstdio>
 #include <numeric>
 
+namespace la = hellofem::la;
+
 using Catch::Approx;
-using hellofem::app::CellProperty;
-using hellofem::app::ElectrostaticsSolver;
-using hellofem::app::HeatTransferSolver;
-using hellofem::app::SolidMechanicsSolver;
+using namespace hellofem::app;
+using hellofem::app::test::make_box_fixture;
 
-namespace {
-
-    /// 1-based boundary id for a 3D box face by constant coordinate:
-    /// 1=x-,2=x+,3=y-,4=y+,5=z-,6=z+.
-    std::shared_ptr<hellofem::mesh::MeshTags<int>> make_boundary_tags(
-        const hellofem::mesh::Mesh<double>& mesh)
-    {
-        auto topo = mesh.topology();
-        auto c_to_v = topo->connectivity(3, 0);
-        const auto [vc, shape] = hellofem::mesh::compute_vertex_coords(mesh);
-        const std::size_t nv = shape[1];
-        auto vert = [&](std::int32_t v, int d) { return vc[d * nv + v]; };
-
-        auto topo_mut = mesh.topology_mutable();
-        topo_mut->create_entities(2);
-        topo_mut->create_connectivity(2, 3);
-        auto f_to_c = topo_mut->connectivity(2, 3);
-        auto f_to_v = topo_mut->connectivity(2, 0);
-        std::vector<std::int32_t> idx;
-        std::vector<int> vals;
-        for (std::int32_t f = 0; f < f_to_v->num_nodes(); ++f) {
-            if (f_to_c->num_links(f) != 1)
-                continue; // interior
-            auto vs = f_to_v->links(f);
-            double xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9, zmin = 1e9, zmax = -1e9;
-            for (auto v : vs) {
-                xmin = std::min(xmin, vert(v, 0));
-                xmax = std::max(xmax, vert(v, 0));
-                ymin = std::min(ymin, vert(v, 1));
-                ymax = std::max(ymax, vert(v, 1));
-                zmin = std::min(zmin, vert(v, 2));
-                zmax = std::max(zmax, vert(v, 2));
-            }
-            int id = 0;
-            if (xmin == xmax)
-                id = (xmin < 0.5) ? 1 : 2;
-            else if (ymin == ymax)
-                id = (ymin < 0.5) ? 3 : 4;
-            else
-                id = (zmin < 0.5) ? 5 : 6;
-            idx.push_back(f);
-            vals.push_back(id);
-        }
-        std::vector<std::size_t> order(idx.size());
-        std::iota(order.begin(), order.end(), 0);
-        std::ranges::sort(order, [&](std::size_t a, std::size_t b) { return idx[a] < idx[b]; });
-        std::vector<std::int32_t> sidx;
-        std::vector<int> svals;
-        for (std::size_t i = 0; i < order.size(); ++i) {
-            if (i == 0 or idx[order[i]] != idx[order[i - 1]]) {
-                sidx.push_back(idx[order[i]]);
-                svals.push_back(vals[order[i]]);
-            }
-        }
-        return std::make_shared<hellofem::mesh::MeshTags<int>>(topo_mut, 2,
-            std::move(sidx), std::move(svals), "boundary");
-    }
-
-    /// Build a 3D single-layer box mesh with the standard 6-face boundary
-    /// tags and all cells on domain 1.
-    struct Fixture {
-        std::shared_ptr<hellofem::mesh::Mesh<double>> mesh;
-        std::shared_ptr<hellofem::mesh::MeshTags<int>> boundary;
-        std::shared_ptr<hellofem::mesh::MeshTags<int>> cells;
-    };
-
-    Fixture make_box_fixture(std::array<double, 3> lo, std::array<double, 3> hi,
-        std::array<int, 3> n)
-    {
-        Fixture f;
-        f.mesh = hellofem::mesh::create_box(lo, hi, n);
-        f.boundary = make_boundary_tags(*f.mesh);
-        const std::size_t nc = f.mesh->topology()->index_map(3)->size_local();
-        std::vector<std::int32_t> cell_idx(nc);
-        std::iota(cell_idx.begin(), cell_idx.end(), 0);
-        f.cells = std::make_shared<hellofem::mesh::MeshTags<int>>(
-            f.mesh->topology(), 3, std::move(cell_idx),
-            std::vector<int>(nc, 1), "cells");
-        return f;
-    }
-
-} // namespace
-
-TEST_CASE("CellProperty fill_from respects sparse cell tags", "[app][physics]")
+TEST_CASE("CellProperty: sparse domains and field-dependent values", "[app][physics]")
 {
+    // 3x1x1 box: cell 1 belongs to domain 2, cell 2 to domain 1, cell 0 to
+    // neither (its value stays at the initial zero).
     auto mesh = hellofem::mesh::create_box(
-        std::array<double, 3> {0, 0, 0}, std::array<double, 3> {1, 1, 1},
+        std::array<double, 3> {0, 0, 0}, std::array<double, 3> {3, 1, 1},
         std::array<int, 3> {3, 1, 1});
     auto tags = std::make_shared<hellofem::mesh::MeshTags<int>>(
         mesh->topology(), 3, std::vector<std::int32_t> {1, 2},
         std::vector<int> {2, 1}, "sparse cells");
-    CellProperty property(mesh, tags);
 
-    property.fill_from([](double, double, double, double) { return 7.0; },
-        std::set<int> {2}, 0.0);
+    // A temperature field that varies along x: T = x.
+    auto fixture = make_box_fixture({0, 0, 0}, {3, 1, 1}, {3, 1, 1});
+    HeatTransferSolver ht(fixture.mesh, fixture.boundary, fixture.cells, 1);
+    auto& field = *ht.solution();
+    const auto coords = ht.space()->tabulate_dof_coordinates(false);
+    for (std::int32_t d = 0; d < ht.space()->dofmap()->index_map->size_local(); ++d)
+        field.x()->array()[static_cast<std::size_t>(d)] = coords[3 * d];
+
+    CellProperty property(mesh, tags, {});
+    property.bind_field("T", ht.solution());
+    property.set_value(2, 7.0); // domain 2: constant
+    property.set_expression(1, "2*T"); // domain 1: 2x
+    REQUIRE(property.field_dependent());
+    property.update(0.0);
 
     const auto& values = property.function()->x()->array();
     const auto& dofmap = *property.function()->function_space()->dofmap();
     auto value_on_cell = [&](std::int32_t cell) {
         return values[static_cast<std::size_t>(dofmap.cell_dofs(cell).front())];
     };
-    REQUIRE(value_on_cell(0) == Approx(0.0));
+    // Domain 2 keeps its constant.
     REQUIRE(value_on_cell(1) == Approx(7.0));
-    for (std::int32_t cell = 2;
-        cell < static_cast<std::int32_t>(dofmap.map().extent(0)); ++cell)
-        REQUIRE(value_on_cell(cell) == Approx(0.0));
+    // Domain 1 evaluates 2*T at the cell centroid (cell 2 spans x in [2,3]).
+    REQUIRE(value_on_cell(2) == Approx(5.0));
+    // Untagged cell: untouched.
+    REQUIRE(value_on_cell(0) == Approx(0.0));
 }
 
 TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[app][physics]")
@@ -131,18 +63,15 @@ TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[a
     // 1x1x1 box, single layer in z. V solves Laplace; with V=1 on x+, 0 on x-,
     // the solution is V = x (linear), sigma = 1.
     auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {4, 4, 1});
-    auto mesh = f.mesh;
-    auto tags = f.boundary;
-    auto cell_tags = f.cells;
-
-    ElectrostaticsSolver es(mesh, tags, cell_tags, 1);
-    auto sigma = std::make_shared<CellProperty>(mesh, cell_tags);
-    sigma->set_domain(1, 1.0);
+    ElectrostaticsSolver es(f.mesh, f.boundary, f.cells, 1);
+    auto sigma = std::make_shared<CellProperty>(f.mesh, f.cells,
+        std::unordered_map<std::string, double> {});
+    sigma->set_value(1, 1.0);
     es.set_conductivity(sigma);
-    es.add_voltage_bc(2, 1.0); // x+ : V=1
-    es.add_voltage_bc(1, 0.0); // x- : V=0
+    es.add_voltage_bc(2, ScalarExpression(1.0)); // x+ : V=1
+    es.add_voltage_bc(1, ScalarExpression(0.0)); // x- : V=0
 
-    es.solve_steady();
+    test::solve_steady(es);
     auto V = es.solution();
 
     // V = x at every dof coordinate.
@@ -151,9 +80,8 @@ TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[a
     double v_max = -1e9, v_min = 1e9;
     for (std::int32_t d = 0; d < es.space()->dofmap()->index_map->size_local(); ++d) {
         const double x = coords[3 * d];
-        const double exact = x;
         const double val = V->x()->array()[static_cast<std::size_t>(d)];
-        max_err = std::max(max_err, std::abs(val - exact));
+        max_err = std::max(max_err, std::abs(val - x));
         v_max = std::max(v_max, val);
         v_min = std::min(v_min, val);
     }
@@ -161,6 +89,49 @@ TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[a
     REQUIRE(max_err < 1e-10);
     REQUIRE(v_max == Catch::Approx(1.0).margin(1e-9));
     REQUIRE(v_min == Catch::Approx(0.0).margin(1e-9));
+}
+
+TEST_CASE("Electrostatics: voltage-dependent conductivity drives a nonlinear solve",
+    "[app][physics]")
+{
+    // sigma = 1 + V makes -div(sigma grad V) = 0 nonlinear: (1 + V) V' = C
+    // with V(0) = 0, V(1) = 1 gives V = sqrt(1 + 3x) - 1, whereas a single
+    // linear solve would return the linear profile x. The distance to that
+    // profile is what tells a solved nonlinearity from a skipped one.
+    auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {8, 1, 1});
+    ElectrostaticsSolver es(f.mesh, f.boundary, f.cells, 1);
+    es.add_voltage_bc(2, ScalarExpression(1.0));
+    es.add_voltage_bc(1, ScalarExpression(0.0));
+    auto sigma = std::make_shared<CellProperty>(f.mesh, f.cells,
+        std::unordered_map<std::string, double> {});
+    sigma->bind_field("V", es.solution());
+    sigma->set_expression(1, "1 + V");
+    es.set_conductivity(sigma);
+    REQUIRE(es.nonlinear());
+
+    la::MatrixCSR<double> A(es.pattern());
+    la::Vector<double> b(es.space()->dofmap()->index_map, 1);
+    solve_system(
+        [&](la::MatrixCSR<double>& mat, la::Vector<double>& rhs) {
+            es.refresh(0.0);
+            es.assemble_steady(mat, rhs);
+        },
+        *es.solution()->x(), es.pattern(), es.nonlinear());
+
+    auto coords = es.space()->tabulate_dof_coordinates(false);
+    double err_exact = 0, err_linear = 0;
+    for (std::int32_t d = 0; d < es.space()->dofmap()->index_map->size_local(); ++d) {
+        const double x = coords[3 * d];
+        const double value
+            = es.solution()->x()->array()[static_cast<std::size_t>(d)];
+        err_exact = std::max(err_exact,
+            std::abs(value - (std::sqrt(1.0 + 3.0 * x) - 1.0)));
+        err_linear = std::max(err_linear, std::abs(value - x));
+    }
+    INFO("nonlinear Laplace: err(exact) = " << err_exact
+                                            << ", err(linear profile) = " << err_linear);
+    REQUIRE(err_exact < 1e-7);
+    REQUIRE(err_linear > 0.05);
 }
 
 TEST_CASE("HeatTransfer: steady -div(k grad T)=0 with Robin convection", "[app][physics]")
@@ -171,13 +142,20 @@ TEST_CASE("HeatTransfer: steady -div(k grad T)=0 with Robin convection", "[app][
     // => b = -1/2. Hence T(x) = 1 - x/2, T(1)=0.5.
     auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {4, 4, 1});
     HeatTransferSolver ht(f.mesh, f.boundary, f.cells, 1);
-    auto k = std::make_shared<CellProperty>(f.mesh, f.cells);
-    k->set_domain(1, 1.0);
+    auto k = std::make_shared<CellProperty>(f.mesh, f.cells,
+        std::unordered_map<std::string, double> {});
+    k->set_value(1, 1.0);
+    auto h = std::make_shared<CellProperty>(f.mesh, f.cells,
+        std::unordered_map<std::string, double> {});
+    h->set_value(1, 1.0);
+    auto t_inf = std::make_shared<CellProperty>(f.mesh, f.cells,
+        std::unordered_map<std::string, double> {});
+    t_inf->set_value(1, 0.0);
     ht.set_conductivity(k);
-    ht.add_temperature_bc(1, 1.0); // x- : T=1
-    ht.add_convection(2, 1.0, 0.0); // x+ : h=1, Tinf=0
+    ht.add_temperature_bc(1, ScalarExpression(1.0)); // x- : T=1
+    ht.add_convection(2, h, t_inf); // x+ : h=1, Tinf=0
 
-    ht.solve_steady();
+    test::solve_steady(ht);
     auto T = ht.solution();
 
     auto coords = ht.space()->tabulate_dof_coordinates(false);
@@ -192,18 +170,70 @@ TEST_CASE("HeatTransfer: steady -div(k grad T)=0 with Robin convection", "[app][
     REQUIRE(max_err < 1e-8);
 }
 
+TEST_CASE("HeatTransfer: nonlinear k(T) matches the analytic steady profile", "[app][physics]")
+{
+    // Rod along x: -d/dx(k(T) dT/dx) = 0 with k = k0 (1 + a (T - Tref)).
+    // The flux is constant, so with u(T) = (T-Tref) + a (T-Tref)^2 / 2 the
+    // exact profile satisfies u(T(x)) = u(T0) + (u(T1) - u(T0)) x / L.
+    const double k0 = 45.0, a = -0.001, t_ref = 293.15;
+    const double t0 = 293.15, t1 = 373.15, length = 1.0;
+    auto u = [&](double T) {
+        return (T - t_ref) + 0.5 * a * (T - t_ref) * (T - t_ref);
+    };
+    auto exact = [&](double x) {
+        const double target = u(t0) + (u(t1) - u(t0)) * x / length;
+        // Solve (T - Tref) + a/2 (T - Tref)^2 = target for T > Tref.
+        const double b = 1.0, c = -target;
+        return t_ref + (-b + std::sqrt(b * b - 2.0 * a * c)) / a;
+    };
+
+    auto f = make_box_fixture({0, 0, 0}, {length, 0.2, 0.2}, {8, 1, 1});
+    HeatTransferSolver ht(f.mesh, f.boundary, f.cells, 1);
+    auto k = std::make_shared<CellProperty>(f.mesh, f.cells,
+        std::unordered_map<std::string, double> {
+            {"k0", k0}, {"alpha_k", a}, {"Tref", t_ref}});
+    k->bind_field("T", ht.solution());
+    k->set_expression(1, "k0*(1+alpha_k*(T-Tref))");
+    ht.set_conductivity(k);
+    ht.add_temperature_bc(1, ScalarExpression(t0));
+    ht.add_temperature_bc(2, ScalarExpression(t1));
+    REQUIRE(ht.nonlinear());
+
+    la::MatrixCSR<double> A(ht.pattern());
+    la::Vector<double> b(ht.space()->dofmap()->index_map, 1);
+    solve_system(
+        [&](la::MatrixCSR<double>& mat, la::Vector<double>& rhs) {
+            ht.refresh(0.0);
+            ht.assemble_steady(mat, rhs);
+        },
+        *ht.solution()->x(), ht.pattern(), ht.nonlinear());
+
+    auto coords = ht.space()->tabulate_dof_coordinates(false);
+    double max_err = 0;
+    for (std::int32_t d = 0; d < ht.space()->dofmap()->index_map->size_local(); ++d) {
+        const double x = coords[3 * d];
+        max_err = std::max(max_err,
+            std::abs(ht.solution()->x()->array()[static_cast<std::size_t>(d)]
+                - exact(x)));
+    }
+    INFO("nonlinear k(T) max error = " << max_err);
+    REQUIRE(max_err < 1e-3);
+}
+
 TEST_CASE("SolidMechanics: blocked assembly — no load with Fixed gives u=0", "[app][physics]")
 {
     auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {2, 2, 1});
     SolidMechanicsSolver sm(f.mesh, f.boundary, f.cells, 1);
-    auto E = std::make_shared<CellProperty>(f.mesh, f.cells);
-    E->set_domain(1, 200e9);
-    auto nu = std::make_shared<CellProperty>(f.mesh, f.cells);
-    nu->set_domain(1, 0.3);
+    auto E = std::make_shared<CellProperty>(f.mesh, f.cells,
+        std::unordered_map<std::string, double> {});
+    E->set_value(1, 200e9);
+    auto nu = std::make_shared<CellProperty>(f.mesh, f.cells,
+        std::unordered_map<std::string, double> {});
+    nu->set_value(1, 0.3);
     sm.set_elastic(E, nu);
     sm.add_fixed_bc(1); // x- face: u=v=w=0
 
-    sm.solve_steady();
+    test::solve_steady(sm);
     auto u = sm.solution();
     double max_mag = 0;
     for (double v : u->x()->array())
@@ -220,19 +250,23 @@ TEST_CASE("SolidMechanics: uniform thermal expansion of a clamped bar", "[app][p
     // the displacement is smooth and monotone.
     auto f = make_box_fixture({0, 0, 0}, {1, 0.3, 0.3}, {10, 3, 3});
     SolidMechanicsSolver sm(f.mesh, f.boundary, f.cells, 1);
-    auto E = std::make_shared<CellProperty>(f.mesh, f.cells);
-    E->set_domain(1, 200e9);
-    auto nu = std::make_shared<CellProperty>(f.mesh, f.cells);
-    nu->set_domain(1, 0.3);
-    auto alpha = std::make_shared<CellProperty>(f.mesh, f.cells);
-    alpha->set_domain(1, 1e-5);
-    auto T = std::make_shared<CellProperty>(f.mesh, f.cells);
-    T->set_domain(1, 393.15); // DT = 100 above Tref=293.15
+    auto E = std::make_shared<CellProperty>(f.mesh, f.cells,
+        std::unordered_map<std::string, double> {});
+    E->set_value(1, 200e9);
+    auto nu = std::make_shared<CellProperty>(f.mesh, f.cells,
+        std::unordered_map<std::string, double> {});
+    nu->set_value(1, 0.3);
+    auto alpha = std::make_shared<CellProperty>(f.mesh, f.cells,
+        std::unordered_map<std::string, double> {});
+    alpha->set_value(1, 1e-5);
+    auto T = std::make_shared<CellProperty>(f.mesh, f.cells,
+        std::unordered_map<std::string, double> {});
+    T->set_value(1, 393.15); // DT = 100 above Tref=293.15
     sm.set_elastic(E, nu);
     sm.set_thermal_expansion(T->function(), alpha, 293.15);
     sm.add_fixed_bc(1); // x- face clamped
 
-    sm.solve_steady();
+    test::solve_steady(sm);
     auto u = sm.solution();
     const auto& xa = u->x()->array();
 

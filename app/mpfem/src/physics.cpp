@@ -5,17 +5,12 @@
 
 #include "basis/element-families.h"
 #include "fem/CoordinateElement.h"
-#include "fem/DirichletBC.h"
-#include "fem/DofMap.h"
-#include "fem/Form.h"
 #include "fem/assembler.h"
 #include "fem/dofmapbuilder.h"
 #include "fem/facet_precompute.h"
 #include "fem/precompute.h"
 #include "fem/sparsitybuild.h"
 #include "kernels.h"
-#include "la/KrylovSolver.h"
-#include "la/SparsityPattern.h"
 #include "la/Vector.h"
 #include "mesh/Topology.h"
 #include "mesh/cell_types.h"
@@ -29,7 +24,6 @@ namespace hellofem::app {
     namespace {
 
         using B = basis::element::family;
-        using C = basis::cell::type;
         using LV = basis::element::lagrange_variant;
         using DV = basis::element::dpc_variant;
 
@@ -48,9 +42,8 @@ namespace hellofem::app {
                     : std::optional<std::vector<std::size_t>> {
                           std::vector<std::size_t> {
                               static_cast<std::size_t>(value_dim)}});
-            // The FunctionSpace dofmap is built from the ELEMENT's own dof
-            // layout so a blocked (vector) element yields a bs=3 DofMap
-            // (the coordinate layout is scalar bs=1).
+            // The dofmap is built from the ELEMENT's own dof layout so a
+            // blocked (vector) element yields a bs=3 DofMap.
             auto layout = fe->create_dof_layout();
             auto [imap, bs, dofmaps] = fem::build_dofmap_data(*mesh->topology(),
                 {layout}, nullptr);
@@ -60,159 +53,92 @@ namespace hellofem::app {
             return std::make_shared<fem::FunctionSpace<double>>(mesh, fe, dmap);
         }
 
-        std::vector<std::int32_t> all_cells(const fem::DofMap& dmap)
+        /// Zero the columns of the dofs marked in `bcmask` (indexed by
+        /// physical dof, as `DirichletBC::mark_dofs` writes it). The matrix
+        /// was assembled with the Dirichlet rows zeroed but the columns
+        /// kept, so that the known boundary values could be moved to the
+        /// right-hand side first.
+        void zero_marked_columns(la::MatrixCSR<double>& A,
+            std::span<const std::int8_t> bcmask)
         {
-            std::vector<std::int32_t> cells(dmap.map().extent(0));
-            std::iota(cells.begin(), cells.end(), 0);
-            return cells;
-        }
-
-        /// Boundary facets carrying the given 1-based COMSOL boundary id.
-        std::vector<std::int32_t> facets_by_id(
-            const std::shared_ptr<const mesh::MeshTags<int>>& tags, int id)
-        {
-            std::vector<std::int32_t> out;
-            if (!tags)
-                return out;
-            for (std::size_t i = 0; i < tags->indices().size(); ++i)
-                if (tags->values()[i] == id)
-                    out.push_back(tags->indices()[i]);
-            return out;
-        }
-
-        /// Locate the dofs on the given boundary facets (dimension tdim-1).
-        /// Ensures the facet entities and the (facet, cell) connectivities
-        /// exist (mphtxt meshes start with only the (tdim, 0) connectivity).
-        std::vector<std::int32_t> boundary_dofs(const mesh::Mesh<double>& mesh,
-            const fem::DofMap& dmap, std::span<const std::int32_t> facets)
-        {
-            if (facets.empty())
-                return {};
-            const int tdim = mesh.topology()->dim();
-            auto topo = mesh.topology_mutable();
-            topo->create_entities(tdim - 1);
-            topo->create_connectivity(tdim - 1, tdim);
-            topo->create_connectivity(tdim, tdim - 1);
-            return fem::DirichletBC<double>::locate_dofs_topological(
-                *mesh.topology(), dmap, tdim - 1, facets);
-        }
-
-        /// Flattened `(cell, local_facet)` pairs for the boundary facets with
-        /// the given ids. The cell-local facet index is read from the
-        /// `(tdim, tdim-1)` connectivity.
-        std::vector<std::int32_t> boundary_facet_entities(
-            const mesh::Mesh<double>& mesh,
-            const std::shared_ptr<const mesh::MeshTags<int>>& tags,
-            const std::set<int>& ids)
-        {
-            const int tdim = mesh.topology()->dim();
-            auto topo = mesh.topology_mutable();
-            topo->create_entities(tdim - 1);
-            topo->create_connectivity(tdim, tdim - 1);
-            topo->create_connectivity(tdim - 1, tdim);
-            auto c_to_f = topo->connectivity(tdim, tdim - 1);
-            auto e_to_c = topo->connectivity(tdim - 1, tdim);
-
-            std::vector<std::int32_t> entities;
-            if (!tags)
-                return entities;
-            for (std::size_t i = 0; i < tags->indices().size(); ++i) {
-                if (not ids.contains(tags->values()[i]))
-                    continue;
-                const std::int32_t f = tags->indices()[i];
-                // The facet belongs to exactly one cell (exterior facet).
-                if (e_to_c->num_links(f) != 1)
-                    continue;
-                const std::int32_t c = e_to_c->links(f)[0];
-                int lf = -1;
-                for (int k = 0; k < c_to_f->num_links(c); ++k)
-                    if (c_to_f->links(c)[k] == f) {
-                        lf = k;
-                        break;
-                    }
-                if (lf >= 0) {
-                    entities.push_back(c);
-                    entities.push_back(lf);
-                }
+            const auto [bs0, bs1] = A.block_size();
+            auto& vals = A.values();
+            const auto& cols = A.cols();
+            for (std::size_t j = 0; j < cols.size(); ++j) {
+                const std::size_t c = static_cast<std::size_t>(cols[j]);
+                double* block = &vals[j * static_cast<std::size_t>(bs0 * bs1)];
+                for (int i0 = 0; i0 < bs0; ++i0)
+                    for (int i1 = 0; i1 < bs1; ++i1)
+                        if (bcmask[static_cast<std::size_t>(bs1) * c
+                                + static_cast<std::size_t>(i1)])
+                            block[static_cast<std::size_t>(i0 * bs1 + i1)] = 0.0;
             }
-            return entities;
+        }
+
+        /// Impose the Dirichlet data on an assembled system: subtract the
+        /// known boundary-column contribution from the right-hand side,
+        /// zero those columns, set the diagonal and write the values, so
+        /// the boundary rows read `u = g`.
+        void impose_dirichlet(la::MatrixCSR<double>& A, la::Vector<double>& b,
+            const fem::Form<double>& a,
+            const std::vector<fem::DirichletBC<double>>& bcs)
+        {
+            if (bcs.empty())
+                return;
+            std::vector<std::reference_wrapper<const fem::DirichletBC<double>>> bref(
+                bcs.begin(), bcs.end());
+            const auto& dofmap = *a.function_spaces()[0]->dofmap();
+            const int bs = dofmap.index_map_bs();
+            std::vector<std::int8_t> marked(
+                static_cast<std::size_t>(bs) * dofmap.index_map->size_local(), 0);
+            for (const auto& bc : bcs)
+                bc.mark_dofs(marked);
+
+            // b -= A[:, bc] * g.
+            la::Vector<double> g(dofmap.index_map, bs);
+            g.set(0.0);
+            fem::set_bc(std::span(g.array()), bref,
+                std::optional<std::span<const double>> {}, 1.0);
+            la::Vector<double> lift(dofmap.index_map, bs);
+            lift.set(0.0);
+            A.mult(g, lift);
+            for (std::size_t i = 0; i < b.array().size(); ++i)
+                b.array()[i] -= lift.array()[i];
+
+            zero_marked_columns(A, marked);
+            if (bs == 1)
+                fem::set_diagonal(A.mat_set_values<1, 1>(), a, bref, 1.0);
+            else
+                fem::set_diagonal(A.mat_set_values<3, 3>(), a, bref, 1.0);
+            fem::set_bc(std::span(b.array()), bref,
+                std::optional<std::span<const double>> {}, 1.0);
+        }
+
+        /// Write the Dirichlet values of `bcs` into `x`.
+        void impose_values(std::span<double> x,
+            const std::vector<fem::DirichletBC<double>>& bcs)
+        {
+            std::vector<std::reference_wrapper<const fem::DirichletBC<double>>> bref(
+                bcs.begin(), bcs.end());
+            fem::set_bc(x, bref, std::optional<std::span<const double>> {}, 1.0);
+        }
+
+        /// One cell integral over `cells` with the given kernel and
+        /// coefficient indices into the form's coefficient list.
+        using Integrals = std::map<std::pair<fem::IntegralType, int>,
+            std::vector<fem::Form<double>::integral_data>>;
+
+        template <typename Kernel>
+        Integrals cell_integrals(Kernel&& kernel,
+            const std::vector<std::int32_t>& cells, std::vector<int> coeff_idx)
+        {
+            Integrals integrals;
+            integrals[{fem::IntegralType::cell, 0}] = {
+                {std::forward<Kernel>(kernel), cells, std::move(coeff_idx)}};
+            return integrals;
         }
 
     } // namespace
-
-    // ---------------------------------------------------------------------------
-    // CellProperty
-    // ---------------------------------------------------------------------------
-
-    CellProperty::CellProperty(std::shared_ptr<const mesh::Mesh<double>> mesh,
-        std::shared_ptr<const mesh::MeshTags<int>> cell_tags)
-        : mesh_(std::move(mesh))
-        , cell_tags_(std::move(cell_tags))
-    {
-        // DG0 space: one scalar dof per cell.
-        auto cell_type = mesh_->topology()->cell_type();
-        auto ctype = mesh::cell_type_to_basix_type(cell_type);
-        auto fe = std::make_shared<fem::FiniteElement<double>>(
-            basis::create_element<double>(B::P, ctype, 0, LV::equispaced, DV::unset,
-                true)); // discontinuous P0
-        // P0 has one dof per cell; use the element's own dof layout (not the
-        // coordinate element's P1 layout).
-        auto layout = fe->create_dof_layout();
-        auto [imap, bs, dofmaps] = fem::build_dofmap_data(*mesh_->topology(),
-            {layout}, nullptr);
-        auto dmap = std::make_shared<fem::DofMap>(layout,
-            std::make_shared<common::IndexMap>(std::move(imap)), bs,
-            std::move(dofmaps.front()), bs);
-        auto V = std::make_shared<fem::FunctionSpace<double>>(mesh_, fe, dmap);
-        f_ = std::make_shared<fem::Function<double>>(V);
-        f_->x()->set(0.0);
-    }
-
-    void CellProperty::set_domain(int dom, double value)
-    {
-        auto& arr = f_->x()->array();
-        if (cell_tags_) {
-            for (std::size_t i = 0; i < cell_tags_->indices().size(); ++i)
-                if (cell_tags_->values()[i] == dom) {
-                    const auto dofs = f_->function_space()->dofmap()->cell_dofs(
-                        cell_tags_->indices()[i]);
-                    arr[static_cast<std::size_t>(dofs.front())] = value;
-                }
-        }
-        else {
-            std::fill(arr.begin(), arr.end(), value);
-        }
-    }
-
-    void CellProperty::fill_from(std::function<double(double, double, double, double)> eval,
-        const std::set<int>& domains, double t)
-    {
-        auto c_to_v = mesh_->topology()->connectivity(mesh_->topology()->dim(), 0);
-        const auto [vc, vshape] = mesh::compute_vertex_coords(*mesh_);
-        const std::size_t nv = vshape[1];
-        auto& arr = f_->x()->array();
-        std::size_t tag = 0;
-        for (std::int32_t c = 0; c < static_cast<std::int32_t>(c_to_v->num_nodes()); ++c) {
-            if (cell_tags_ and not domains.empty()) {
-                const auto indices = cell_tags_->indices();
-                while (tag < indices.size() and indices[tag] < c)
-                    ++tag;
-                if (tag == indices.size() or indices[tag] != c
-                    or not domains.contains(cell_tags_->values()[tag]))
-                    continue;
-            }
-            auto verts = c_to_v->links(c);
-            std::array<double, 3> xc {0, 0, 0};
-            for (auto v : verts)
-                for (int d = 0; d < 3; ++d)
-                    xc[d] += vc[d * nv + v];
-            for (int d = 0; d < 3; ++d)
-                xc[d] /= static_cast<double>(verts.size());
-            const auto dofs = f_->function_space()->dofmap()->cell_dofs(c);
-            arr[static_cast<std::size_t>(dofs.front())]
-                = eval(xc[0], xc[1], xc[2], t);
-        }
-    }
 
     // ---------------------------------------------------------------------------
     // FieldSolver
@@ -230,6 +156,92 @@ namespace hellofem::app {
     {
         V_ = make_space(mesh_, order_, value_dim_);
         u_ = std::make_shared<fem::Function<double>>(V_);
+        u_->x()->set(0.0);
+
+        // Cell-based sparsity (all supported operators are cell integrals
+        // plus boundary facet integrals on shared dofs): the cell graph plus
+        // the diagonal covers every entry.
+        const auto cells = this->cells();
+        pattern_ = std::make_shared<la::SparsityPattern>(
+            V_->dofmap()->index_map, V_->dofmap()->index_map_bs());
+        fem::sparsitybuild::cells(*pattern_, std::pair {cells, cells},
+            {*V_->dofmap(), *V_->dofmap()});
+        std::vector<std::int32_t> diag(V_->dofmap()->index_map->size_local());
+        std::iota(diag.begin(), diag.end(), 0);
+        pattern_->insert_diagonal(std::span(diag));
+        pattern_->finalize();
+    }
+
+    std::vector<std::int32_t> FieldSolver::cells() const
+    {
+        std::vector<std::int32_t> cells(V_->dofmap()->map().extent(0));
+        std::iota(cells.begin(), cells.end(), 0);
+        return cells;
+    }
+
+    std::vector<std::int32_t> FieldSolver::boundary_dofs(
+        const std::set<int>& ids) const
+    {
+        std::vector<std::int32_t> facets;
+        if (facet_tags_) {
+            for (std::size_t i = 0; i < facet_tags_->indices().size(); ++i)
+                if (ids.contains(facet_tags_->values()[i]))
+                    facets.push_back(facet_tags_->indices()[i]);
+        }
+        if (facets.empty())
+            return {};
+        const int tdim = mesh_->topology()->dim();
+        auto topo = mesh_->topology_mutable();
+        topo->create_entities(tdim - 1);
+        topo->create_connectivity(tdim - 1, tdim);
+        topo->create_connectivity(tdim, tdim - 1);
+        return fem::DirichletBC<double>::locate_dofs_topological(
+            *mesh_->topology(), *V_->dofmap(), tdim - 1, facets);
+    }
+
+    std::vector<std::int32_t> FieldSolver::boundary_facets(
+        const std::set<int>& ids) const
+    {
+        const int tdim = mesh_->topology()->dim();
+        auto topo = mesh_->topology_mutable();
+        topo->create_entities(tdim - 1);
+        topo->create_connectivity(tdim, tdim - 1);
+        topo->create_connectivity(tdim - 1, tdim);
+        auto c_to_f = topo->connectivity(tdim, tdim - 1);
+        auto e_to_c = topo->connectivity(tdim - 1, tdim);
+
+        // Flattened (cell, local facet) pairs; the cell-local facet index
+        // comes from the (tdim, tdim-1) connectivity.
+        std::vector<std::int32_t> entities;
+        if (!facet_tags_)
+            return entities;
+        for (std::size_t i = 0; i < facet_tags_->indices().size(); ++i) {
+            if (not ids.contains(facet_tags_->values()[i]))
+                continue;
+            const std::int32_t f = facet_tags_->indices()[i];
+            if (e_to_c->num_links(f) != 1) // interior facet
+                continue;
+            const std::int32_t c = e_to_c->links(f)[0];
+            for (int k = 0; k < c_to_f->num_links(c); ++k)
+                if (c_to_f->links(c)[k] == f) {
+                    entities.push_back(c);
+                    entities.push_back(k);
+                    break;
+                }
+        }
+        return entities;
+    }
+
+    std::vector<fem::DirichletBC<double>> FieldSolver::make_bcs(
+        const std::map<int, ScalarExpression>& values, double t) const
+    {
+        std::vector<fem::DirichletBC<double>> bcs;
+        for (const auto& [boundary_id, value] : values) {
+            auto dofs = boundary_dofs({boundary_id});
+            if (not dofs.empty())
+                bcs.emplace_back(value.eval(0, 0, 0, t), dofs, V_);
+        }
+        return bcs;
     }
 
     // ---------------------------------------------------------------------------
@@ -245,64 +257,45 @@ namespace hellofem::app {
     {
     }
 
-    void ElectrostaticsSolver::solve_steady()
+    void ElectrostaticsSolver::refresh(double t)
     {
-        auto cells = all_cells(*V_->dofmap());
+        t_ = t;
+        if (sigma_)
+            sigma_->update(t);
+    }
+
+    void ElectrostaticsSolver::assemble_steady(la::MatrixCSR<double>& A,
+        la::Vector<double>& b) const
+    {
+        const auto cells = this->cells();
         auto coord = mesh_->geometry().cmaps().front();
+        auto bcs = make_bcs(voltages_, t_);
+
         auto pre = std::make_shared<fem::PrecomputeData<double>>(
             mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
-            std::vector<const fem::FiniteElement<double>*> {sigma_->function()->function_space()->element().get()},
+            std::vector<const fem::FiniteElement<double>*> {
+                sigma_->function()->function_space()->element().get()},
             coord, 2);
         auto kernel = fem::make_cell_kernel(*pre, kernels::diffusion_scalar);
         std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist {V_, V_};
-        std::map<std::pair<fem::IntegralType, int>, std::vector<fem::Form<double>::integral_data>> integrals;
-        integrals[{fem::IntegralType::cell, 0}] = {{kernel, cells, {0}}};
-        std::vector<std::shared_ptr<const fem::Function<double>>> coeffs {
-            std::make_shared<fem::Function<double>>(*sigma_->function())};
-        fem::Form<double> a(Vlist, std::move(integrals), mesh_, coeffs, {});
+        fem::Form<double> a(Vlist, cell_integrals(kernel, cells, {0}), mesh_,
+            std::vector<std::shared_ptr<const fem::Function<double>>> {sigma_->function()}, {});
 
-        // Sparsity pattern + matrix.
-        la::SparsityPattern pattern(V_->dofmap()->index_map, 1);
-        fem::sparsitybuild::cells(pattern, std::pair {cells, cells}, {*V_->dofmap(), *V_->dofmap()});
-        std::vector<std::int32_t> diag(V_->dofmap()->index_map->size_local());
-        std::iota(diag.begin(), diag.end(), 0);
-        pattern.insert_diagonal(std::span(diag));
-        pattern.finalize();
-        la::MatrixCSR<double> A(pattern);
+        std::vector<std::int8_t> bc_rows(
+            static_cast<std::size_t>(V_->dofmap()->index_map_bs())
+                * V_->dofmap()->index_map->size_local(),
+            0);
+        for (const auto& bc : bcs)
+            bc.mark_dofs(bc_rows);
+        fem::assemble_matrix(A.mat_add_values(), a, bc_rows, {});
 
-        // RHS: no volume source -> zero.
-        la::Vector<double> b(V_->dofmap()->index_map, V_->dofmap()->index_map_bs());
         b.set(0.0);
+        impose_dirichlet(A, b, a, bcs);
+    }
 
-        // Dirichlet BCs: one BC per voltage boundary group (each with a value).
-        std::vector<fem::DirichletBC<double>> bcs;
-        bcs.reserve(voltages_.size());
-        for (const auto& [bid, value] : voltages_) {
-            auto facets = facets_by_id(facet_tags_, bid);
-            auto dofs = boundary_dofs(*mesh_, *V_->dofmap(), facets);
-            if (!dofs.empty())
-                bcs.emplace_back(value, dofs, V_);
-        }
-
-        if (!bcs.empty()) {
-            std::vector<std::reference_wrapper<const fem::DirichletBC<double>>> bref;
-            for (auto& b : bcs)
-                bref.emplace_back(b);
-            fem::assemble_matrix(A.mat_add_values(), a, bref);
-            fem::set_diagonal(A.mat_set_values(), a, bref, 1.0);
-            fem::apply_lifting(b, a, bref, std::optional<std::span<const double>> {}, 1.0);
-            fem::set_bc(std::span(b.array()), bref, std::optional<std::span<const double>> {}, 1.0);
-        }
-        else {
-            fem::assemble_matrix(A.mat_add_values(), a, {});
-        }
-
-        la::KrylovSolver<double> solver;
-        solver.set_operator(A);
-        solver.set_solver_type("cg");
-        solver.set_preconditioner_type("amg");
-        solver.set_tolerances(1e-12, 1e-14, 2000);
-        solver.solve(*u_->x(), b);
+    void ElectrostaticsSolver::constrain_solution(double t)
+    {
+        impose_values(std::span(u_->x()->array()), make_bcs(voltages_, t));
     }
 
     // ---------------------------------------------------------------------------
@@ -318,11 +311,6 @@ namespace hellofem::app {
     {
     }
 
-    void HeatTransferSolver::add_convection(int boundary_id, double h, double Tinf)
-    {
-        convections_.push_back({boundary_id, h, Tinf});
-    }
-
     void HeatTransferSolver::set_joule_source(
         std::shared_ptr<const fem::Function<double>> V,
         std::shared_ptr<CellProperty> sigma)
@@ -331,143 +319,230 @@ namespace hellofem::app {
         joule_sigma_ = std::move(sigma);
     }
 
-    void HeatTransferSolver::solve_steady()
+    void HeatTransferSolver::refresh(double t)
     {
-        auto cells = all_cells(*V_->dofmap());
+        t_ = t;
+        if (k_)
+            k_->update(t);
+        if (rho_cp_)
+            rho_cp_->update(t);
+        if (Q_)
+            Q_->update(t);
+        if (joule_sigma_)
+            joule_sigma_->update(t);
+        for (auto& cv : convections_) {
+            cv.h->update(t);
+            cv.t_inf->update(t);
+        }
+    }
+
+    bool HeatTransferSolver::nonlinear() const
+    {
+        const auto dependent = [](const std::shared_ptr<CellProperty>& p) {
+            return p and p->field_dependent();
+        };
+        return dependent(k_) or dependent(rho_cp_) or dependent(Q_)
+            or dependent(joule_sigma_);
+    }
+
+    void HeatTransferSolver::constrain_solution(double t)
+    {
+        impose_values(std::span(u_->x()->array()), make_bcs(temps_, t));
+    }
+
+    void HeatTransferSolver::apply_initial_condition()
+    {
+        const auto coords = V_->tabulate_dof_coordinates(false);
+        auto& arr = u_->x()->array();
+        for (std::int32_t d = 0; d < V_->dofmap()->index_map->size_local(); ++d)
+            arr[static_cast<std::size_t>(d)] = initial_.eval(
+                coords[3 * d], coords[3 * d + 1], coords[3 * d + 2], 0.0);
+    }
+
+    void HeatTransferSolver::assemble_sources(la::Vector<double>& f) const
+    {
+        const auto cells = this->cells();
         auto coord = mesh_->geometry().cmaps().front();
+        std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist {V_};
 
-        // Dirichlet BCs: one BC per temperature boundary group.
-        std::vector<fem::DirichletBC<double>> bcs;
-        for (const auto& [bid, value] : temps_) {
-            auto facets = facets_by_id(facet_tags_, bid);
-            auto dofs = boundary_dofs(*mesh_, *V_->dofmap(), facets);
-            if (!dofs.empty())
-                bcs.emplace_back(value, dofs, V_);
-        }
-        std::vector<std::reference_wrapper<const fem::DirichletBC<double>>> bref;
-        for (auto& bc : bcs)
-            bref.emplace_back(bc);
-
-        // K = diffusion(k) + convection Robin mass.
-        auto pre = std::make_shared<fem::PrecomputeData<double>>(
-            mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
-            std::vector<const fem::FiniteElement<double>*> {k_->function()->function_space()->element().get()},
-            coord, 2);
-        auto kernel = fem::make_cell_kernel(*pre, kernels::diffusion_scalar);
-        std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist {V_, V_};
-        std::map<std::pair<fem::IntegralType, int>, std::vector<fem::Form<double>::integral_data>> integrals;
-        integrals[{fem::IntegralType::cell, 0}] = {{kernel, cells, {0}}};
-        std::vector<std::shared_ptr<const fem::Function<double>>> coeffs {
-            std::make_shared<fem::Function<double>>(*k_->function())};
-        fem::Form<double> a(Vlist, integrals, mesh_, coeffs, {});
-
-        // Sparsity.
-        la::SparsityPattern pattern(V_->dofmap()->index_map, 1);
-        fem::sparsitybuild::cells(pattern, std::pair {cells, cells}, {*V_->dofmap(), *V_->dofmap()});
-        std::vector<std::int32_t> diag(V_->dofmap()->index_map->size_local());
-        std::iota(diag.begin(), diag.end(), 0);
-        pattern.insert_diagonal(std::span(diag));
-        pattern.finalize();
-        la::MatrixCSR<double> A(pattern);
-
-        // Assemble diffusion (with BC zeroing) and the convection facet mass.
-        fem::assemble_matrix(A.mat_add_values(), a, bref);
-
-        // RHS: heat source + convection load.
-        la::Vector<double> b(V_->dofmap()->index_map, V_->dofmap()->index_map_bs());
-        b.set(0.0);
-
-        // Convection facet contributions to K and F.
-        mesh_->topology_mutable()->create_entities(mesh_->topology()->dim() - 1);
-        for (const auto& cv : convections_) {
-            std::set<int> ids {cv.id};
-            auto entities = boundary_facet_entities(*mesh_, facet_tags_, ids);
-            if (entities.empty())
-                continue;
-
-            // h as a DG0 cell property (constant on all cells).
-            auto h_dg0 = std::make_shared<CellProperty>(mesh_, cell_tags_);
-            h_dg0->function()->x()->set(cv.h);
-
-            // K += h * phi phi' on this boundary (with BC zeroing).
-            auto pre_conv = std::make_shared<fem::FacetPrecomputeData<double>>(
-                mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
-                std::vector<const fem::FiniteElement<double>*> {h_dg0->function()->function_space()->element().get()},
-                coord, 2);
-            auto kconv = fem::make_facet_kernel(*pre_conv, kernels::convection_mass);
-            std::map<std::pair<fem::IntegralType, int>, std::vector<fem::Form<double>::integral_data>> ints_conv;
-            ints_conv[{fem::IntegralType::exterior_facet, 0}] = {
-                {kconv, entities, {0}}};
-            std::vector<std::shared_ptr<const fem::Function<double>>> hcoeffs {
-                std::make_shared<fem::Function<double>>(*h_dg0->function())};
-            fem::Form<double> a_conv(Vlist, std::move(ints_conv), mesh_, hcoeffs, {});
-            fem::assemble_matrix(A.mat_add_values(), a_conv, bref);
-
-            // b += h*Tinf * phi on this boundary.
-            auto hT_dg0 = std::make_shared<CellProperty>(mesh_, cell_tags_);
-            hT_dg0->function()->x()->set(cv.h * cv.Tinf);
-            auto pre_cl = std::make_shared<fem::FacetPrecomputeData<double>>(
-                mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
-                std::vector<const fem::FiniteElement<double>*> {hT_dg0->function()->function_space()->element().get()},
-                coord, 2);
-            auto kcl = fem::make_facet_kernel(*pre_cl, kernels::convection_load);
-            std::map<std::pair<fem::IntegralType, int>, std::vector<fem::Form<double>::integral_data>> ints_cl;
-            ints_cl[{fem::IntegralType::exterior_facet, 0}] = {{kcl, entities, {0}}};
-            std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist1 {V_};
-            std::vector<std::shared_ptr<const fem::Function<double>>> hTcoeffs {
-                std::make_shared<fem::Function<double>>(*hT_dg0->function())};
-            fem::Form<double> L_conv(Vlist1, std::move(ints_cl), mesh_, hTcoeffs, {});
-            fem::assemble_vector(b, L_conv);
-        }
-
-        // Heat source.
         if (Q_) {
-            auto preQ = std::make_shared<fem::PrecomputeData<double>>(
+            auto pre = std::make_shared<fem::PrecomputeData<double>>(
                 mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
-                std::vector<const fem::FiniteElement<double>*> {Q_->function()->function_space()->element().get()},
+                std::vector<const fem::FiniteElement<double>*> {
+                    Q_->function()->function_space()->element().get()},
                 coord, 2);
-            auto kload = fem::make_cell_kernel(*preQ, kernels::load_scalar);
-            std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist1 {V_};
-            std::map<std::pair<fem::IntegralType, int>, std::vector<fem::Form<double>::integral_data>> ints;
-            ints[{fem::IntegralType::cell, 0}] = {{kload, cells, {0}}};
-            std::vector<std::shared_ptr<const fem::Function<double>>> qcoeffs {
-                std::make_shared<fem::Function<double>>(*Q_->function())};
-            fem::Form<double> L(Vlist1, std::move(ints), mesh_, qcoeffs, {});
-            fem::assemble_vector(b, L);
+            auto kernel = fem::make_cell_kernel(*pre, kernels::load_scalar);
+            fem::Form<double> L(Vlist, cell_integrals(kernel, cells, {0}), mesh_,
+                std::vector<std::shared_ptr<const fem::Function<double>>> {
+                    Q_->function()},
+                {});
+            fem::assemble_vector(f, L);
         }
 
-        // Joule heating source: ∫σ|∇V|² φ dx (V solution + conductivity).
+        // Joule heating: ∫ sigma |grad V|² phi.
         if (joule_V_ and joule_sigma_) {
-            auto preJ = std::make_shared<fem::PrecomputeData<double>>(
+            auto pre = std::make_shared<fem::PrecomputeData<double>>(
                 mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
                 std::vector<const fem::FiniteElement<double>*> {
                     joule_sigma_->function()->function_space()->element().get(),
                     joule_V_->function_space()->element().get()},
                 coord, 2);
-            auto kjoule = fem::make_cell_kernel(*preJ, kernels::joule_heat_load);
-            std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist1 {V_};
-            std::map<std::pair<fem::IntegralType, int>, std::vector<fem::Form<double>::integral_data>> ints;
-            ints[{fem::IntegralType::cell, 0}] = {{kjoule, cells, {0, 1}}};
-            std::vector<std::shared_ptr<const fem::Function<double>>> jcoeffs {
-                std::make_shared<fem::Function<double>>(*joule_sigma_->function()),
-                joule_V_};
-            fem::Form<double> L(Vlist1, std::move(ints), mesh_, jcoeffs, {});
-            fem::assemble_vector(b, L);
+            auto kernel = fem::make_cell_kernel(*pre, kernels::joule_heat_load);
+            fem::Form<double> L(Vlist, cell_integrals(kernel, cells, {0, 1}), mesh_,
+                std::vector<std::shared_ptr<const fem::Function<double>>> {
+                    joule_sigma_->function(), joule_V_},
+                {});
+            fem::assemble_vector(f, L);
         }
 
-        // Apply Dirichlet: diagonal, lifting, RHS injection.
-        if (!bcs.empty()) {
-            fem::set_diagonal(A.mat_set_values(), a, bref, 1.0);
-            fem::apply_lifting(b, a, bref, std::optional<std::span<const double>> {}, 1.0);
-            fem::set_bc(std::span(b.array()), bref, std::optional<std::span<const double>> {}, 1.0);
+        // Convection load h Tinf.
+        for (const auto& cv : convections_) {
+            auto entities = boundary_facets({cv.boundary_id});
+            if (entities.empty())
+                continue;
+            auto pre = std::make_shared<fem::FacetPrecomputeData<double>>(
+                mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
+                std::vector<const fem::FiniteElement<double>*> {
+                    cv.h->function()->function_space()->element().get(),
+                    cv.t_inf->function()->function_space()->element().get()},
+                coord, 2);
+            auto kernel = fem::make_facet_kernel(*pre, kernels::convection_load);
+            Integrals integrals;
+            integrals[{fem::IntegralType::exterior_facet, 0}] = {{kernel, entities, {0, 1}}};
+            fem::Form<double> L(Vlist, std::move(integrals), mesh_,
+                std::vector<std::shared_ptr<const fem::Function<double>>> {
+                    cv.h->function(), cv.t_inf->function()},
+                {});
+            fem::assemble_vector(f, L);
+        }
+    }
+
+    void HeatTransferSolver::assemble_step(la::MatrixCSR<double>& A,
+        la::Vector<double>& b, const TimeLevel& level) const
+    {
+        const TimeWeights& w = level.weights;
+        const double t = level.time;
+        const auto& history = level.history;
+        const la::Vector<double>* f_old = level.source_old;
+        la::Vector<double>& f_new = *level.source_new;
+        const auto cells = this->cells();
+        auto coord = mesh_->geometry().cmaps().front();
+        const auto& dofmap = *V_->dofmap();
+        const int bs = dofmap.index_map_bs();
+        const bool has_mass = w.a[0] != 0.0;
+
+        auto bcs = make_bcs(temps_, t);
+        std::vector<std::int8_t> bc_rows(
+            static_cast<std::size_t>(bs) * dofmap.index_map->size_local(), 0);
+        for (const auto& bc : bcs)
+            bc.mark_dofs(bc_rows);
+
+        // Operators, assembled with the Dirichlet rows zeroed and their
+        // columns kept (the boundary values move to the right-hand side in
+        // impose_dirichlet).
+        la::MatrixCSR<double> M(*pattern_);
+        la::MatrixCSR<double> K(*pattern_);
+
+        std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist {V_, V_};
+        if (has_mass) {
+            auto pre = std::make_shared<fem::PrecomputeData<double>>(
+                mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
+                std::vector<const fem::FiniteElement<double>*> {
+                    rho_cp_->function()->function_space()->element().get()},
+                coord, 2);
+            auto kernel = fem::make_cell_kernel(*pre, kernels::mass_scalar);
+            fem::Form<double> a_m(Vlist, cell_integrals(kernel, cells, {0}), mesh_,
+                std::vector<std::shared_ptr<const fem::Function<double>>> {
+                    rho_cp_->function()},
+                {});
+            fem::assemble_matrix(M.mat_add_values(), a_m, bc_rows, {});
         }
 
-        la::KrylovSolver<double> solver;
-        solver.set_operator(A);
-        solver.set_solver_type("cg");
-        solver.set_preconditioner_type("amg");
-        solver.set_tolerances(1e-12, 1e-14, 2000);
-        solver.solve(*u_->x(), b);
+        auto pre_k = std::make_shared<fem::PrecomputeData<double>>(
+            mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
+            std::vector<const fem::FiniteElement<double>*> {
+                k_->function()->function_space()->element().get()},
+            coord, 2);
+        auto kernel = fem::make_cell_kernel(*pre_k, kernels::diffusion_scalar);
+        fem::Form<double> a_k(Vlist, cell_integrals(kernel, cells, {0}), mesh_,
+            std::vector<std::shared_ptr<const fem::Function<double>>> {k_->function()},
+            {});
+        fem::assemble_matrix(K.mat_add_values(), a_k, bc_rows, {});
+
+        // Convection Robin mass.
+        for (const auto& cv : convections_) {
+            auto entities = boundary_facets({cv.boundary_id});
+            if (entities.empty())
+                continue;
+            auto pre = std::make_shared<fem::FacetPrecomputeData<double>>(
+                mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
+                std::vector<const fem::FiniteElement<double>*> {
+                    cv.h->function()->function_space()->element().get()},
+                coord, 2);
+            auto kconv = fem::make_facet_kernel(*pre, kernels::convection_mass);
+            Integrals integrals;
+            integrals[{fem::IntegralType::exterior_facet, 0}] = {{kconv, entities, {0}}};
+            fem::Form<double> a_conv(Vlist, std::move(integrals), mesh_,
+                std::vector<std::shared_ptr<const fem::Function<double>>> {
+                    cv.h->function()},
+                {});
+            fem::assemble_matrix(K.mat_add_values(), a_conv, bc_rows, {});
+        }
+
+        // LHS operator: a0 M + b0 K.
+        auto& av = A.values();
+        if (has_mass)
+            for (std::size_t i = 0; i < av.size(); ++i)
+                av[i] = w.a[0] * M.values()[i] + w.b[0] * K.values()[i];
+        else
+            for (std::size_t i = 0; i < av.size(); ++i)
+                av[i] = w.b[0] * K.values()[i];
+
+        // Source load of this level.
+        f_new.set(0.0);
+        assemble_sources(f_new);
+        b.set(0.0);
+        for (std::size_t i = 0; i < b.array().size(); ++i)
+            b.array()[i] = w.c_new * f_new.array()[i]
+                + (w.c_old != 0.0 and f_old ? w.c_old * f_old->array()[i] : 0.0);
+
+        // History: b -= (a_k M + b_k K) u^{n+1-k}.
+        la::Vector<double> y(dofmap.index_map, bs);
+        for (std::size_t k = 1; k < w.a.size(); ++k) {
+            if (k > history.size() or history[k - 1] == nullptr)
+                break;
+            const la::Vector<double>& u_k = *history[k - 1];
+            if (w.a[k] != 0.0 and has_mass) {
+                y.set(0.0);
+                M.mult(u_k, y);
+                for (std::size_t i = 0; i < b.array().size(); ++i)
+                    b.array()[i] -= w.a[k] * y.array()[i];
+            }
+            if (w.b[k] != 0.0) {
+                y.set(0.0);
+                K.mult(u_k, y);
+                for (std::size_t i = 0; i < b.array().size(); ++i)
+                    b.array()[i] -= w.b[k] * y.array()[i];
+            }
+        }
+
+        impose_dirichlet(A, b, a_k, bcs);
+    }
+
+    void HeatTransferSolver::assemble_steady(la::MatrixCSR<double>& A,
+        la::Vector<double>& b) const
+    {
+        // The steady problem is the degenerate one-level scheme: K u = f.
+        TimeWeights weights;
+        weights.a = {0.0};
+        weights.b = {1.0};
+        la::Vector<double> f_new(V_->dofmap()->index_map,
+            V_->dofmap()->index_map_bs());
+        TimeLevel level;
+        level.weights = weights;
+        level.time = t_;
+        level.source_new = &f_new;
+        assemble_step(A, b, level);
     }
 
     // ---------------------------------------------------------------------------
@@ -485,50 +560,62 @@ namespace hellofem::app {
 
     void SolidMechanicsSolver::set_thermal_expansion(
         std::shared_ptr<const fem::Function<double>> T,
-        std::shared_ptr<CellProperty> alpha, double T_ref)
+        std::shared_ptr<CellProperty> alpha, double t_ref)
     {
-        thermal_ = Thermal {std::move(T), std::move(alpha), T_ref};
+        thermal_ = Thermal {std::move(T), std::move(alpha), t_ref};
     }
 
-    void SolidMechanicsSolver::solve_steady()
+    void SolidMechanicsSolver::refresh(double t)
     {
-        auto cells = all_cells(*V_->dofmap());
+        t_ = t;
+        if (E_)
+            E_->update(t);
+        if (nu_)
+            nu_->update(t);
+        if (thermal_)
+            thermal_->alpha->update(t);
+    }
+
+    bool SolidMechanicsSolver::nonlinear() const
+    {
+        const auto dependent = [](const std::shared_ptr<CellProperty>& p) {
+            return p and p->field_dependent();
+        };
+        return dependent(E_) or dependent(nu_)
+            or (thermal_ and dependent(thermal_->alpha));
+    }
+
+    void SolidMechanicsSolver::assemble_steady(la::MatrixCSR<double>& A,
+        la::Vector<double>& b) const
+    {
+        const auto cells = this->cells();
         auto coord = mesh_->geometry().cmaps().front();
 
-        // K = elasticity(E, nu).
-        std::vector<const fem::FiniteElement<double>*> ce;
-        if (E_)
-            ce.push_back(E_->function()->function_space()->element().get());
-        if (nu_)
-            ce.push_back(nu_->function()->function_space()->element().get());
+        // K = elasticity(E, nu), rows zeroed (the blocked element scatters
+        // 3x3 blocks).
+        std::vector<const fem::FiniteElement<double>*> ce {
+            E_->function()->function_space()->element().get(),
+            nu_->function()->function_space()->element().get()};
         auto pre = std::make_shared<fem::PrecomputeData<double>>(
             mesh_->topology()->cell_type(), *V_->element(), *V_->element(), ce, coord, 2);
         auto kernel = fem::make_cell_kernel(*pre, kernels::elasticity);
         std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist {V_, V_};
-        std::map<std::pair<fem::IntegralType, int>, std::vector<fem::Form<double>::integral_data>> integrals;
-        integrals[{fem::IntegralType::cell, 0}] = {{kernel, cells, {0, 1}}};
-        std::vector<std::shared_ptr<const fem::Function<double>>> coeffs {
-            std::make_shared<fem::Function<double>>(*E_->function()),
-            std::make_shared<fem::Function<double>>(*nu_->function())};
-        fem::Form<double> a(Vlist, std::move(integrals), mesh_, coeffs, {});
+        fem::Form<double> a(Vlist, cell_integrals(kernel, cells, {0, 1}), mesh_,
+            std::vector<std::shared_ptr<const fem::Function<double>>> {E_->function(),
+                nu_->function()},
+            {});
 
-        la::SparsityPattern pattern(V_->dofmap()->index_map, V_->dofmap()->index_map_bs());
-        fem::sparsitybuild::cells(pattern, std::pair {cells, cells}, {*V_->dofmap(), *V_->dofmap()});
-        std::vector<std::int32_t> diag(V_->dofmap()->index_map->size_local());
-        std::iota(diag.begin(), diag.end(), 0);
-        pattern.insert_diagonal(std::span(diag));
-        pattern.finalize();
-        la::MatrixCSR<double> A(pattern);
-        // Blocked (vector) element: scatter with 3x3 blocks (default BS=1 would
-        // treat scalar-block dofs as physical and read out of bounds). The
-        // matrix is assembled ONCE below, together with the BC handling (a
-        // second assembly without BCs would double the interior and keep the
-        // BC-interior coupling, making the system indefinite).
+        // Fixed (zero displacement) boundaries.
+        std::vector<fem::DirichletBC<double>> bcs = fixed_bcs();
+        std::vector<std::int8_t> bc_rows(
+            static_cast<std::size_t>(3) * V_->dofmap()->index_map->size_local(), 0);
+        for (const auto& bc : bcs)
+            bc.mark_dofs(bc_rows);
+        fem::assemble_matrix(A.mat_add_values<3, 3>(), a, bc_rows, {});
 
-        // RHS: thermal expansion load ∫Bᵀσ_th φ dx, σ_th = C : (αΔT I).
-        la::Vector<double> b(V_->dofmap()->index_map, V_->dofmap()->index_map_bs());
+        // RHS: thermal expansion load ∫ Bᵀ sigma_th.
         b.set(0.0);
-        if (thermal_ and E_ and nu_) {
+        if (thermal_) {
             auto preL = std::make_shared<fem::PrecomputeData<double>>(
                 mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
                 std::vector<const fem::FiniteElement<double>*> {
@@ -538,186 +625,41 @@ namespace hellofem::app {
                     nu_->function()->function_space()->element().get()},
                 coord, 2);
             auto kth = fem::make_cell_kernel(*preL, kernels::thermal_expansion_load);
-            auto Tref = std::make_shared<fem::Constant<double>>(thermal_->Tref);
+            auto Tref = std::make_shared<fem::Constant<double>>(thermal_->t_ref);
             std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist1 {V_};
-            std::map<std::pair<fem::IntegralType, int>, std::vector<fem::Form<double>::integral_data>> ints;
-            ints[{fem::IntegralType::cell, 0}] = {{kth, cells, {0, 1, 2, 3}}};
-            std::vector<std::shared_ptr<const fem::Function<double>>> tcoeffs {
-                thermal_->T,
-                std::make_shared<fem::Function<double>>(*thermal_->alpha->function()),
-                std::make_shared<fem::Function<double>>(*E_->function()),
-                std::make_shared<fem::Function<double>>(*nu_->function())};
-            fem::Form<double> L(Vlist1, std::move(ints), mesh_, tcoeffs,
+            fem::Form<double> L(Vlist1, cell_integrals(kth, cells, {0, 1, 2, 3}),
+                mesh_,
+                std::vector<std::shared_ptr<const fem::Function<double>>> {
+                    thermal_->T, thermal_->alpha->function(), E_->function(),
+                    nu_->function()},
                 std::vector<std::shared_ptr<const fem::Constant<double>>> {Tref});
             fem::assemble_vector(b, L);
         }
 
-        // Dirichlet fixed BCs: zero displacement on the fixed boundaries.
-        std::vector<std::int32_t> bc_dofs;
-        for (int id : fixed_) {
-            auto facets = facets_by_id(facet_tags_, id);
-            auto dofs = boundary_dofs(*mesh_, *V_->dofmap(), facets);
-            bc_dofs.insert(bc_dofs.end(), dofs.begin(), dofs.end());
-        }
-        std::ranges::sort(bc_dofs);
-        bc_dofs.erase(std::unique(bc_dofs.begin(), bc_dofs.end()), bc_dofs.end());
-
-        // Fixed BC fixes all components: expand scalar-block dofs to physical
-        // (DirichletBC::set/mark_dofs index the physical vector).
-        std::vector<std::int32_t> bc_phys;
-        bc_phys.reserve(bc_dofs.size() * 3);
-        for (std::int32_t d : bc_dofs)
-            for (int k = 0; k < 3; ++k)
-                bc_phys.push_back(3 * d + k);
-
-        if (!bc_phys.empty()) {
-            fem::DirichletBC<double> bc(0.0, bc_phys, V_);
-            std::vector<std::reference_wrapper<const fem::DirichletBC<double>>> bref {bc};
-            // Assemble ONCE, zeroing the BC rows/cols in the element tensors.
-            fem::assemble_matrix(A.mat_add_values<3, 3>(), a, bref);
-            fem::set_diagonal(A.mat_set_values<3, 3>(), a, bref, 1.0);
-            fem::apply_lifting(b, a, bref, std::optional<std::span<const double>> {}, 1.0);
-            fem::set_bc(std::span(b.array()), bref, std::optional<std::span<const double>> {}, 1.0);
-        }
-        else {
-            fem::assemble_matrix(A.mat_add_values<3, 3>(), a, {});
-        }
-
-        la::KrylovSolver<double> solver;
-        solver.set_operator(A);
-        solver.set_solver_type("cg");
-        solver.set_preconditioner_type("amg");
-        solver.set_tolerances(1e-10, 1e-12, 2000);
-        solver.solve(*u_->x(), b);
+        impose_dirichlet(A, b, a, bcs);
     }
 
-    void HeatTransferSolver::assemble_system(la::MatrixCSR<double>& A,
-        la::Vector<double>& b)
+    std::vector<fem::DirichletBC<double>> SolidMechanicsSolver::fixed_bcs() const
     {
-        auto cells = all_cells(*V_->dofmap());
-        auto coord = mesh_->geometry().cmaps().front();
-        const int tdim = mesh_->topology()->dim();
-
-        // Dirichlet BCs.
+        // A fixed boundary fixes every component of its dofs.
+        std::vector<std::int32_t> dofs = boundary_dofs(fixed_);
+        std::ranges::sort(dofs);
+        dofs.erase(std::unique(dofs.begin(), dofs.end()), dofs.end());
+        std::vector<std::int32_t> physical;
+        physical.reserve(dofs.size() * 3);
+        for (std::int32_t d : dofs)
+            for (int k = 0; k < 3; ++k)
+                physical.push_back(3 * d + k);
         std::vector<fem::DirichletBC<double>> bcs;
-        for (const auto& [bid, value] : temps_) {
-            auto facets = facets_by_id(facet_tags_, bid);
-            auto dofs = boundary_dofs(*mesh_, *V_->dofmap(), facets);
-            if (!dofs.empty())
-                bcs.emplace_back(value, dofs, V_);
-        }
-        std::vector<std::reference_wrapper<const fem::DirichletBC<double>>> bref;
-        for (auto& bc : bcs)
-            bref.emplace_back(bc);
+        if (not physical.empty())
+            bcs.emplace_back(0.0, physical, V_);
+        return bcs;
+    }
 
-        // Cell diffusion kernel (coefficient: the conductivity k(T)).
-        auto pre = std::make_shared<fem::PrecomputeData<double>>(
-            mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
-            std::vector<const fem::FiniteElement<double>*> {
-                k_->function()->function_space()->element().get()},
-            coord, 2);
-        auto kernel = fem::make_cell_kernel(*pre, kernels::diffusion_scalar);
-
-        std::vector<std::shared_ptr<const fem::Function<double>>> kcoeffs {
-            std::make_shared<fem::Function<double>>(*k_->function())};
-        std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist {V_, V_};
-        std::map<std::pair<fem::IntegralType, int>,
-            std::vector<fem::Form<double>::integral_data>>
-            integrals;
-        integrals[{fem::IntegralType::cell, 0}] = {{kernel, cells, {0}}};
-        fem::Form<double> a(Vlist, std::move(integrals), mesh_, kcoeffs, {});
-
-        fem::assemble_matrix(A.mat_add_values(), a, bref);
-        fem::set_diagonal(A.mat_set_values(), a, bref, 1.0);
-
-        // RHS.
-        b.set(0.0);
-        if (Q_) {
-            auto preQ = std::make_shared<fem::PrecomputeData<double>>(
-                mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
-                std::vector<const fem::FiniteElement<double>*> {
-                    Q_->function()->function_space()->element().get()},
-                coord, 2);
-            auto kload = fem::make_cell_kernel(*preQ, kernels::load_scalar);
-            std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist1 {V_};
-            std::map<std::pair<fem::IntegralType, int>,
-                std::vector<fem::Form<double>::integral_data>>
-                ints;
-            ints[{fem::IntegralType::cell, 0}] = {{kload, cells, {0}}};
-            std::vector<std::shared_ptr<const fem::Function<double>>> qcoeffs {
-                std::make_shared<fem::Function<double>>(*Q_->function())};
-            fem::Form<double> L(Vlist1, std::move(ints), mesh_, qcoeffs, {});
-            fem::assemble_vector(b, L);
-        }
-        if (joule_V_ and joule_sigma_) {
-            auto preJ = std::make_shared<fem::PrecomputeData<double>>(
-                mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
-                std::vector<const fem::FiniteElement<double>*> {
-                    joule_sigma_->function()->function_space()->element().get(),
-                    joule_V_->function_space()->element().get()},
-                coord, 2);
-            auto kjoule = fem::make_cell_kernel(*preJ, kernels::joule_heat_load);
-            std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist1 {V_};
-            std::map<std::pair<fem::IntegralType, int>,
-                std::vector<fem::Form<double>::integral_data>>
-                ints;
-            ints[{fem::IntegralType::cell, 0}] = {{kjoule, cells, {0, 1}}};
-            std::vector<std::shared_ptr<const fem::Function<double>>> jcoeffs {
-                std::make_shared<fem::Function<double>>(*joule_sigma_->function()),
-                joule_V_};
-            fem::Form<double> L(Vlist1, std::move(ints), mesh_, jcoeffs, {});
-            fem::assemble_vector(b, L);
-        }
-        // Convection facet contributions.
-        mesh_->topology_mutable()->create_entities(tdim - 1);
-        for (const auto& cv : convections_) {
-            std::set<int> ids {cv.id};
-            auto entities = boundary_facet_entities(*mesh_, facet_tags_, ids);
-            if (entities.empty())
-                continue;
-            auto h_dg0 = std::make_shared<CellProperty>(mesh_, cell_tags_);
-            h_dg0->function()->x()->set(cv.h);
-            auto pre_conv = std::make_shared<fem::FacetPrecomputeData<double>>(
-                mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
-                std::vector<const fem::FiniteElement<double>*> {
-                    h_dg0->function()->function_space()->element().get()},
-                coord, 2);
-            auto kconv = fem::make_facet_kernel(*pre_conv, kernels::convection_mass);
-            std::map<std::pair<fem::IntegralType, int>,
-                std::vector<fem::Form<double>::integral_data>>
-                ints_conv;
-            ints_conv[{fem::IntegralType::exterior_facet, 0}] = {{kconv, entities, {0}}};
-            std::vector<std::shared_ptr<const fem::Function<double>>> hcoeffs {
-                std::make_shared<fem::Function<double>>(*h_dg0->function())};
-            fem::Form<double> a_conv(Vlist, std::move(ints_conv), mesh_, hcoeffs, {});
-            fem::assemble_matrix(A.mat_add_values(), a_conv, bref);
-
-            auto hT_dg0 = std::make_shared<CellProperty>(mesh_, cell_tags_);
-            hT_dg0->function()->x()->set(cv.h * cv.Tinf);
-            auto pre_cl = std::make_shared<fem::FacetPrecomputeData<double>>(
-                mesh_->topology()->cell_type(), *V_->element(), *V_->element(),
-                std::vector<const fem::FiniteElement<double>*> {
-                    hT_dg0->function()->function_space()->element().get()},
-                coord, 2);
-            auto kcl = fem::make_facet_kernel(*pre_cl, kernels::convection_load);
-            std::map<std::pair<fem::IntegralType, int>,
-                std::vector<fem::Form<double>::integral_data>>
-                ints_cl;
-            ints_cl[{fem::IntegralType::exterior_facet, 0}] = {{kcl, entities, {0}}};
-            std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> Vlist1 {V_};
-            std::vector<std::shared_ptr<const fem::Function<double>>> hTcoeffs {
-                std::make_shared<fem::Function<double>>(*hT_dg0->function())};
-            fem::Form<double> L_conv(Vlist1, std::move(ints_cl), mesh_, hTcoeffs, {});
-            fem::assemble_vector(b, L_conv);
-        }
-
-        // Lifting + BC injection.
-        if (!bcs.empty()) {
-            fem::apply_lifting(b, a, bref,
-                std::optional<std::span<const double>> {}, 1.0);
-            fem::set_bc(std::span(b.array()), bref,
-                std::optional<std::span<const double>> {}, 1.0);
-        }
+    void SolidMechanicsSolver::constrain_solution(double t)
+    {
+        (void)t; // a fixed boundary prescribes a constant zero displacement
+        impose_values(std::span(u_->x()->array()), fixed_bcs());
     }
 
 } // namespace hellofem::app

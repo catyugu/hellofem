@@ -292,3 +292,54 @@ TEST_CASE("MatrixCSR: expanded block mode gives a scalar matrix", "[la]")
     REQUIRE(B.block_size() == std::array<int, 2> {1, 1});
     REQUIRE(B.num_owned_rows() == 4);
 }
+
+TEST_CASE("KrylovSolver: without an initial guess x is replaced by the solution", "[la]")
+{
+    // A caller that reuses a vector — a previous solution, a previous time
+    // level — must get the new solution in it, not the new solution added to
+    // the old one. The iterations accumulate into `x`, so a cold solve has
+    // to start from zero whatever the vector held.
+    constexpr std::int32_t n = 20;
+    std::vector<std::tuple<std::int32_t, std::int32_t, double>> entries;
+    for (std::int32_t i = 0; i < n; ++i) {
+        entries.emplace_back(i, i, 4.0);
+        if (i > 0)
+            entries.emplace_back(i, i - 1, -1.0);
+        if (i + 1 < n)
+            entries.emplace_back(i, i + 1, -1.0);
+    }
+    const auto A = make_matrix(n, entries);
+    la::Vector<double> b(imap(n), 1);
+    for (std::int32_t i = 0; i < n; ++i)
+        b.array()[static_cast<std::size_t>(i)] = 1.0;
+
+    la::KrylovSolver<double> solver;
+    solver.set_operator(A);
+    solver.set_solver_type("cg");
+    solver.set_tolerances(1e-12, 1e-14, 1000);
+
+    la::Vector<double> cold(imap(n), 1);
+    cold.set(0);
+    solver.set_initial_guess(false);
+    REQUIRE(solver.solve(cold, b) > 0);
+    const std::vector<double> expected(cold.array().begin(), cold.array().end());
+
+    auto check = [&](const la::Vector<double>& x) {
+        for (std::int32_t i = 0; i < n; ++i)
+            REQUIRE(x.array()[static_cast<std::size_t>(i)]
+                == Catch::Approx(expected[static_cast<std::size_t>(i)]).margin(1e-10));
+    };
+
+    // Stale contents, no initial guess: the result must not depend on them.
+    la::Vector<double> stale(imap(n), 1);
+    for (std::int32_t i = 0; i < n; ++i)
+        stale.array()[static_cast<std::size_t>(i)] = 1.0 + 0.01 * i;
+    REQUIRE(solver.solve(stale, b) > 0);
+    check(stale);
+
+    // The same contents as an initial guess are legitimate and converge to
+    // the same solution.
+    solver.set_initial_guess(true);
+    REQUIRE(solver.solve(stale, b) >= 0);
+    check(stale);
+}

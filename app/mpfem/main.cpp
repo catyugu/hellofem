@@ -1,9 +1,10 @@
-// hellofem::app — mpfem application driver (Phase F)
+// hellofem::app — mpfem application driver
 // SPDX-License-Identifier: MIT
 
 #include "case_scheduler.h"
 #include "java_parser.h"
 #include "mesh_loader.h"
+#include "time_scheme.h"
 
 #include "spdlog/spdlog.h"
 
@@ -11,18 +12,48 @@
 #include <filesystem>
 #include <string>
 
+namespace {
+
+    /// Comma-separated list of the available time stepping schemes.
+    std::string scheme_list()
+    {
+        std::string out;
+        for (const std::string& name : hellofem::app::time_scheme_names())
+            out += (out.empty() ? "" : ", ") + name;
+        return out;
+    }
+
+} // namespace
+
 int main(int argc, char* argv[])
 {
-    if (argc < 4) {
-        std::fprintf(stderr,
-            "usage: mpfem_app <clean_model.java> <mesh.mphtxt> <result.txt>\n");
-        return 2;
-    }
     using namespace hellofem::app;
 
-    const std::filesystem::path model_path = argv[1];
-    const std::filesystem::path mesh_path = argv[2];
-    const std::string result_path = argv[3];
+    std::string scheme = "bdf2";
+    std::string positional[3];
+    int npos = 0;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--scheme" and i + 1 < argc)
+            scheme = argv[++i];
+        else if (npos < 3)
+            positional[npos++] = arg;
+        else {
+            std::fprintf(stderr, "unexpected argument '%s'\n", arg.c_str());
+            return 2;
+        }
+    }
+    if (npos < 3) {
+        std::fprintf(stderr,
+            "usage: mpfem_app <clean_model.java> <mesh.mphtxt> <result.txt> "
+            "[--scheme <%s>]\n",
+            scheme_list().c_str());
+        return 2;
+    }
+
+    const std::filesystem::path model_path = positional[0];
+    const std::filesystem::path mesh_path = positional[1];
+    const std::string result_path = positional[2];
 
     // Mesh.
     LoadedMesh lm = load_mphtxt_mesh(mesh_path);
@@ -36,10 +67,11 @@ int main(int argc, char* argv[])
         model.name, model.parameters.size(), model.materials.size(),
         model.physics.size(), model.couplings.size());
 
-    // Dispatch and solve.
-    CaseScheduler sched(model, lm);
-    sched.run();
-    sched.export_result(result_path);
+    // Solve the model's study.
+    CaseScheduler scheduler(model, lm);
+    scheduler.set_time_scheme(scheme);
+    scheduler.run();
+    scheduler.export_result(result_path);
 
     spdlog::info("wrote {}", result_path);
     return 0;
