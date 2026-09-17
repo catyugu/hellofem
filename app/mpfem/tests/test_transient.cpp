@@ -37,6 +37,11 @@ namespace {
         std::string exact; // the solution, as a model expression in t
         std::string derivative; // its time derivative, the source
         std::function<double(double)> value; // the same solution in C++
+        /// Its value at t = 0, which the initial state must carry: a solution
+        /// that does not start where its boundary data does is an inconsistent
+        /// initial condition, and the first step would jump to the boundary
+        /// instead of following the solution.
+        std::string initial = "0";
     };
 
     /// The cubic solution T = t^3, whose source is 3 t^2.
@@ -59,7 +64,7 @@ namespace {
         solver->set_source(source);
         solver->add_temperature_bc(1, ScalarExpression(problem.exact));
         solver->add_temperature_bc(2, ScalarExpression(problem.exact));
-        solver->set_initial_temperature(ScalarExpression(0.0));
+        solver->set_initial_temperature(ScalarExpression(problem.initial));
         solver->apply_initial_condition();
         return solver;
     }
@@ -376,6 +381,30 @@ TEST_CASE("Transient heat: the adaptive controller earns its accuracy per step",
          << cheapest << " steps");
     REQUIRE(cheapest > 0);
     REQUIRE(cheapest > adaptive.steps);
+}
+
+TEST_CASE("Transient heat: a solution passing through zero keeps its own scale",
+    "[app][transient]")
+{
+    // T = (1 - t)^2 decays to zero with a vanishing derivative, so towards the
+    // end of the run a relative criterion has no magnitude left to stand on
+    // and would shrink the step to follow the value down. The field's own
+    // scale — the largest magnitude it has reached over the run — is what the
+    // absolute part of the weight is set from, so the step stays the one the
+    // accuracy asks for instead of the one a vanishing value would.
+    const double t_end = 1.0;
+    const Manufactured problem {
+        "(1-t)*(1-t)*(1-t)", "-3*(1-t)*(1-t)",
+        [](double t) { return (1.0 - t) * (1.0 - t) * (1.0 - t); }, "1"};
+
+    const RunResult run = run_adaptive(problem, 1e-3, t_end);
+    INFO("decay to zero: " << run.steps << " steps (" << run.rejected
+                           << " rejected), worst error " << run.worst_error);
+    REQUIRE(run.steps > 0);
+    REQUIRE(run.worst_error < 1e-2);
+    // Measured: 60 steps with the field's own scale against 150 with the
+    // level's, at the same error — the bound is what tells them apart.
+    REQUIRE(run.steps < 100);
 }
 
 TEST_CASE("Transient heat: a solution-independent nonlinear law matches the linear one",

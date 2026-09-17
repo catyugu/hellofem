@@ -27,8 +27,8 @@ namespace hellofem::app {
         }
 
         /// The absolute part of the error weight, as a fraction of the
-        /// magnitude of the level: the weight is
-        /// `tolerance |u| + tolerance * weight_floor * max|u|`.
+        /// field's own scale: the weight is
+        /// `tolerance |u| + tolerance * weight_floor * magnitude`.
         constexpr double weight_floor = 1e-3;
 
     } // namespace
@@ -53,6 +53,14 @@ namespace hellofem::app {
         sources_.clear();
         history_.push_back(la::Vector<double>(*field_.solution()->x()));
         times_.push_back(t0);
+        magnitude_ = 0.0;
+        track_magnitude();
+    }
+
+    void TimeStepper::track_magnitude()
+    {
+        for (const double value : field_.solution()->x()->array())
+            magnitude_ = std::max(magnitude_, std::abs(value));
     }
 
     std::vector<const la::Vector<double>*> TimeStepper::levels() const
@@ -106,6 +114,7 @@ namespace hellofem::app {
             scheme_.name, t, steps.dt, static_cast<int>(w.a.size()) - 1,
             iterations);
 
+        track_magnitude();
         history_.insert(history_.begin(),
             la::Vector<double>(*field_.solution()->x()));
         times_.insert(times_.begin(), t);
@@ -148,11 +157,7 @@ namespace hellofem::app {
             = divided_difference(order_ + 1, level, times_);
         const auto& u = field_.solution()->x()->array();
         const std::size_t n = u.size();
-
-        double magnitude = 0.0;
-        for (std::size_t i = 0; i < n; ++i)
-            magnitude = std::max(magnitude, std::abs(u[i]));
-        const double floor = tolerance_ * weight_floor * magnitude;
+        const double floor = tolerance_ * weight_floor * magnitude_;
 
         const double coefficient = error_coefficient(order_);
         double sum = 0.0;

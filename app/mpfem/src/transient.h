@@ -70,6 +70,10 @@ namespace hellofem::app {
         /// The scheme's weights for a step of `steps`, taken at `order`.
         TimeWeights weights(int order, TimeSteps steps) const;
 
+        /// Take the magnitude of the current solution as the field's scale,
+        /// when it is the largest one yet.
+        void track_magnitude();
+
         TimeDependentField& field_;
         const TimeScheme& scheme_;
         double tolerance_ = 1e-3;
@@ -86,6 +90,14 @@ namespace hellofem::app {
         std::vector<la::Vector<double>> sources_;
         /// Order of the step just taken, which its error estimate uses.
         int order_ = 1;
+        /// The largest magnitude the solution has reached, over every level of
+        /// the run: the field's own scale, which the absolute part of the
+        /// error weight is set from. It only grows — an undone step leaves it
+        /// where it is, which holds the field to the accuracy of a magnitude
+        /// it has really had — so a solution that starts at zero, or decays
+        /// towards it, is never measured against a relative criterion on a
+        /// value that carries nothing left.
+        double magnitude_ = 0.0;
         /// Whether the history holds a step that `undo` can drop.
         bool pending_ = false;
     };
