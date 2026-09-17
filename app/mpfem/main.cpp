@@ -55,8 +55,7 @@ int main(int argc, char* argv[])
         model.physics.size(), model.couplings.size());
 
     // Solve the model's study.
-    CaseScheduler scheduler(model, lm);
-    scheduler.set_time_scheme(scheme);
+    CaseScheduler scheduler(model, lm, scheme);
     scheduler.run();
     scheduler.export_result(result_path);
 

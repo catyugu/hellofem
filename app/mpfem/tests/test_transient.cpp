@@ -4,6 +4,7 @@
 #include "catch2/catch_approx.hpp"
 #include "catch2/catch_test_macros.hpp"
 #include "fixture.h"
+#include "heat.h"
 #include "time_scheme.h"
 #include "transient.h"
 
@@ -44,7 +45,7 @@ namespace {
         solver->set_initial_temperature(ScalarExpression(0.0));
         solver->apply_initial_condition();
 
-        HeatTimeStepper stepper(solver, scheme);
+        TimeStepper stepper(*solver, scheme);
         stepper.start(0.0);
         const int steps = static_cast<int>(std::llround(t_end / dt));
         for (int n = 1; n <= steps; ++n)
@@ -209,7 +210,7 @@ TEST_CASE("Transient heat: a solution-independent nonlinear law matches the line
         solver->apply_initial_condition();
         REQUIRE(solver->nonlinear() == field_dependent);
 
-        HeatTimeStepper stepper(solver, "bdf2");
+        TimeStepper stepper(*solver, "bdf2");
         stepper.start(0.0);
         for (int n = 1; n <= 20; ++n)
             stepper.step(0.05 * n);

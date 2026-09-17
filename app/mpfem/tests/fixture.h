@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include "field.h"
 #include "mesh/Mesh.h"
 #include "mesh/MeshTags.h"
 #include "mesh/generation.h"
 #include "mesh/utils.h"
-#include "physics.h"
 #include "solver.h"
 
 #include <array>

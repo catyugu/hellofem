@@ -5,6 +5,7 @@ add_executable(test_mpfem
     test_parsing.cpp
     test_mesh_loader.cpp
     test_physics.cpp
+    test_scheduler.cpp
     test_transient.cpp
 )
 target_link_libraries(test_mpfem PRIVATE mpfem Catch2::Catch2WithMain)

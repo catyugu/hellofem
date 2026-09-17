@@ -1,7 +1,7 @@
-// hellofem::app — physics field solvers (electrostatics / heat / solid)
+// hellofem::app — field solver base implementation
 // SPDX-License-Identifier: MIT
 
-#include "physics.h"
+#include "field.h"
 
 #include "basis/element-families.h"
 #include "fem/CoordinateElement.h"
@@ -10,14 +10,11 @@
 #include "fem/facet_precompute.h"
 #include "fem/precompute.h"
 #include "fem/sparsitybuild.h"
-#include "kernels.h"
-#include "la/Vector.h"
 #include "mesh/Topology.h"
 #include "mesh/cell_types.h"
 #include "mesh/utils.h"
 
 #include <algorithm>
-#include <cmath>
 #include <numeric>
 
 namespace hellofem::app {
@@ -75,63 +72,10 @@ namespace hellofem::app {
             }
         }
 
-        /// Impose the Dirichlet data on an assembled system: subtract the
-        /// known boundary-column contribution from the right-hand side,
-        /// zero those columns, set the diagonal and write the values, so
-        /// the boundary rows read `u = g`. `marked` is the dof marker of
-        /// `bcs`.
-        void impose_dirichlet(la::MatrixCSR<double>& A, la::Vector<double>& b,
-            const fem::Form<double>& a,
-            const std::vector<fem::DirichletBC<double>>& bcs,
-            std::span<const std::int8_t> marked)
-        {
-            if (bcs.empty())
-                return;
-            std::vector<std::reference_wrapper<const fem::DirichletBC<double>>> bref(
-                bcs.begin(), bcs.end());
-            const auto& dofmap = *a.function_spaces()[0]->dofmap();
-            const int bs = dofmap.index_map_bs();
-
-            // b -= A[:, bc] * g.
-            la::Vector<double> g(dofmap.index_map, bs);
-            g.set(0.0);
-            fem::set_bc(std::span(g.array()), bref,
-                std::optional<std::span<const double>> {}, 1.0);
-            la::Vector<double> lift(dofmap.index_map, bs);
-            lift.set(0.0);
-            A.mult(g, lift);
-            for (std::size_t i = 0; i < b.array().size(); ++i)
-                b.array()[i] -= lift.array()[i];
-
-            zero_marked_columns(A, marked);
-            if (bs == 1)
-                fem::set_diagonal(A.mat_set_values<1, 1>(), a, bref, 1.0);
-            else
-                fem::set_diagonal(A.mat_set_values<3, 3>(), a, bref, 1.0);
-            fem::set_bc(std::span(b.array()), bref,
-                std::optional<std::span<const double>> {}, 1.0);
-        }
-
-        /// Write the Dirichlet values of `bcs` into `x`.
-        void impose_values(std::span<double> x,
-            const std::vector<fem::DirichletBC<double>>& bcs)
-        {
-            std::vector<std::reference_wrapper<const fem::DirichletBC<double>>> bref(
-                bcs.begin(), bcs.end());
-            fem::set_bc(x, bref, std::optional<std::span<const double>> {}, 1.0);
-        }
-
         /// One integral over the given cells or facets, with the given kernel
         /// and the coefficient indices the kernel reads.
         using Integrals = std::map<std::pair<fem::IntegralType, int>,
             std::vector<fem::Form<double>::integral_data>>;
-
-        /// Whether a property reads the solution, i.e. whether the physics
-        /// it belongs to has to be linearized and iterated.
-        bool solution_dependent(const std::shared_ptr<CellProperty>& property)
-        {
-            return property and property->field_dependent();
-        }
 
         /// Facet indices carrying the given 1-based boundary ids.
         std::vector<std::int32_t> tagged_facets(
@@ -204,6 +148,11 @@ namespace hellofem::app {
         }
 
     } // namespace
+
+    bool solution_dependent(const std::shared_ptr<CellProperty>& property)
+    {
+        return property and property->field_dependent();
+    }
 
     // ---------------------------------------------------------------------------
     // FieldSolver
@@ -393,281 +342,44 @@ namespace hellofem::app {
         fem::assemble_vector(b, L);
     }
 
-    // ---------------------------------------------------------------------------
-    // ElectrostaticsSolver
-    // ---------------------------------------------------------------------------
-
-    ElectrostaticsSolver::ElectrostaticsSolver(
-        std::shared_ptr<const mesh::Mesh<double>> mesh,
-        std::shared_ptr<const mesh::MeshTags<int>> facet_tags,
-        std::shared_ptr<const mesh::MeshTags<int>> cell_tags, int order)
-        : FieldSolver(std::move(mesh), std::move(facet_tags), std::move(cell_tags),
-              order, 1)
+    void FieldSolver::impose_dirichlet(la::MatrixCSR<double>& A,
+        la::Vector<double>& b, const fem::Form<double>& a,
+        const std::vector<fem::DirichletBC<double>>& bcs,
+        const DirichletRows& marked) const
     {
-    }
-
-    void ElectrostaticsSolver::refresh(double t)
-    {
-        t_ = t;
-        if (sigma_)
-            sigma_->update(t);
-    }
-
-    void ElectrostaticsSolver::assemble_steady(la::MatrixCSR<double>& A,
-        la::Vector<double>& b) const
-    {
-        auto bcs = make_bcs(voltages_, t_);
-        auto rows = marked_rows(bcs);
-        auto a = add_operator(A, rows, {sigma_->function()},
-            kernels::diffusion_scalar);
-        b.set(0.0);
-        impose_dirichlet(A, b, a, bcs, rows);
-    }
-
-    void ElectrostaticsSolver::constrain_solution(double t)
-    {
-        impose_values(std::span(u_->x()->array()), make_bcs(voltages_, t));
-    }
-
-    // ---------------------------------------------------------------------------
-    // HeatTransferSolver
-    // ---------------------------------------------------------------------------
-
-    HeatTransferSolver::HeatTransferSolver(
-        std::shared_ptr<const mesh::Mesh<double>> mesh,
-        std::shared_ptr<const mesh::MeshTags<int>> facet_tags,
-        std::shared_ptr<const mesh::MeshTags<int>> cell_tags, int order)
-        : FieldSolver(std::move(mesh), std::move(facet_tags), std::move(cell_tags),
-              order, 1)
-    {
-    }
-
-    void HeatTransferSolver::set_joule_source(
-        std::shared_ptr<const fem::Function<double>> V,
-        std::shared_ptr<CellProperty> sigma)
-    {
-        joule_V_ = std::move(V);
-        joule_sigma_ = std::move(sigma);
-    }
-
-    void HeatTransferSolver::refresh(double t)
-    {
-        t_ = t;
-        if (k_)
-            k_->update(t);
-        if (rho_cp_)
-            rho_cp_->update(t);
-        if (Q_)
-            Q_->update(t);
-        if (joule_sigma_)
-            joule_sigma_->update(t);
-        for (auto& cv : convections_) {
-            cv.h->update(t);
-            cv.t_inf->update(t);
-        }
-    }
-
-    bool HeatTransferSolver::nonlinear() const
-    {
-        return solution_dependent(k_) or solution_dependent(rho_cp_)
-            or solution_dependent(Q_) or solution_dependent(joule_sigma_);
-    }
-
-    void HeatTransferSolver::constrain_solution(double t)
-    {
-        impose_values(std::span(u_->x()->array()), make_bcs(temps_, t));
-    }
-
-    void HeatTransferSolver::apply_initial_condition()
-    {
-        const auto coords = V_->tabulate_dof_coordinates(false);
-        auto& arr = u_->x()->array();
-        for (std::int32_t d = 0; d < V_->dofmap()->index_map->size_local(); ++d)
-            arr[static_cast<std::size_t>(d)] = initial_.eval(
-                coords[3 * d], coords[3 * d + 1], coords[3 * d + 2], 0.0);
-    }
-
-    void HeatTransferSolver::assemble_sources(la::Vector<double>& f) const
-    {
-        if (Q_)
-            add_load(f, {Q_->function()}, kernels::load_scalar);
-
-        // Joule heating: ∫ sigma |grad V|² phi.
-        if (joule_V_ and joule_sigma_)
-            add_load(f, {joule_sigma_->function(), joule_V_},
-                kernels::joule_heat_load);
-
-        // Convection load h Tinf.
-        for (const auto& cv : convections_)
-            add_load(f, {cv.h->function(), cv.t_inf->function()},
-                kernels::convection_load, cv.boundary_id);
-    }
-
-    void HeatTransferSolver::assemble_step(la::MatrixCSR<double>& A,
-        la::Vector<double>& b, const TimeLevel& level) const
-    {
-        const TimeWeights& w = level.weights;
-        const double t = level.time;
-        const auto& history = level.history;
-        const la::Vector<double>* f_old = level.source_old;
-        la::Vector<double>& f_new = *level.source_new;
-        const auto& dofmap = *V_->dofmap();
+        if (bcs.empty())
+            return;
+        std::vector<std::reference_wrapper<const fem::DirichletBC<double>>> bref(
+            bcs.begin(), bcs.end());
+        const auto& dofmap = *a.function_spaces()[0]->dofmap();
         const int bs = dofmap.index_map_bs();
-        const bool has_mass = w.a[0] != 0.0;
 
-        auto bcs = make_bcs(temps_, t);
-        auto rows = marked_rows(bcs);
-
-        // Operators, assembled with the Dirichlet rows zeroed and their
-        // columns kept (the boundary values move to the right-hand side in
-        // impose_dirichlet).
-        la::MatrixCSR<double> M(*pattern_);
-        la::MatrixCSR<double> K(*pattern_);
-        if (has_mass)
-            add_operator(M, rows, {rho_cp_->function()}, kernels::mass_scalar);
-        auto a = add_operator(K, rows, {k_->function()},
-            kernels::diffusion_scalar);
-
-        // Convection Robin mass.
-        for (const auto& cv : convections_)
-            add_operator(K, rows, {cv.h->function()}, kernels::convection_mass,
-                cv.boundary_id);
-
-        // LHS operator: a0 M + b0 K.
-        auto& av = A.values();
-        if (has_mass)
-            for (std::size_t i = 0; i < av.size(); ++i)
-                av[i] = w.a[0] * M.values()[i] + w.b[0] * K.values()[i];
-        else
-            for (std::size_t i = 0; i < av.size(); ++i)
-                av[i] = w.b[0] * K.values()[i];
-
-        // Source load of this level.
-        f_new.set(0.0);
-        assemble_sources(f_new);
-        b.set(0.0);
+        // b -= A[:, bc] * g.
+        la::Vector<double> g(dofmap.index_map, bs);
+        g.set(0.0);
+        fem::set_bc(std::span(g.array()), bref,
+            std::optional<std::span<const double>> {}, 1.0);
+        la::Vector<double> lift(dofmap.index_map, bs);
+        lift.set(0.0);
+        A.mult(g, lift);
         for (std::size_t i = 0; i < b.array().size(); ++i)
-            b.array()[i] = w.c_new * f_new.array()[i]
-                + (w.c_old != 0.0 and f_old ? w.c_old * f_old->array()[i] : 0.0);
+            b.array()[i] -= lift.array()[i];
 
-        // History: b -= (a_k M + b_k K) u^{n+1-k}.
-        la::Vector<double> y(dofmap.index_map, bs);
-        for (std::size_t k = 1; k < w.a.size(); ++k) {
-            if (k > history.size() or history[k - 1] == nullptr)
-                break;
-            const la::Vector<double>& u_k = *history[k - 1];
-            if (w.a[k] != 0.0 and has_mass) {
-                y.set(0.0);
-                M.mult(u_k, y);
-                for (std::size_t i = 0; i < b.array().size(); ++i)
-                    b.array()[i] -= w.a[k] * y.array()[i];
-            }
-            if (w.b[k] != 0.0) {
-                y.set(0.0);
-                K.mult(u_k, y);
-                for (std::size_t i = 0; i < b.array().size(); ++i)
-                    b.array()[i] -= w.b[k] * y.array()[i];
-            }
-        }
-
-        impose_dirichlet(A, b, a, bcs, rows);
+        zero_marked_columns(A, marked);
+        if (bs == 1)
+            fem::set_diagonal(A.mat_set_values<1, 1>(), a, bref, 1.0);
+        else
+            fem::set_diagonal(A.mat_set_values<3, 3>(), a, bref, 1.0);
+        fem::set_bc(std::span(b.array()), bref,
+            std::optional<std::span<const double>> {}, 1.0);
     }
 
-    void HeatTransferSolver::assemble_steady(la::MatrixCSR<double>& A,
-        la::Vector<double>& b) const
+    void FieldSolver::impose_values(std::span<double> x,
+        const std::vector<fem::DirichletBC<double>>& bcs) const
     {
-        // The steady problem is the degenerate one-level scheme: K u = f.
-        TimeWeights weights;
-        weights.a = {0.0};
-        weights.b = {1.0};
-        la::Vector<double> f_new(V_->dofmap()->index_map,
-            V_->dofmap()->index_map_bs());
-        TimeLevel level;
-        level.weights = weights;
-        level.time = t_;
-        level.source_new = &f_new;
-        assemble_step(A, b, level);
-    }
-
-    // ---------------------------------------------------------------------------
-    // SolidMechanicsSolver
-    // ---------------------------------------------------------------------------
-
-    SolidMechanicsSolver::SolidMechanicsSolver(
-        std::shared_ptr<const mesh::Mesh<double>> mesh,
-        std::shared_ptr<const mesh::MeshTags<int>> facet_tags,
-        std::shared_ptr<const mesh::MeshTags<int>> cell_tags, int order)
-        : FieldSolver(std::move(mesh), std::move(facet_tags), std::move(cell_tags),
-              order, 3)
-    {
-    }
-
-    void SolidMechanicsSolver::set_thermal_expansion(
-        std::shared_ptr<const fem::Function<double>> T,
-        std::shared_ptr<CellProperty> alpha, double t_ref)
-    {
-        thermal_ = Thermal {std::move(T), std::move(alpha), t_ref};
-    }
-
-    void SolidMechanicsSolver::refresh(double t)
-    {
-        t_ = t;
-        if (E_)
-            E_->update(t);
-        if (nu_)
-            nu_->update(t);
-        if (thermal_)
-            thermal_->alpha->update(t);
-    }
-
-    bool SolidMechanicsSolver::nonlinear() const
-    {
-        return solution_dependent(E_) or solution_dependent(nu_)
-            or (thermal_ and solution_dependent(thermal_->alpha));
-    }
-
-    void SolidMechanicsSolver::assemble_steady(la::MatrixCSR<double>& A,
-        la::Vector<double>& b) const
-    {
-        auto bcs = fixed_bcs();
-        auto rows = marked_rows(bcs);
-        auto a = add_operator(A, rows, {E_->function(), nu_->function()},
-            kernels::elasticity);
-
-        // RHS: thermal expansion load ∫ Bᵀ sigma_th.
-        b.set(0.0);
-        if (thermal_) {
-            auto t_ref = std::make_shared<fem::Constant<double>>(thermal_->t_ref);
-            add_load(b,
-                {thermal_->T, thermal_->alpha->function(), E_->function(),
-                    nu_->function()},
-                kernels::thermal_expansion_load, {std::move(t_ref)});
-        }
-
-        impose_dirichlet(A, b, a, bcs, rows);
-    }
-
-    std::vector<fem::DirichletBC<double>> SolidMechanicsSolver::fixed_bcs() const
-    {
-        // A fixed boundary fixes every component of its dofs.
-        std::vector<std::int32_t> dofs = boundary_dofs(fixed_);
-        std::ranges::sort(dofs);
-        dofs.erase(std::unique(dofs.begin(), dofs.end()), dofs.end());
-        std::vector<std::int32_t> physical;
-        physical.reserve(dofs.size() * 3);
-        for (std::int32_t d : dofs)
-            for (int k = 0; k < 3; ++k)
-                physical.push_back(3 * d + k);
-        std::vector<fem::DirichletBC<double>> bcs;
-        if (not physical.empty())
-            bcs.emplace_back(0.0, physical, V_);
-        return bcs;
-    }
-
-    void SolidMechanicsSolver::constrain_solution(double t)
-    {
-        (void)t; // a fixed boundary prescribes a constant zero displacement
-        impose_values(std::span(u_->x()->array()), fixed_bcs());
+        std::vector<std::reference_wrapper<const fem::DirichletBC<double>>> bref(
+            bcs.begin(), bcs.end());
+        fem::set_bc(x, bref, std::optional<std::span<const double>> {}, 1.0);
     }
 
 } // namespace hellofem::app

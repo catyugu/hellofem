@@ -1,0 +1,328 @@
+// hellofem::app — heat transfer field solver
+// SPDX-License-Identifier: MIT
+
+#include "heat.h"
+
+#include "kernels.h"
+#include "physics_field.h"
+#include "solver.h"
+#include "transient.h"
+
+#include <spdlog/spdlog.h>
+
+#include <algorithm>
+#include <stdexcept>
+
+namespace hellofem::app {
+    namespace {
+
+        /// The heat-transfer physics of a case: the model's conductivity,
+        /// volumetric heat capacity, heat sources and boundary conditions
+        /// over the temperature, exporting T. A transient study advances it
+        /// with the scheme, and it owns the Joule heating coupling.
+        class HeatField : public PhysicsField {
+        public:
+            HeatField(const Physics& physics, CaseContext& ctx)
+                : physics_(physics)
+                , solver_(std::make_shared<HeatTransferSolver>(
+                      ctx.mesh().mesh, ctx.mesh().facet_tags, ctx.mesh().cell_tags,
+                      ctx.mesh().order))
+                , variables_ {scalar_variable("T", "(K)", solver_->solution())}
+            {
+                ctx.publish("T", solver_->solution());
+                solver_->set_conductivity(
+                    ctx.material_property("thermalconductivity"));
+                // The transient heat operator needs the product of the two
+                // material properties (COMSOL's volumetric heat capacity).
+                solver_->set_thermal_mass(ctx.property([](const Material& material) {
+                    const MaterialProperty* density = material.property("density");
+                    const MaterialProperty* capacity
+                        = material.property("heatcapacity");
+                    if (not density or not capacity)
+                        return std::string {};
+                    return "(" + density->scalar_value() + ")*("
+                        + capacity->scalar_value() + ")";
+                }));
+
+                // Volumetric heat sources on the domains of a HeatSource
+                // feature (a domain without one keeps the zero source).
+                auto source = ctx.zero_property();
+                for (const PhysicsFeature& feature : physics_.features)
+                    if (feature.type == "HeatSource"
+                        and feature.properties.contains("Q0"))
+                        for (int dom : feature.selection)
+                            source->set_expression(dom, feature.properties.at("Q0"));
+                solver_->set_source(source);
+
+                // Temperature Dirichlet data (COMSOL 6.2 names the feature
+                // TemperatureBoundary).
+                for (const PhysicsFeature& feature : physics_.features)
+                    if ((feature.type == "TemperatureBoundary"
+                            or feature.type == "Temperature")
+                        and feature.properties.contains("T0"))
+                        for (int id : feature.selection)
+                            solver_->add_temperature_bc(id,
+                                ctx.expression(feature.properties.at("T0")));
+
+                // Convective heat flux.
+                for (const PhysicsFeature& feature : physics_.features) {
+                    if (feature.type != "HeatFluxBoundary")
+                        continue;
+                    const auto& props = feature.properties;
+                    if (props.contains("HeatFluxType")
+                        and props.at("HeatFluxType") != "ConvectiveHeatFlux")
+                        continue;
+                    if (not props.contains("h"))
+                        continue;
+                    auto h = ctx.uniform_property(props.at("h"));
+                    auto t_inf = ctx.uniform_property(
+                        props.contains("minput_temperature")
+                            ? props.at("minput_temperature")
+                            : "0");
+                    for (int id : feature.selection)
+                        solver_->add_convection(id, h, t_inf);
+                }
+
+                // Initial values of a transient study ("Tinit").
+                for (const PhysicsFeature& feature : physics_.features)
+                    if (feature.properties.contains("Tinit"))
+                        solver_->set_initial_temperature(
+                            ctx.expression(feature.properties.at("Tinit")));
+
+                if (ctx.model().study.transient)
+                    stepper_ = std::make_unique<TimeStepper>(*solver_, ctx.scheme());
+                spdlog::info("heat: bound heat transfer");
+            }
+
+            /// The Joule heating coupling: ∫ sigma |grad V|² phi joins the
+            /// heat load, with the potential and the conductivity of the
+            /// electric field of the case.
+            void bind_couplings(CaseContext& ctx) override
+            {
+                const bool heating = std::any_of(ctx.model().couplings.begin(),
+                    ctx.model().couplings.end(),
+                    [](const MultiphysicsCoupling& coupling) {
+                        return coupling.type == "ElectromagneticHeating";
+                    });
+                if (not heating)
+                    return;
+                auto potential = ctx.solution("V");
+                if (not potential)
+                    throw std::runtime_error("ElectromagneticHeating without an "
+                                             "electric potential 'V'");
+                solver_->set_joule_source(potential,
+                    ctx.material_property("electricconductivity"));
+            }
+
+            void initialize(double t0) override
+            {
+                // The initial values are the state at t0; the scheme advances
+                // it from there. Only a transient study initializes a field,
+                // and such a study always has a stepper.
+                solver_->apply_initial_condition();
+                solver_->constrain_solution(t0);
+                stepper_->start(t0);
+            }
+
+            void solve_level(double t) override
+            {
+                if (stepper_) {
+                    stepper_->step(t);
+                    return;
+                }
+                solve_system(
+                    [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
+                        solver_->refresh(t);
+                        solver_->assemble_steady(A, b);
+                    },
+                    *solver_->solution()->x(), solver_->pattern(),
+                    solver_->nonlinear());
+                spdlog::info("heat: T solved at t = {} s", t);
+            }
+
+            std::span<const Variable> variables() const override
+            {
+                return variables_;
+            }
+
+        private:
+            const Physics& physics_;
+            std::shared_ptr<HeatTransferSolver> solver_;
+            std::unique_ptr<TimeStepper> stepper_;
+            std::vector<Variable> variables_;
+        };
+
+        std::unique_ptr<PhysicsField> make_heat_field(const Physics& physics,
+            CaseContext& ctx)
+        {
+            return std::make_unique<HeatField>(physics, ctx);
+        }
+
+    } // namespace
+
+    void register_heat_field()
+    {
+        register_field(FieldKind {"HeatTransfer", make_heat_field});
+    }
+
+    // ---------------------------------------------------------------------------
+    // HeatTransferSolver
+    // ---------------------------------------------------------------------------
+
+    HeatTransferSolver::HeatTransferSolver(
+        std::shared_ptr<const mesh::Mesh<double>> mesh,
+        std::shared_ptr<const mesh::MeshTags<int>> facet_tags,
+        std::shared_ptr<const mesh::MeshTags<int>> cell_tags, int order)
+        : TimeDependentField(std::move(mesh), std::move(facet_tags),
+              std::move(cell_tags), order, 1)
+    {
+    }
+
+    void HeatTransferSolver::set_joule_source(
+        std::shared_ptr<const fem::Function<double>> V,
+        std::shared_ptr<CellProperty> sigma)
+    {
+        joule_V_ = std::move(V);
+        joule_sigma_ = std::move(sigma);
+    }
+
+    void HeatTransferSolver::refresh(double t)
+    {
+        t_ = t;
+        if (k_)
+            k_->update(t);
+        if (rho_cp_)
+            rho_cp_->update(t);
+        if (Q_)
+            Q_->update(t);
+        if (joule_sigma_)
+            joule_sigma_->update(t);
+        for (auto& cv : convections_) {
+            cv.h->update(t);
+            cv.t_inf->update(t);
+        }
+    }
+
+    bool HeatTransferSolver::nonlinear() const
+    {
+        return solution_dependent(k_) or solution_dependent(rho_cp_)
+            or solution_dependent(Q_) or solution_dependent(joule_sigma_);
+    }
+
+    void HeatTransferSolver::constrain_solution(double t)
+    {
+        impose_values(std::span(u_->x()->array()), make_bcs(temps_, t));
+    }
+
+    void HeatTransferSolver::apply_initial_condition()
+    {
+        const auto coords = V_->tabulate_dof_coordinates(false);
+        auto& arr = u_->x()->array();
+        for (std::int32_t d = 0; d < V_->dofmap()->index_map->size_local(); ++d)
+            arr[static_cast<std::size_t>(d)] = initial_.eval(
+                coords[3 * d], coords[3 * d + 1], coords[3 * d + 2], 0.0);
+    }
+
+    void HeatTransferSolver::assemble_sources(la::Vector<double>& f) const
+    {
+        if (Q_)
+            add_load(f, {Q_->function()}, kernels::load_scalar);
+
+        // Joule heating: ∫ sigma |grad V|² phi.
+        if (joule_V_ and joule_sigma_)
+            add_load(f, {joule_sigma_->function(), joule_V_},
+                kernels::joule_heat_load);
+
+        // Convection load h Tinf.
+        for (const auto& cv : convections_)
+            add_load(f, {cv.h->function(), cv.t_inf->function()},
+                kernels::convection_load, cv.boundary_id);
+    }
+
+    void HeatTransferSolver::assemble_step(la::MatrixCSR<double>& A,
+        la::Vector<double>& b, const TimeLevel& level) const
+    {
+        const TimeWeights& w = level.weights;
+        const double t = level.time;
+        const auto& history = level.history;
+        const la::Vector<double>* f_old = level.source_old;
+        la::Vector<double>& f_new = *level.source_new;
+        const auto& dofmap = *V_->dofmap();
+        const int bs = dofmap.index_map_bs();
+        const bool has_mass = w.a[0] != 0.0;
+
+        auto bcs = make_bcs(temps_, t);
+        auto rows = marked_rows(bcs);
+
+        // Operators, assembled with the Dirichlet rows zeroed and their
+        // columns kept (the boundary values move to the right-hand side in
+        // impose_dirichlet).
+        la::MatrixCSR<double> M(*pattern_);
+        la::MatrixCSR<double> K(*pattern_);
+        if (has_mass)
+            add_operator(M, rows, {rho_cp_->function()}, kernels::mass_scalar);
+        auto a = add_operator(K, rows, {k_->function()},
+            kernels::diffusion_scalar);
+
+        // Convection Robin mass.
+        for (const auto& cv : convections_)
+            add_operator(K, rows, {cv.h->function()}, kernels::convection_mass,
+                cv.boundary_id);
+
+        // LHS operator: a0 M + b0 K.
+        auto& av = A.values();
+        if (has_mass)
+            for (std::size_t i = 0; i < av.size(); ++i)
+                av[i] = w.a[0] * M.values()[i] + w.b[0] * K.values()[i];
+        else
+            for (std::size_t i = 0; i < av.size(); ++i)
+                av[i] = w.b[0] * K.values()[i];
+
+        // Source load of this level.
+        f_new.set(0.0);
+        assemble_sources(f_new);
+        b.set(0.0);
+        for (std::size_t i = 0; i < b.array().size(); ++i)
+            b.array()[i] = w.c_new * f_new.array()[i]
+                + (w.c_old != 0.0 and f_old ? w.c_old * f_old->array()[i] : 0.0);
+
+        // History: b -= (a_k M + b_k K) u^{n+1-k}.
+        la::Vector<double> y(dofmap.index_map, bs);
+        for (std::size_t k = 1; k < w.a.size(); ++k) {
+            if (k > history.size() or history[k - 1] == nullptr)
+                break;
+            const la::Vector<double>& u_k = *history[k - 1];
+            if (w.a[k] != 0.0 and has_mass) {
+                y.set(0.0);
+                M.mult(u_k, y);
+                for (std::size_t i = 0; i < b.array().size(); ++i)
+                    b.array()[i] -= w.a[k] * y.array()[i];
+            }
+            if (w.b[k] != 0.0) {
+                y.set(0.0);
+                K.mult(u_k, y);
+                for (std::size_t i = 0; i < b.array().size(); ++i)
+                    b.array()[i] -= w.b[k] * y.array()[i];
+            }
+        }
+
+        impose_dirichlet(A, b, a, bcs, rows);
+    }
+
+    void HeatTransferSolver::assemble_steady(la::MatrixCSR<double>& A,
+        la::Vector<double>& b) const
+    {
+        // The steady problem is the degenerate one-level scheme: K u = f.
+        TimeWeights weights;
+        weights.a = {0.0};
+        weights.b = {1.0};
+        la::Vector<double> f_new(V_->dofmap()->index_map,
+            V_->dofmap()->index_map_bs());
+        TimeLevel level;
+        level.weights = weights;
+        level.time = t_;
+        level.source_new = &f_new;
+        assemble_step(A, b, level);
+    }
+
+} // namespace hellofem::app

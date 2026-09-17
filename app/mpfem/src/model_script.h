@@ -5,6 +5,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace hellofem::app {
@@ -20,6 +21,11 @@ namespace hellofem::app {
     struct MaterialProperty {
         std::string name; // "electricconductivity", "thermalconductivity", ...
         std::string value; // expression string (possibly a 9-entry tensor)
+
+        /// The value as a scalar expression. COMSOL stores a tensor-valued
+        /// property as a space-separated component list; the isotropic case
+        /// uses the leading component.
+        std::string scalar_value() const;
     };
 
     /// A material and its domain assignment + properties.
@@ -27,6 +33,9 @@ namespace hellofem::app {
         std::string tag;
         std::set<int> domains; // 1-based COMSOL domain ids
         std::vector<MaterialProperty> properties;
+
+        /// The property `name` of this material, if it defines one.
+        const MaterialProperty* property(std::string_view name) const;
     };
 
     /// A boundary-condition / feature definition on a physics interface.
@@ -79,8 +88,6 @@ namespace hellofem::app {
         ExportConfig export_config;
 
         const Material* material_on_domain(int domain) const;
-        const Physics* physics_by_type(const std::string& type) const;
-        std::vector<const PhysicsFeature*> features(const std::string& type) const;
     };
 
 } // namespace hellofem::app

@@ -3,10 +3,12 @@
 
 #include "catch2/catch_approx.hpp"
 #include "catch2/catch_test_macros.hpp"
+#include "electric.h"
 #include "fixture.h"
+#include "heat.h"
 #include "mesh/generation.h"
 #include "mesh/utils.h"
-#include "physics.h"
+#include "solid.h"
 
 #include <array>
 #include <cmath>

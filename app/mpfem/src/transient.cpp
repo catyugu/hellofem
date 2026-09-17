@@ -1,4 +1,4 @@
-// hellofem::app — time stepping driver of a heat-transfer solve
+// hellofem::app — time stepping driver of a time-dependent field
 // SPDX-License-Identifier: MIT
 
 #include "transient.h"
@@ -11,21 +11,20 @@
 
 namespace hellofem::app {
 
-    HeatTimeStepper::HeatTimeStepper(std::shared_ptr<HeatTransferSolver> solver,
-        std::string_view scheme)
-        : solver_(std::move(solver))
+    TimeStepper::TimeStepper(TimeDependentField& field, std::string_view scheme)
+        : field_(field)
         , scheme_(find_time_scheme(scheme))
     {
     }
 
-    void HeatTimeStepper::start(double t0)
+    void TimeStepper::start(double t0)
     {
-        history_.push_back(la::Vector<double>(*solver_->solution()->x()));
+        history_.push_back(la::Vector<double>(*field_.solution()->x()));
         source_.reset();
         t_ = t0;
     }
 
-    void HeatTimeStepper::step(double t)
+    void TimeStepper::step(double t)
     {
         const double dt = t - t_;
         const int previous = static_cast<int>(history_.size());
@@ -35,8 +34,8 @@ namespace hellofem::app {
         for (std::size_t k = 1; k < w.a.size() and k <= history_.size(); ++k)
             history.push_back(&history_[k - 1]);
 
-        la::Vector<double> source(solver_->space()->dofmap()->index_map,
-            solver_->space()->dofmap()->index_map_bs());
+        la::Vector<double> source(field_.space()->dofmap()->index_map,
+            field_.space()->dofmap()->index_map_bs());
         TimeLevel level;
         level.weights = w;
         level.time = t;
@@ -45,10 +44,10 @@ namespace hellofem::app {
         level.source_new = &source;
         const int iterations = solve_system(
             [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
-                solver_->refresh(t);
-                solver_->assemble_step(A, b, level);
+                field_.refresh(t);
+                field_.assemble_step(A, b, level);
             },
-            *solver_->solution()->x(), solver_->pattern(), solver_->nonlinear(),
+            *field_.solution()->x(), field_.pattern(), field_.nonlinear(),
             /*warm_start=*/true);
 
         spdlog::info("stepping '{}' to t = {} s (dt = {} s, {} iterations)",
@@ -56,7 +55,7 @@ namespace hellofem::app {
 
         source_ = source;
         history_.insert(history_.begin(),
-            la::Vector<double>(*solver_->solution()->x()));
+            la::Vector<double>(*field_.solution()->x()));
         const std::size_t keep
             = static_cast<std::size_t>(scheme_.levels - 1);
         if (history_.size() > keep)

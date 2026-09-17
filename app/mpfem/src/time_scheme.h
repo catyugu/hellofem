@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include "la/Vector.h"
+
 #include <span>
 #include <string>
 #include <string_view>
@@ -21,6 +23,20 @@ namespace hellofem::app {
         std::vector<double> b; // stiffness-operator weights
         double c_new = 1.0;
         double c_old = 0.0;
+    };
+
+    /// One time level of a multistep scheme: the weights that apply at it,
+    /// the level time, and the stored data of the previous levels.
+    struct TimeLevel {
+        TimeWeights weights;
+        /// Time of this level (its Dirichlet data is evaluated there).
+        double time = 0.0;
+        /// Previous solution levels, most recent first.
+        std::span<const la::Vector<double>* const> history;
+        /// Source load of the previous level (null at the first step).
+        const la::Vector<double>* source_old = nullptr;
+        /// Source load of this level; stored for the next step.
+        la::Vector<double>* source_new = nullptr;
     };
 
     /// A time stepping scheme, described by its weights alone: a scheme is a

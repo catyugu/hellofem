@@ -1,29 +1,28 @@
-// hellofem::app — time stepping driver of a heat-transfer solve
+// hellofem::app — time stepping driver of a time-dependent field
 // SPDX-License-Identifier: MIT
 #pragma once
 
-#include "physics.h"
+#include "field.h"
 #include "time_scheme.h"
 
 #include <cstddef>
-#include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace hellofem::app {
 
-    /// Advances a heat-transfer solve in time with a time stepping scheme.
+    /// Advances a time-dependent field with a time stepping scheme.
     ///
     /// Owns the solution history and the source load of the previous level,
-    /// which the scheme needs, and refreshes the solver at every new level.
+    /// which the scheme needs, and refreshes the field at every new level.
     /// The solution of the previous level is the initial guess of the next
     /// one — for the nonlinear material update and for the Krylov solve.
-    class HeatTimeStepper {
+    class TimeStepper {
     public:
-        /// Advance a heat-transfer solve in time with the scheme named
-        /// `scheme` (see `time_schemes`).
-        HeatTimeStepper(std::shared_ptr<HeatTransferSolver> solver,
-            std::string_view scheme);
+        /// Advance `field` in time with the scheme named `scheme` (see
+        /// `time_schemes`).
+        TimeStepper(TimeDependentField& field, std::string_view scheme);
 
         /// Record the current solution (the initial state, already
         /// prepared by the caller) as the first level, at time `t0`.
@@ -36,7 +35,7 @@ namespace hellofem::app {
         const TimeScheme& scheme() const { return scheme_; }
 
     private:
-        std::shared_ptr<HeatTransferSolver> solver_;
+        TimeDependentField& field_;
         const TimeScheme& scheme_;
         std::vector<la::Vector<double>> history_;
         std::optional<la::Vector<double>> source_;
