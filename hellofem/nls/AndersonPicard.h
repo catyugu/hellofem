@@ -307,6 +307,33 @@ namespace hellofem::nls {
                     "anderson_picard: inner linear solve did not converge.");
             cfg.post_linear_solve();
 
+            // Residual of the frozen system at the solve's own result: the
+            // accuracy the inner solve delivers, and therefore the floor of
+            // the outer residual. The two tolerances are not comparable as
+            // written — the inner one is relative to the 2-norm of the right
+            // hand side, the outer one to its infinity norm — so an inner
+            // tolerance looser than the outer threshold leaves a floor the
+            // iteration can never get under: it would spend every remaining
+            // iteration on a fixed point that does not move.
+            {
+                la::Vector<T> r_in(x.index_map(), x.bs());
+                r_in.set(0);
+                A.mult(G, r_in);
+                double inner_residual = 0;
+                for (int i = 0; i < n; ++i)
+                    inner_residual = std::max(inner_residual,
+                        static_cast<double>(std::abs(b[i] - r_in[i])));
+                if (inner_residual > residual_threshold
+                    and max_residual <= inner_residual)
+                    throw std::runtime_error(
+                        "anderson_picard: the inner solve leaves a residual of "
+                        + std::to_string(inner_residual) + ", above the "
+                        "nonlinear threshold of "
+                        + std::to_string(residual_threshold)
+                        + ": tighten the inner tolerance (krylov_rtol / "
+                          "krylov_atol).");
+            }
+
             // Mix the iterate.
             std::optional<la::Vector<T>> prop = mixer.step(x, G);
             la::Vector<T> next(x.index_map(), x.bs());

@@ -56,10 +56,18 @@ int main(int argc, char* argv[])
         model.name, model.parameters.size(), model.materials.size(),
         model.physics.size(), model.couplings.size());
 
-    // Solve the model's study.
-    CaseScheduler scheduler(model, lm, time);
-    scheduler.run();
-    scheduler.export_result(result_path);
+    // Solve the model's study. A failing solve is reported where it happens:
+    // an exception that escapes `main` ends the process without its message,
+    // which reads as a crash rather than as the solver's own complaint.
+    try {
+        CaseScheduler scheduler(model, lm, time);
+        scheduler.run();
+        scheduler.export_result(result_path);
+    }
+    catch (const std::exception& e) {
+        spdlog::error("{}", e.what());
+        return 1;
+    }
 
     spdlog::info("wrote {}", result_path);
     return 0;

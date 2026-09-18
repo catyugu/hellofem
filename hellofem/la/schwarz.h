@@ -17,8 +17,9 @@ namespace hellofem::la {
     ///
     /// Splits the (scalar) matrix rows into `nparts` contiguous subdomains,
     /// grows each by `overlap` layers of the graph adjacency, solves the
-    /// local subsystem of each subdomain exactly (Eigen SparseLU) and
-    /// sums the extended local solutions — the additive Schwarz operator
+    /// local subsystem of each subdomain exactly (by the la layer's direct
+    /// backend) and sums the extended local solutions — the additive
+    /// Schwarz operator
     /// `P = sum_s R_s^T A_ss^{-1} R_s`.
     ///
     /// This is a genuine overlapping domain-decomposition preconditioner
