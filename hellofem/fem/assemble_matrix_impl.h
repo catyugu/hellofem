@@ -44,6 +44,66 @@ namespace hellofem::fem::impl {
                 Ae[i * ndim1 + j * bs1 + k] = 0;
     }
 
+    /// Colour the cells so that two cells of one colour share no dof, and
+    /// therefore write disjoint entries of the matrix: one colour can be
+    /// scattered in parallel without a lock.
+    ///
+    /// Greedy, one colour per pass: a cell joins the current colour when no
+    /// dof it touches was taken by a cell of that colour already.
+    ///
+    /// @param[in] dofmap0 Row dofmap.
+    /// @param[in] dofmap1 Column dofmap.
+    /// @param[in] cells The cell of each entry to colour (a facet integral
+    ///   colours the cells of its facets).
+    /// @return The colour of each entry, numbered from 0.
+    inline std::vector<std::int32_t> colour_cells(const DofMap& dofmap0,
+        const DofMap& dofmap1, std::span<const std::int32_t> cells)
+    {
+        const auto rows = static_cast<std::size_t>(dofmap0.index_map->size_local());
+        const auto cols = static_cast<std::size_t>(dofmap1.index_map->size_local());
+        std::vector<std::int32_t> colour(cells.size(), -1);
+        std::vector<std::int8_t> row_taken(rows, 0), col_taken(cols, 0);
+
+        std::size_t left = cells.size();
+        for (std::int32_t c = 0; left > 0; ++c) {
+            std::ranges::fill(row_taken, 0);
+            std::ranges::fill(col_taken, 0);
+            for (std::size_t e = 0; e < cells.size(); ++e) {
+                if (colour[e] >= 0)
+                    continue;
+                const auto d0 = dofmap0.cell_dofs(cells[e]);
+                const auto d1 = dofmap1.cell_dofs(cells[e]);
+                const bool free
+                    = std::ranges::none_of(d0, [&](auto d) { return row_taken[d]; })
+                    and std::ranges::none_of(d1, [&](auto d) { return col_taken[d]; });
+                if (not free)
+                    continue;
+                for (auto d : d0)
+                    row_taken[d] = 1;
+                for (auto d : d1)
+                    col_taken[d] = 1;
+                colour[e] = c;
+                --left;
+            }
+        }
+        return colour;
+    }
+
+    /// The positions `0, 1, ...` of `colour`, grouped by colour.
+    inline std::vector<std::vector<std::int32_t>> by_colour(
+        std::span<const std::int32_t> colour)
+    {
+        std::int32_t num = 0;
+        for (auto c : colour)
+            num = std::max(num, c + 1);
+        std::vector<std::vector<std::int32_t>> buckets(
+            static_cast<std::size_t>(num));
+        for (std::size_t e = 0; e < colour.size(); ++e)
+            buckets[static_cast<std::size_t>(colour[e])].push_back(
+                static_cast<std::int32_t>(e));
+        return buckets;
+    }
+
     /// Execute the kernel over cells and accumulate into a matrix.
     ///
     /// Each cell: gather geometry, zero the element tensor, run the

@@ -23,8 +23,10 @@
 #include "mesh/Topology.h"
 #include "mesh/generation.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <numeric>
 #include <span>
 #include <vector>
 
@@ -204,4 +206,30 @@ TEST_CASE("Form: stiffness matrix of P1 on 2-triangle unit square", "[fem]")
     for (int i = 0; i < n; ++i)
         for (int j = 0; j < n; ++j)
             REQUIRE(K[i * n + j] == Approx(K[j * n + i]));
+}
+
+// The matrix assembly scatters one colour of cells at a time without a lock,
+// which is only sound while two cells of one colour share no dof. That is the
+// property the colouring has to hold, on the space the assembly runs on.
+TEST_CASE("Matrix assembly: cells of one colour share no dof", "[fem]")
+{
+    auto V = p1_space(4); // 32 triangles over a 4x4 unit square
+    const auto& dofmap = *V->dofmap();
+    std::vector<std::int32_t> cells(dofmap.map().extent(0));
+    std::iota(cells.begin(), cells.end(), 0);
+
+    const auto colour = fem::impl::colour_cells(dofmap, dofmap, cells);
+    REQUIRE(colour.size() == cells.size());
+    REQUIRE(*std::ranges::max_element(colour) >= 0); // every cell coloured
+
+    // Per dof, the colours of the cells that touch it must all differ.
+    std::vector<std::vector<std::int32_t>> colours_of(
+        static_cast<std::size_t>(dofmap.index_map->size_local()));
+    for (std::size_t e = 0; e < cells.size(); ++e)
+        for (auto d : dofmap.cell_dofs(cells[e]))
+            colours_of[static_cast<std::size_t>(d)].push_back(colour[e]);
+    for (auto& cs : colours_of) {
+        std::ranges::sort(cs);
+        REQUIRE(std::ranges::adjacent_find(cs) == cs.end());
+    }
 }

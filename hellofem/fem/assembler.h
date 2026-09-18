@@ -123,9 +123,13 @@ namespace hellofem::fem {
     /// Assemble the cell and facet integrals of a bilinear form into a
     /// matrix, zeroing rows/cols marked by the boundary conditions.
     ///
-    /// The assembly is parallelized: each task accumulates into a
-    /// thread-local clone of the matrix (copied from `mat_add`'s backing
-    /// storage) which are summed into the base at the end.
+    /// The assembly is parallelized without a lock: the cells are coloured so
+    /// that one colour's cells share no dof, and the colours are scattered one
+    /// after another. Two cells of one colour therefore write disjoint
+    /// entries, and the writes that do collide are separated by the colour
+    /// sweep rather than by a mutex around every element scatter — a mutex
+    /// there costs about as much as the kernel evaluation it guards, and it
+    /// caps the scaling of the whole assembly.
     /// @param[in] mat_add Functor matching `la::MatSet` (e.g.
     /// `matrix.mat_add_values()`).
     /// @param[in] a The bilinear form.
@@ -169,56 +173,89 @@ namespace hellofem::fem {
                 if (num_entities == 0)
                     continue;
 
-                // Thread-local matrix accumulation: the kernel evaluation is
-                // parallel, but the shared CSR writes are serialized with a
-                // spin mutex (insert_csr performs a short binary search, so
-                // the lock contention is low). The caller's `mat_add` is
-                // invoked through a locking wrapper.
-                tbb::spin_mutex mutex;
-                auto mat_add_locked = [&](std::span<const std::int32_t> rows,
-                                          std::span<const std::int32_t> cols,
-                                          std::span<const T> vals) -> int {
-                    tbb::spin_mutex::scoped_lock lock(mutex);
-                    return mat_add(rows, cols, vals);
+                // One element scatter per entity, through whichever `mat_set`
+                // the caller's path uses. The kernel arrives as an argument so
+                // that each parallel body calls its own by-value copy of it:
+                // the kernel holds per-cell scratch, and a body that reached
+                // the shared object instead would corrupt it.
+                auto scatter = [&](auto&& set, const kernel_t<T>& k, std::size_t e,
+                                   std::span<T> Ab, std::span<T> cdofs_b) {
+                    const std::size_t begin = e * entities_per_cell;
+                    switch (type) {
+                    case IntegralType::cell:
+                        impl::assemble_cells_matrix<false>(set,
+                            a.mesh()->geometry(), cells.subspan(begin, 1),
+                            dofmap0, P0, dofmap1, P1T, bc0, bc1, k,
+                            coeffs.data() + e * cstride, cstride, consts,
+                            empty_cell_info, empty_cell_info, Ab, cdofs_b);
+                        break;
+                    case IntegralType::exterior_facet:
+                        impl::assemble_entities_matrix<false>(set,
+                            a.mesh()->geometry(), cells.subspan(begin, 2),
+                            dofmap0, P0, dofmap1, P1T, bc0, bc1, k,
+                            coeffs.data() + e * cstride, cstride, consts,
+                            empty_cell_info, empty_cell_info, Ab, cdofs_b);
+                        break;
+                    case IntegralType::interior_facet:
+                        impl::assemble_interior_facets_matrix<false>(set,
+                            a.mesh()->geometry(), cells.subspan(begin, 4),
+                            dofmap0, P0, dofmap1, P1T, bc0, bc1, k,
+                            coeffs.data() + e * cstride, cstride, consts,
+                            empty_cell_info, empty_cell_info, Ab, cdofs_b);
+                        break;
+                    }
                 };
-                tbb::parallel_for(
-                    tbb::blocked_range<std::size_t>(0, num_entities),
-                    [&, P0, P1T, kernel, mat_add_locked](const tbb::blocked_range<std::size_t>& r) {
-                        std::vector<T> Ab(static_cast<std::size_t>(4)
+                const auto scratch = [&] {
+                    return std::pair {
+                        std::vector<T>(static_cast<std::size_t>(4)
                             * dofmap0.bs() * dofmap0.map().extent(1)
                             * static_cast<std::size_t>(dofmap1.bs())
-                            * dofmap1.map().extent(1));
-                        std::vector<T> cdofs_b(static_cast<std::size_t>(6) * ngeom);
-                        const std::size_t begin = r.begin() * entities_per_cell;
-                        const std::size_t len = (r.end() - r.begin()) * entities_per_cell;
+                            * dofmap1.map().extent(1)),
+                        std::vector<T>(static_cast<std::size_t>(6) * ngeom)};
+                };
 
-                        switch (type) {
-                        case IntegralType::cell:
-                            impl::assemble_cells_matrix<false>(mat_add_locked,
-                                a.mesh()->geometry(), cells.subspan(begin, len),
-                                dofmap0, P0, dofmap1, P1T, bc0, bc1, kernel,
-                                coeffs.data() + r.begin() * cstride, cstride,
-                                consts, empty_cell_info, empty_cell_info,
-                                std::span(Ab), std::span(cdofs_b));
-                            break;
-                        case IntegralType::exterior_facet:
-                            impl::assemble_entities_matrix<false>(mat_add_locked,
-                                a.mesh()->geometry(), cells.subspan(begin, len),
-                                dofmap0, P0, dofmap1, P1T, bc0, bc1, kernel,
-                                coeffs.data() + r.begin() * cstride, cstride,
-                                consts, empty_cell_info, empty_cell_info,
-                                std::span(Ab), std::span(cdofs_b));
-                            break;
-                        case IntegralType::interior_facet:
-                            impl::assemble_interior_facets_matrix<false>(mat_add_locked,
-                                a.mesh()->geometry(), cells.subspan(begin, len),
-                                dofmap0, P0, dofmap1, P1T, bc0, bc1, kernel,
-                                coeffs.data() + r.begin() * cstride, cstride,
-                                consts, empty_cell_info, empty_cell_info,
-                                std::span(Ab), std::span(cdofs_b));
-                            break;
-                        }
-                    });
+                if (type == IntegralType::interior_facet) {
+                    // An interior facet belongs to two cells, so a cell
+                    // colouring does not make its writes disjoint: it keeps
+                    // the lock.
+                    tbb::spin_mutex mutex;
+                    auto mat_add_locked = [&](std::span<const std::int32_t> rows,
+                                              std::span<const std::int32_t> cols,
+                                              std::span<const T> vals) -> int {
+                        tbb::spin_mutex::scoped_lock lock(mutex);
+                        return mat_add(rows, cols, vals);
+                    };
+                    tbb::parallel_for(
+                        tbb::blocked_range<std::size_t>(0, num_entities),
+                        [&, P0, P1T, kernel, mat_add_locked](const tbb::blocked_range<std::size_t>& r) {
+                            auto [Ab, cdofs_b] = scratch();
+                            for (std::size_t e = r.begin(); e < r.end(); ++e)
+                                scatter(mat_add_locked, kernel, e,
+                                    std::span(Ab), std::span(cdofs_b));
+                        });
+                    continue;
+                }
+
+                // The cells of one colour share no dof, so their scatters
+                // touch disjoint entries and run in parallel without a lock.
+                // The colours are swept one after another, which is what
+                // serializes the writes that do collide.
+                std::vector<std::int32_t> entity_cells(num_entities);
+                for (std::size_t e = 0; e < num_entities; ++e)
+                    entity_cells[e] = cells[e * entities_per_cell];
+                for (const auto& bucket : impl::by_colour(
+                         impl::colour_cells(dofmap0, dofmap1, entity_cells))) {
+                    tbb::parallel_for(
+                        tbb::blocked_range<std::size_t>(0, bucket.size()),
+                        [&, P0, P1T, kernel](const tbb::blocked_range<std::size_t>& r) {
+                            auto [Ab, cdofs_b] = scratch();
+                            for (std::size_t k = r.begin(); k < r.end(); ++k)
+                                scatter(mat_add, kernel,
+                                    static_cast<std::size_t>(
+                                        bucket[static_cast<std::size_t>(k)]),
+                                    std::span(Ab), std::span(cdofs_b));
+                        });
+                }
             }
         }
     }
