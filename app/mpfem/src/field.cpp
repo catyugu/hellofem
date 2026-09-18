@@ -408,7 +408,7 @@ namespace hellofem::app {
                 refresh(t);
                 assemble_steady(A, b);
             },
-            *u_->x(), *pattern_, nonlinear(), /*warm_start=*/true);
+            *u_->x(), *pattern_, nonlinear(), /*warm_start=*/true, linear_);
     }
 
 } // namespace hellofem::app

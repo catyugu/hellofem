@@ -3,6 +3,7 @@
 #pragma once
 
 #include "property.h"
+#include "solver.h"
 #include "time_scheme.h"
 
 #include "fem/DirichletBC.h"
@@ -83,6 +84,11 @@ namespace hellofem::app {
         /// All cells, the assembly range.
         std::vector<std::int32_t> cells() const;
 
+        /// The linear solver of this field's systems: the app's defaults,
+        /// changed by a physics whose operator a direct factorization suits
+        /// better (see `solid.cpp`).
+        const LinearSettings& linear_settings() const { return linear_; }
+
     protected:
         /// Dofs on the facets carrying the given 1-based boundary ids.
         std::vector<std::int32_t> boundary_dofs(const std::set<int>& ids) const;
@@ -160,6 +166,7 @@ namespace hellofem::app {
         std::shared_ptr<fem::FunctionSpace<double>> V_;
         std::shared_ptr<fem::Function<double>> u_;
         std::shared_ptr<la::SparsityPattern> pattern_;
+        LinearSettings linear_;
         double t_ = 0.0; // time of the last refresh
         int order_ = 1; // element order of the field, sizes the quadrature
     };

@@ -114,6 +114,12 @@ namespace hellofem::app {
         : FieldSolver(std::move(mesh), std::move(facet_tags), std::move(cell_tags),
               order, 3)
     {
+        // Elasticity is the one operator of the app that a factorization suits
+        // better than the AMG iteration: a three-component field on a
+        // second-order mesh gives a large, ill-conditioned system, and the
+        // blocked AMG hierarchy needs far more Krylov iterations for it than
+        // for a scalar field. Measured on every solid case: see the report.
+        linear_.solver_type = "direct";
     }
 
     void SolidMechanicsSolver::set_thermal_expansion(

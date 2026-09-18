@@ -85,7 +85,7 @@ namespace hellofem::app {
                 field_.assemble_step(A, b, level);
             },
             *field_.solution()->x(), field_.pattern(), field_.nonlinear(),
-            /*warm_start=*/true);
+            /*warm_start=*/true, field_.linear_settings());
 
         spdlog::debug("stepping '{}' to t = {} s (dt = {} s, order {}, {} iterations)",
             scheme_.name, t, steps.dt, static_cast<int>(w.a.size()) - 1,

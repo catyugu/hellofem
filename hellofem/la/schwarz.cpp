@@ -3,8 +3,9 @@
 
 #include "schwarz.h"
 
+#include "direct.h"
+
 #include <Eigen/Sparse>
-#include <Eigen/SparseLU>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
@@ -19,10 +20,9 @@ namespace hellofem::la {
 
     template <typename T>
     struct SchwarzPreconditioner<T>::Impl {
-        // Local factorization of each subdomain (SparseLU is not movable,
-        // so held by pointer).
-        std::vector<std::unique_ptr<Eigen::SparseLU<Eigen::SparseMatrix<T>>>>
-            solvers;
+        // Local factorization of each subdomain, by the la layer's direct
+        // backend (MKL PARDISO where the build has MKL).
+        std::vector<std::unique_ptr<DirectSolver>> solvers;
         // Row index (in the scalar matrix) of each local row, per
         // subdomain: defines the restriction R_s and prolongation R_s^T.
         std::vector<std::vector<std::int32_t>> sub;
@@ -82,9 +82,9 @@ namespace hellofem::la {
         }
 
         /// Extract the principal submatrix of the scalar CSR `S` on the
-        /// rows `sub` (both rows and columns restricted), as an Eigen
-        /// sparse matrix.
-        Eigen::SparseMatrix<double> extract_submatrix(const MatrixCSR<double>& S,
+        /// rows `sub` (both rows and columns restricted), as a scalar
+        /// MatrixCSR the direct backend factorizes.
+        MatrixCSR<double> extract_submatrix(const MatrixCSR<double>& S,
             const std::vector<std::int32_t>& sub)
         {
             const std::int32_t m = static_cast<std::int32_t>(sub.size());
@@ -93,22 +93,40 @@ namespace hellofem::la {
             for (std::int32_t i = 0; i < m; ++i)
                 local_of[static_cast<std::size_t>(sub[static_cast<std::size_t>(i)])] = i;
 
-            Eigen::SparseMatrix<double> E(m, m);
-            std::vector<Eigen::Triplet<double>> triplets;
-            triplets.reserve(static_cast<std::size_t>(S.cols().size()));
             const auto& row_ptr = S.row_ptr();
             const auto& cols = S.cols();
             const auto& values = S.values();
+
+            auto imap = std::make_shared<common::IndexMap>(0, m);
+            SparsityPattern pattern(imap);
+            for (std::int32_t i = 0; i < m; ++i)
+                for (std::int64_t j = row_ptr[sub[static_cast<std::size_t>(i)]];
+                     j < row_ptr[sub[static_cast<std::size_t>(i)] + 1]; ++j) {
+                    const std::int32_t lc
+                        = local_of[static_cast<std::size_t>(cols[static_cast<std::size_t>(j)])];
+                    if (lc >= 0) // a column outside the subdomain is dropped
+                        pattern.insert(i, lc);
+                }
+            pattern.finalize();
+
+            // `set` writes a dense block of |rows| x |cols| values, so the
+            // entries go in one row at a time.
+            MatrixCSR<double> E(pattern);
             for (std::int32_t i = 0; i < m; ++i) {
                 const std::int32_t r = sub[static_cast<std::size_t>(i)];
+                std::vector<std::int32_t> col_ids;
+                std::vector<double> vals;
                 for (std::int64_t j = row_ptr[r]; j < row_ptr[r + 1]; ++j) {
-                    const std::int32_t c = cols[static_cast<std::size_t>(j)];
-                    const std::int32_t lc = local_of[static_cast<std::size_t>(c)];
-                    if (lc >= 0) // column inside the subdomain
-                        triplets.emplace_back(i, lc, values[static_cast<std::size_t>(j)]);
+                    const std::int32_t lc
+                        = local_of[static_cast<std::size_t>(cols[static_cast<std::size_t>(j)])];
+                    if (lc < 0)
+                        continue;
+                    col_ids.push_back(lc);
+                    vals.push_back(values[static_cast<std::size_t>(j)]);
                 }
+                if (not col_ids.empty())
+                    E.set(vals, std::vector<std::int32_t> {i}, col_ids);
             }
-            E.setFromTriplets(triplets.begin(), triplets.end());
             return E;
         }
 
@@ -130,13 +148,8 @@ namespace hellofem::la {
         _impl->solvers.resize(_impl->sub.size());
 
         for (std::size_t p = 0; p < _impl->sub.size(); ++p) {
-            auto solver = std::make_unique<Eigen::SparseLU<Eigen::SparseMatrix<T>>>();
-            Eigen::SparseMatrix<T> E = extract_submatrix(_S, _impl->sub[p]);
-            solver->compute(E);
-            if (solver->info() != Eigen::Success)
-                throw std::runtime_error(
-                    "Schwarz: local factorization failed for a subdomain.");
-            _impl->solvers[p] = std::move(solver);
+            MatrixCSR<double> E = extract_submatrix(_S, _impl->sub[p]);
+            _impl->solvers[p] = std::make_unique<DirectSolver>(E);
         }
     }
 
@@ -161,16 +174,20 @@ namespace hellofem::la {
                     const auto& sub = _impl->sub[p];
                     const std::int32_t m = static_cast<std::int32_t>(sub.size());
                     // Restrict: x_local = R_s x.
-                    Eigen::Matrix<T, Eigen::Dynamic, 1> xl(m);
+                    auto local_map = std::make_shared<common::IndexMap>(0, m);
+                    Vector<double> xl(local_map, 1);
+                    Vector<double> yl(local_map, 1);
                     for (std::int32_t i = 0; i < m; ++i)
-                        xl(i) = xa[static_cast<std::size_t>(sub[static_cast<std::size_t>(i)])];
+                        xl[static_cast<std::size_t>(i)]
+                            = xa[static_cast<std::size_t>(sub[static_cast<std::size_t>(i)])];
                     // Solve A_ss yl = xl.
-                    Eigen::Matrix<T, Eigen::Dynamic, 1> yl = _impl->solvers[p]->solve(xl);
+                    yl.set(0.0);
+                    _impl->solvers[p]->solve(yl, xl);
                     // Prolongate and accumulate: y += R_s^T yl.
                     auto& contrib = contributions[p];
                     for (std::int32_t i = 0; i < m; ++i)
                         contrib[static_cast<std::size_t>(sub[static_cast<std::size_t>(i)])]
-                            += yl(i);
+                            += yl[static_cast<std::size_t>(i)];
                 }
             });
 

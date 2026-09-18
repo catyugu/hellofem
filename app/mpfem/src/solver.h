@@ -10,9 +10,15 @@
 
 namespace hellofem::app {
 
-    /// Defaults of the app's Krylov solves: conjugate gradients with
+    /// Defaults of the app's linear solves: conjugate gradients with
     /// algebraic multigrid preconditioning, at a tolerance that makes the
     /// linear error negligible against the discretization error.
+    ///
+    /// `solver_type` names a Krylov method ("cg", "gmres", "bicgstab") or a
+    /// direct factorization ("direct"). A direct solve goes through the la
+    /// layer's direct backend, which is MKL PARDISO where the build has MKL
+    /// and Eigen's SparseLU otherwise; the preconditioner does not apply to
+    /// it.
     struct LinearSettings {
         std::string solver_type = "cg";
         std::string preconditioner_type = "amg";
@@ -35,7 +41,8 @@ namespace hellofem::app {
     /// linearization is a good starting point). Throws when the solve does
     /// not converge within the iteration cap.
     void solve_linear(const la::MatrixCSR<double>& A, la::Vector<double>& x,
-        const la::Vector<double>& b, bool warm_start = false);
+        const la::Vector<double>& b, bool warm_start,
+        const LinearSettings& settings);
 
     /// Defaults of the fixed-point iteration used for nonlinear material
     /// laws (Anderson-accelerated Picard).
@@ -53,13 +60,13 @@ namespace hellofem::app {
 
     /// Solve the system assembled by `assemble` for the unknown `x`,
     /// starting from `x` as the initial guess. A linear problem needs a
-    /// single solve; a nonlinear one is iterated to convergence, and
-    /// `assemble` must refresh the material state from the current `x` on
-    /// every call.
+    /// single solve; a nonlinear one is iterated to convergence with a Krylov
+    /// inner solve, and `assemble` must refresh the material state from the
+    /// current `x` on every call.
     /// @return Iterations used (0 for the single solve of a linear problem).
     int solve_system(
         const std::function<void(la::MatrixCSR<double>&, la::Vector<double>&)>& assemble,
         la::Vector<double>& x, const la::SparsityPattern& pattern, bool nonlinear,
-        bool warm_start = false);
+        bool warm_start, const LinearSettings& settings);
 
 } // namespace hellofem::app
