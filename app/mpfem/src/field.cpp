@@ -75,16 +75,21 @@ namespace hellofem::app {
             std::vector<fem::Form<double>::integral_data>>;
 
         /// Degree of the quadrature rule of a cell or of a facet integral:
-        /// `2p` integrates the app's heaviest integrand — the mass
-        /// `phi_i phi_j`, of degree `2p` (the stiffness
-        /// `grad phi_i . grad phi_j` is `2(p-1)`, the source `phi_i f` is
-        /// `p`) — exactly on an affine cell, and its polynomial part on a
-        /// curved isoparametric one, where no rule is exact. The cell and
-        /// the facet path share it, so the two cannot drift apart.
+        /// the degree of the app's heaviest integrand. On an affine cell that
+        /// integrates it exactly; on a curved isoparametric one it integrates
+        /// the polynomial part, no rule being exact there.
+        ///
+        /// Every material property is a DG0 cell value, so an integrand is
+        /// the basis of degree `p`, at most one field of degree `p`, and a
+        /// constant. The heaviest is the Joule load
+        /// `sigma |grad V|^2 phi_i`, of degree `3p - 2`; then the mass
+        /// `c phi_i phi_j` at `2p`, the stiffness
+        /// `k grad phi_i . grad phi_j` at `2p - 2`, and a source `f phi_i`
+        /// at `p`. The cell and the facet path share the rule, so the two
+        /// cannot drift apart.
         constexpr int quadrature_degree(int field_order)
         {
-            (void)field_order;
-            return 8;
+            return std::max(2 * field_order, 3 * field_order - 2);
         }
 
         /// Facet indices carrying the given 1-based boundary ids.
