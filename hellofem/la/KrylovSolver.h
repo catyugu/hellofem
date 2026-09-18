@@ -7,6 +7,10 @@
 #include "preconditioner.h"
 #include "schwarz.h"
 
+#ifdef HELLOFEM_WITH_PARDISO
+#include "ilu0.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -106,6 +110,8 @@ namespace hellofem::la {
         /// Configure the preconditioner by name.
         /// @param[in] type "none", "jacobi", "ilu" or "amg". The latter
         /// three require a matrix registered via `set_operator(MatrixCSR)`.
+        /// An ILU is MKL's ILU(0) where the build has MKL, and Eigen's
+        /// `IncompleteLUT` otherwise.
         void set_preconditioner_type(std::string_view type)
         {
             if (type == "none")
@@ -126,7 +132,16 @@ namespace hellofem::la {
                 if (!_matrix)
                     throw std::runtime_error("ILU preconditioner requires a "
                                              "matrix (set_operator).");
+                // MKL's ILU(0) is real double only; every other scalar falls
+                // back to Eigen's factorization.
+#ifdef HELLOFEM_WITH_PARDISO
+                if constexpr (std::is_same_v<T, double>)
+                    _P = std::make_shared<Ilu0Preconditioner>(*_matrix);
+                else
+                    _P = std::make_shared<IluPreconditioner<T>>(*_matrix);
+#else
                 _P = std::make_shared<IluPreconditioner<T>>(*_matrix);
+#endif
             }
             else if (type == "schwarz") {
                 if (!_matrix)
