@@ -62,7 +62,6 @@ namespace hellofem::app {
         void apply_initial_condition(double t0);
 
         void refresh(double t) override;
-        bool nonlinear() const override;
         void assemble_steady(la::MatrixCSR<double>& A,
             la::Vector<double>& b) const override;
         void constrain_solution(double t) override;

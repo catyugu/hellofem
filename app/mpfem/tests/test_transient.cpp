@@ -433,9 +433,8 @@ TEST_CASE("Transient heat: the initial value is taken at the study's start time"
 TEST_CASE("Transient heat: a solution-independent nonlinear law matches the linear one",
     "[app][transient]")
 {
-    // k(T) = k0 with alpha_k = 0 still reads the field, so the nonlinear
-    // path (Anderson-accelerated Picard) runs; it must reproduce the
-    // constant-property solve.
+    // k(T) = k0 with alpha_k = 0 is the constant property, whether or not the
+    // expression reads the field; the two must reproduce each other.
     auto box = test::make_box_fixture({0, 0, 0}, {1, 0.2, 0.2}, {4, 1, 1});
     auto run = [&](bool field_dependent) {
         auto solver = std::make_shared<HeatTransferSolver>(
@@ -459,7 +458,6 @@ TEST_CASE("Transient heat: a solution-independent nonlinear law matches the line
         solver->add_temperature_bc(2, ScalarExpression("t*t*t"));
         solver->set_initial_temperature(ScalarExpression(0.0));
         solver->apply_initial_condition(0.0);
-        REQUIRE(solver->nonlinear() == field_dependent);
 
         TimeStepper stepper(*solver, TimeSettings {"bdf2", 1e-3});
         stepper.start(0.0);

@@ -174,11 +174,6 @@ namespace hellofem::app {
 
     } // namespace
 
-    bool solution_dependent(const std::shared_ptr<CellProperty>& property)
-    {
-        return property and property->field_dependent();
-    }
-
     // ---------------------------------------------------------------------------
     // FieldSolver
     // ---------------------------------------------------------------------------
@@ -408,7 +403,7 @@ namespace hellofem::app {
                 refresh(t);
                 assemble_steady(A, b);
             },
-            *u_->x(), *pattern_, nonlinear(), /*warm_start=*/true, linear_);
+            *u_->x(), *pattern_, linear_solver_, linear_);
     }
 
 } // namespace hellofem::app

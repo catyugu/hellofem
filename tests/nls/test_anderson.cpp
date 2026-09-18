@@ -132,8 +132,7 @@ namespace {
         }
 
         explicit PicardPoisson(int n)
-            : V(p1_space(n)), cells(all_cells(*V->dofmap())), mesh(V->mesh()),
-              u(V), bc(T(0), boundary_dofs(*this), V)
+            : V(p1_space(n)), cells(all_cells(*V->dofmap())), mesh(V->mesh()), u(V), bc(T(0), boundary_dofs(*this), V)
         {
             // The nonlinear coefficient is the iterate `u` itself; `coeffs`
             // aliases u's coefficient vector so assembly sees the current
@@ -166,7 +165,7 @@ namespace {
             std::vector<std::int32_t> diag(
                 V->dofmap()->index_map->size_local());
             for (std::int32_t d = 0; d < V->dofmap()->index_map->size_local();
-                 ++d)
+                ++d)
                 diag[static_cast<std::size_t>(d)] = d;
             pattern.insert_diagonal(std::span(diag));
             pattern.finalize();
@@ -178,7 +177,8 @@ namespace {
             stiff.coeffs = {};
             std::vector<std::shared_ptr<const fem::FunctionSpace<T>>> Vlist {V, V};
             std::map<std::pair<fem::IntegralType, int>,
-                std::vector<fem::Form<T>::integral_data>> integrals;
+                std::vector<fem::Form<T>::integral_data>>
+                integrals;
             integrals[{fem::IntegralType::cell, 0}] = {stiff};
             fem::Form<T> a(Vlist, std::move(integrals), mesh, {}, {});
             fem::assemble_matrix(K.mat_add_values(), a, {std::cref(bc)});
@@ -195,7 +195,8 @@ namespace {
             mass.coeffs = {0};
             std::vector<std::shared_ptr<const fem::FunctionSpace<T>>> Vlist {V};
             std::map<std::pair<fem::IntegralType, int>,
-                std::vector<fem::Form<T>::integral_data>> integrals;
+                std::vector<fem::Form<T>::integral_data>>
+                integrals;
             integrals[{fem::IntegralType::cell, 0}] = {mass};
             fem::Form<T> L(Vlist, std::move(integrals), mesh, coeffs, {});
 
@@ -289,6 +290,7 @@ TEST_CASE("Anderson-accelerated Picard solves nonlinear Poisson", "[nls]")
     cfg.relative_tolerance = 1e-8;
     cfg.absolute_tolerance = 1e-12;
 
+    la::LinearSolver<double> inner;
     auto result = nls::anderson_picard<double>(
         [&](const la::Vector<double>& xx)
             -> std::pair<la::MatrixCSR<double>, la::Vector<double>> {
@@ -299,7 +301,7 @@ TEST_CASE("Anderson-accelerated Picard solves nonlinear Poisson", "[nls]")
                 b[i] = -b[i]; // G = A^-1 b is the fixed-point map
             return {std::move(A), std::move(b)};
         },
-        x, cfg);
+        x, inner, cfg);
 
     REQUIRE(result.converged);
     REQUIRE(result.iterations > 0);

@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "la/KrylovSolver.h"
+#include "la/LinearSolver.h"
 #include "la/MatrixCSR.h"
 #include "la/Vector.h"
 
@@ -57,12 +57,8 @@ namespace hellofem::nls {
         /// Log each iteration.
         bool report = true;
 
-        /// Inner linear solver settings for the frozen system `A G = b`.
-        std::string linear_solver_type = "cg";
-        std::string preconditioner_type = "jacobi";
-        double krylov_rtol = 1e-12;
-        double krylov_atol = 1e-14;
-        int krylov_max_iter = 1000;
+        /// Settings of the inner solve of the frozen system `A G = b`.
+        la::LinearSettings linear;
 
         /// Seed the inner linear solve with the current iterate. The
         /// linearization changes slowly between iterations, so this cuts
@@ -245,13 +241,18 @@ namespace hellofem::nls {
     /// @param[in] system_fn Builds, at the current iterate `x`, the linear
     ///   system `A G = b` whose solution is `G(x)`.
     /// @param[in,out] x Initial guess on entry, solution on exit.
+    /// @param[in,out] inner The solve of the frozen system. It belongs to the
+    ///   caller, so that the factorization of an operator outlives one call:
+    ///   an iteration that re-assembles the operator it solved before finds
+    ///   the factorization already built (see `la::LinearSolver`).
     /// @param[in] cfg Configuration.
     /// @return Convergence status and iteration counts.
     template <std::floating_point T>
     AndersonResult<T> anderson_picard(
         const std::function<std::pair<la::MatrixCSR<T>, la::Vector<T>>(
             const la::Vector<T>&)>& system_fn,
-        la::Vector<T>& x, const AndersonConfig& cfg = {})
+        la::Vector<T>& x, la::LinearSolver<T>& inner,
+        const AndersonConfig& cfg = {})
     {
         AndersonMixer<T> mixer(cfg.depth, cfg.warmup_iters, cfg.dampening,
             cfg.max_growth, cfg.reset_on_growth);
@@ -292,17 +293,10 @@ namespace hellofem::nls {
                 G = x;
             else
                 G.set(0);
-            la::KrylovSolver<T> ks;
-            ks.set_operator(A); // copies; enables preconditioner synthesis
-            ks.set_initial_guess(cfg.warm_start_linear_solve);
-            if (cfg.preconditioner_type != "none")
-                ks.set_preconditioner_type(cfg.preconditioner_type);
-            ks.set_solver_type(cfg.linear_solver_type);
-            ks.set_tolerances(
-                cfg.krylov_rtol, cfg.krylov_atol, cfg.krylov_max_iter);
-            const int k_it = ks.solve(G, b);
+            const int k_it = inner.solve(
+                A, G, b, cfg.warm_start_linear_solve, cfg.linear);
             result.krylov_iterations += k_it;
-            if (k_it >= cfg.krylov_max_iter)
+            if (k_it >= cfg.linear.max_iterations)
                 throw std::runtime_error(
                     "anderson_picard: inner linear solve did not converge.");
             cfg.post_linear_solve();

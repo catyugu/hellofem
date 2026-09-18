@@ -140,11 +140,6 @@ namespace hellofem::app {
             thermal_->alpha->update(t);
     }
 
-    bool SolidMechanicsSolver::nonlinear() const
-    {
-        return solution_dependent(E_, nu_, thermal_ ? thermal_->alpha : nullptr);
-    }
-
     void SolidMechanicsSolver::assemble_steady(la::MatrixCSR<double>& A,
         la::Vector<double>& b) const
     {

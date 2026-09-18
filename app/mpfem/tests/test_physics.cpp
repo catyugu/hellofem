@@ -184,7 +184,6 @@ TEST_CASE("Electrostatics: voltage-dependent conductivity drives a nonlinear sol
     sigma->bind_field("V", es.solution());
     sigma->set_expression(1, "1 + V");
     es.set_conductivity(sigma);
-    REQUIRE(es.nonlinear());
 
     es.solve_steady(0.0);
 
@@ -261,7 +260,6 @@ TEST_CASE("HeatTransfer: nonlinear k(T) matches the analytic steady profile", "[
     ht.set_conductivity(k);
     ht.add_temperature_bc(1, ScalarExpression(t0));
     ht.add_temperature_bc(2, ScalarExpression(t1));
-    REQUIRE(ht.nonlinear());
 
     ht.solve_steady(0.0);
 

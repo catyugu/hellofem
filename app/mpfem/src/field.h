@@ -25,17 +25,6 @@
 
 namespace hellofem::app {
 
-    /// Whether a material property reads the solution, i.e. whether the
-    /// physics it belongs to has to be linearized and iterated.
-    bool solution_dependent(const std::shared_ptr<CellProperty>& property);
-
-    /// Whether any of the given material properties reads the solution.
-    template <class... Properties>
-    bool solution_dependent(const Properties&... properties)
-    {
-        return (... or solution_dependent(properties));
-    }
-
     /// Base for a single-physics field solver: owns the function space, the
     /// solution, the sparsity pattern of the linearized system and the mesh
     /// topology queries the physics needs.
@@ -52,10 +41,6 @@ namespace hellofem::app {
         /// taking the current solution as the field state. Call before
         /// assembling a system.
         virtual void refresh(double t) = 0;
-
-        /// Whether a material property reads the solution, i.e. whether the
-        /// linearized system has to be iterated to convergence.
-        virtual bool nonlinear() const = 0;
 
         /// Assemble the linearized steady system `A u = b` at the current
         /// state, with the Dirichlet conditions imposed.
@@ -87,7 +72,12 @@ namespace hellofem::app {
         /// The linear solver of this field's systems: the app's defaults,
         /// changed by a physics whose operator a direct factorization suits
         /// better (see `solid.cpp`).
-        const LinearSettings& linear_settings() const { return linear_; }
+        const la::LinearSettings& linear_settings() const { return linear_; }
+
+        /// The solve of this field's systems. It is the same object at every
+        /// level, so it keeps what it built for an operator across them (see
+        /// `la::LinearSolver`).
+        la::LinearSolver<double>& linear_solver() { return linear_solver_; }
 
     protected:
         /// Dofs on the facets carrying the given 1-based boundary ids.
@@ -166,7 +156,8 @@ namespace hellofem::app {
         std::shared_ptr<fem::FunctionSpace<double>> V_;
         std::shared_ptr<fem::Function<double>> u_;
         std::shared_ptr<la::SparsityPattern> pattern_;
-        LinearSettings linear_;
+        la::LinearSettings linear_;
+        la::LinearSolver<double> linear_solver_;
         double t_ = 0.0; // time of the last refresh
         int order_ = 1; // element order of the field, sizes the quadrature
     };

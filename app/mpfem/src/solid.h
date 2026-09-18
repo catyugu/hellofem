@@ -32,7 +32,6 @@ namespace hellofem::app {
         void add_fixed_bc(int boundary_id) { fixed_.insert(boundary_id); }
 
         void refresh(double t) override;
-        bool nonlinear() const override;
         void assemble_steady(la::MatrixCSR<double>& A,
             la::Vector<double>& b) const override;
         void constrain_solution(double t) override;

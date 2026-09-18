@@ -181,11 +181,6 @@ namespace hellofem::app {
         }
     }
 
-    bool HeatTransferSolver::nonlinear() const
-    {
-        return solution_dependent(k_, rho_cp_, Q_, joule_sigma_);
-    }
-
     void HeatTransferSolver::constrain_solution(double t)
     {
         impose_values(std::span(u_->x()->array()), make_bcs(temps_, t));

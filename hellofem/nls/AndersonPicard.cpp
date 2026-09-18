@@ -11,11 +11,11 @@ namespace hellofem::nls {
     template AndersonResult<double> anderson_picard<double>(
         const std::function<std::pair<la::MatrixCSR<double>,
             la::Vector<double>>(const la::Vector<double>&)>&,
-        la::Vector<double>&, const AndersonConfig&);
+        la::Vector<double>&, la::LinearSolver<double>&, const AndersonConfig&);
 
     template AndersonResult<float> anderson_picard<float>(
         const std::function<std::pair<la::MatrixCSR<float>,
             la::Vector<float>>(const la::Vector<float>&)>&,
-        la::Vector<float>&, const AndersonConfig&);
+        la::Vector<float>&, la::LinearSolver<float>&, const AndersonConfig&);
 
 } // namespace hellofem::nls
