@@ -24,6 +24,12 @@ endif()
 
 target_link_libraries(hellofem PUBLIC hellofem_options spdlog::spdlog TBB::tbb)
 
+# MKL / PARDISO（可选，见 cmake/Dependencies.cmake）：未配置 MKL 时该 target
+# 不存在，la 里也就没有 pardiso 预条件器。
+if(TARGET hellofem_mkl)
+    target_link_libraries(hellofem PUBLIC hellofem_mkl)
+endif()
+
 # amgcl 为 header-only。不链接 amgcl::amgcl（其 INTERFACE 会把 OpenMP 编译
 # 选项 (-Xclang -fopenmp) 传播进来，clang-cl 下报错），只取其头目录标记为
 # SYSTEM（避免 /W4 /WX 对 amgcl 头报警告），并自行定义 AMGCL_NO_BOOST。

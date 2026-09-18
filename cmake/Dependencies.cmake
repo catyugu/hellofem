@@ -97,3 +97,29 @@ CPMAddPackage(
     GITHUB_REPOSITORY ddemidov/amgcl
     GIT_TAG 1.5.0
 )
+
+# ---------------------------------------------------------------------------
+# 7. MKL / PARDISO（直接稀疏解，可选）
+#    没有它也能构建，只是 la 里没有 pardiso 预条件器。用 HELLOFEM_MKL_ROOT
+#    指向包含 include/ 与 lib/ 的安装位置（例如 conda 环境），或设置 MKLROOT。
+# ---------------------------------------------------------------------------
+set(HELLOFEM_MKL_ROOT "" CACHE PATH "MKL installation root (with include/ and lib/)")
+if(NOT HELLOFEM_MKL_ROOT AND DEFINED ENV{MKLROOT})
+    set(HELLOFEM_MKL_ROOT "$ENV{MKLROOT}")
+endif()
+if(HELLOFEM_MKL_ROOT)
+    find_path(HELLOFEM_MKL_INCLUDE mkl.h
+        HINTS "${HELLOFEM_MKL_ROOT}/include" NO_DEFAULT_PATH)
+    find_library(HELLOFEM_MKL_LIB mkl_rt
+        HINTS "${HELLOFEM_MKL_ROOT}/lib" NO_DEFAULT_PATH)
+    if(HELLOFEM_MKL_INCLUDE AND HELLOFEM_MKL_LIB)
+        message(STATUS "MKL: ${HELLOFEM_MKL_LIB} (PARDISO enabled)")
+        add_library(hellofem_mkl INTERFACE)
+        target_include_directories(hellofem_mkl INTERFACE "${HELLOFEM_MKL_INCLUDE}")
+        target_link_libraries(hellofem_mkl INTERFACE "${HELLOFEM_MKL_LIB}")
+        target_compile_definitions(hellofem_mkl INTERFACE HELLOFEM_WITH_PARDISO)
+    else()
+        message(WARNING "HELLOFEM_MKL_ROOT=${HELLOFEM_MKL_ROOT} has no "
+            "mkl.h or mkl_rt: PARDISO disabled.")
+    endif()
+endif()

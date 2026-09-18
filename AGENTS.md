@@ -34,6 +34,7 @@
 ## Build, Test, and Development Commands
 
 - **Build Config**: C++20, MSVC `/W4 /WX /permissive- /utf-8 /bigobj`, else `-Werror -Wall -Wextra -Wpedantic`.
+- **Use conda virtual env**: Use conda virtual env `numerical`, the local conda installation is at `E:/env/miniconda3/envs/numerical`
 
 ## Testing Guidelines
 
