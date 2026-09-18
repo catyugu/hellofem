@@ -280,14 +280,20 @@ namespace hellofem::la {
                 for (std::size_t i = 0; i < n; ++i)
                     V[0][i] = r[i] / beta;
 
-                // Hessenberg and Givens rotations
-                std::vector<std::vector<T>> H(m + 1, std::vector<T>(m, 0));
+                // Hessenberg and Givens rotations. The Arnoldi loop below can
+                // stop one step early (an invariant or a converged column),
+                // and it also stops when the loop variable reaches `m`, which
+                // is one past the last column it filled. The back-substitution
+                // below must see the last completed column, so it is tracked
+                // separately from the loop variable.
+                std::vector<std::vector<T>> H(m + 1, std::vector<T>(m + 1, 0));
                 std::vector<T> gs(m + 1, 0);
                 gs[0] = beta;
                 std::vector<T> c(m, 0), s(m, 0);
 
-                int k;
-                for (k = 0; k < m and total_iter < _max_iter; ++k, ++total_iter) {
+                int last = -1;
+                for (int k = 0; k < m and total_iter < _max_iter; ++k, ++total_iter) {
+                    last = k;
                     V.emplace_back(b.index_map(), b.bs());
                     Vector<T> w(b.index_map(), b.bs());
                     w.set(0);
@@ -336,7 +342,9 @@ namespace hellofem::la {
                     }
                 }
 
-                // Back-substitute the upper triangular system to get y
+                // Back-substitute the upper triangular system to get y, over
+                // the columns the Arnoldi loop actually completed.
+                const int k = last;
                 std::vector<T> y(k + 1, 0);
                 for (int i = k; i >= 0; --i) {
                     y[i] = gs[i];

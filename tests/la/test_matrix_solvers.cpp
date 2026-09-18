@@ -10,6 +10,7 @@
 #include "common/IndexMap.h"
 #include "la/SparsityPattern.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -342,4 +343,43 @@ TEST_CASE("KrylovSolver: without an initial guess x is replaced by the solution"
     solver.set_initial_guess(true);
     REQUIRE(solver.solve(stale, b) >= 0);
     check(stale);
+}
+
+TEST_CASE("GMRES: converges on a system that needs more than one restart",
+    "[la]")
+{
+    // A 1D Laplacian of 100 unknowns needs hundreds of unpreconditioned
+    // iterations, so the restarted (m = 30) Arnoldi loop runs to its full
+    // Krylov dimension repeatedly. The Hessenberg matrix holds only the
+    // columns that loop filled, and the back-substitution has to stop at the
+    // last of them: the loop variable ends one past it. Reading that column
+    // corrupts the update, and the solve then exhausts its iteration cap
+    // without ever reaching the tolerance.
+    constexpr std::int32_t n = 100;
+    la::MatrixCSR<double> A = make_poisson(n);
+
+    // A u = A 1 has the solution u = 1.
+    la::Vector<double> xstar(imap(n), 1);
+    xstar.set(1.0);
+    la::Vector<double> b(imap(n), 1);
+    b.set(0);
+    A.mult(xstar, b);
+
+    la::Vector<double> x(imap(n), 1);
+    x.set(0);
+    la::KrylovSolver<double> solver;
+    solver.set_operator(A.as_operator());
+    solver.set_solver_type("gmres");
+    solver.set_tolerances(1e-10, 1e-14, 2000);
+    const int it = solver.solve(x, b);
+    INFO("GMRES iterations: " << it << " of 2000");
+
+    // The contract of a solve that converged: it stops below the cap.
+    REQUIRE(it < 2000);
+
+    double err = 0;
+    for (std::int32_t i = 0; i < n; ++i)
+        err = std::max(err, std::abs(x.array()[i] - 1.0));
+    INFO("max |u - 1| = " << err);
+    REQUIRE(err < 1e-6);
 }
