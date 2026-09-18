@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include "defaults.h"
 #include "la/Vector.h"
 
 #include <span>
@@ -85,8 +86,12 @@ namespace hellofem::app {
         /// weighted per dof by `tolerance |u|` plus a small absolute part
         /// (see `TimeStepper::error`). It bounds the error of a step, so it
         /// is the accuracy of the time discretization — not of the linear or
-        /// the nonlinear solver.
-        double tolerance = 1e-3;
+        /// the nonlinear solver. It starts at the value COMSOL's own
+        /// physics-controlled tolerance takes for the physics the app solves,
+        /// so that a run measures the discretization rather than the
+        /// difference between two step controllers; a model that states its
+        /// own tolerance replaces it, and the command line replaces both.
+        double tolerance = default_time_tolerance;
     };
 
     /// The available schemes.

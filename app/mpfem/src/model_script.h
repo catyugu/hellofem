@@ -3,6 +3,7 @@
 #pragma once
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -75,6 +76,16 @@ namespace hellofem::app {
         /// Raw `tlist` expression, resolved into `times` once every model
         /// parameter is known.
         std::string times_expr;
+        /// Relative tolerance the study holds its steps to, when the model
+        /// sets one — the model's own accuracy for the time discretization.
+        /// A study the model leaves physics controlled sets none, and the app
+        /// uses COMSOL's own value (`defaults.h`).
+        std::optional<double> tolerance;
+        /// The study step's `usertol` and `rtol`, resolved into `tolerance`
+        /// once every model parameter is known. The two are kept apart because
+        /// `rtol` applies only where `usertol` turns the physics control off.
+        bool user_tolerance = false;
+        std::string tolerance_expr;
     };
 
     /// Result export configuration (expressions to compare).

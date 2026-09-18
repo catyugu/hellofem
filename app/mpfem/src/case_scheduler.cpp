@@ -75,7 +75,9 @@ namespace hellofem::app {
             throw std::runtime_error(
                 "CaseScheduler: a transient study needs at least two output times");
         if (model_.study.transient)
-            spdlog::info("transient: {} output times", times.size());
+            spdlog::info("transient: {} output times, steps held to a local error "
+                         "of {} relative",
+                times.size(), time_.tolerance);
 
         // The first level is the state the fields prepare for themselves: the
         // initial values of a field the study advances, and the constraints

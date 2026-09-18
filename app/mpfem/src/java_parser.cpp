@@ -583,6 +583,12 @@ namespace hellofem::app {
                 const std::string value = c[2].args.size() > 1 ? arg_string(c[2].args[1]) : "";
                 if (key == "tlist")
                     model.study.times_expr = value;
+                // The step tolerance: `usertol` selects between the physics
+                // interface's own tolerance and the `rtol` the model states.
+                else if (key == "usertol")
+                    model.study.user_tolerance = value == "on";
+                else if (key == "rtol")
+                    model.study.tolerance_expr = value;
                 return;
             }
             return;
@@ -644,14 +650,15 @@ namespace hellofem::app {
         model.name = filename.stem().string();
         for (const auto& chain : chains)
             interpret(chain, model);
-        // The time list may reference parameters, so it resolves once the
-        // whole script has been read.
-        if (not model.study.times_expr.empty()) {
-            std::unordered_map<std::string, double> params;
-            for (const Parameter& p : model.parameters)
-                params[p.name] = p.si;
+        // The time list and the step tolerance may reference parameters, so
+        // they resolve once the whole script has been read.
+        std::unordered_map<std::string, double> params;
+        for (const Parameter& p : model.parameters)
+            params[p.name] = p.si;
+        if (not model.study.times_expr.empty())
             model.study.times = resolve_time_list(model.study.times_expr, params);
-        }
+        if (model.study.user_tolerance and not model.study.tolerance_expr.empty())
+            model.study.tolerance = eval_value(model.study.tolerance_expr, params);
         return model;
     }
 

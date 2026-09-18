@@ -17,14 +17,17 @@ int main(int argc, char* argv[])
     using namespace hellofem::app;
 
     TimeSettings time;
+    bool tolerance_given = false;
     std::string positional[3];
     int npos = 0;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--scheme" and i + 1 < argc)
             time.scheme = argv[++i];
-        else if (arg == "--tol" and i + 1 < argc)
+        else if (arg == "--tol" and i + 1 < argc) {
             time.tolerance = std::stod(argv[++i]);
+            tolerance_given = true;
+        }
         else if (npos < 3)
             positional[npos++] = arg;
         else {
@@ -55,6 +58,12 @@ int main(int argc, char* argv[])
     spdlog::info("model '{}': {} params, {} materials, {} physics, {} couplings",
         model.name, model.parameters.size(), model.materials.size(),
         model.physics.size(), model.couplings.size());
+
+    // The accuracy of a transient study is the model's own: a study step that
+    // states a tolerance is held to it, which is what its reference solution
+    // was computed with. The command line overrides it.
+    if (not tolerance_given and model.study.tolerance)
+        time.tolerance = *model.study.tolerance;
 
     // Solve the model's study. A failing solve is reported where it happens:
     // an exception that escapes `main` ends the process without its message,

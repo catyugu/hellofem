@@ -168,6 +168,19 @@ public class sample_model {
   }
 }
 )JAVA";
+
+    /// Write the sample model with `extra` statements inserted into its
+    /// transient study step, before the solver sequence is created. A missing
+    /// anchor throws, so a test cannot pass on an insertion that never
+    /// happened.
+    std::filesystem::path write_model_with_study(const std::string& extra)
+    {
+        const std::string anchor
+            = "    model.study(\"std1\").createAutoSequences(\"time\");";
+        std::string text = sample;
+        text.insert(text.find(anchor), extra);
+        return write_model(text);
+    }
 } // namespace
 
 TEST_CASE("parse_model_java extracts params/materials/physics", "[app][java]")
@@ -206,4 +219,41 @@ TEST_CASE("parse_model_java extracts params/materials/physics", "[app][java]")
 
     REQUIRE(model.export_config.expressions.size() == 3);
     REQUIRE(model.export_config.expressions[2] == "solid.disp");
+}
+
+TEST_CASE("a physics-controlled study sets no time tolerance", "[app][java]")
+{
+    // COMSOL holds a study the model does not give a tolerance to the one its
+    // physics recommends. Such a study carries no `rtol` at all, and one whose
+    // `usertol` is off carries an `rtol` that does not apply.
+    auto plain = parse_model_java(write_model(sample));
+    REQUIRE(plain.study.transient);
+    REQUIRE_FALSE(plain.study.tolerance.has_value());
+
+    auto physics_controlled = parse_model_java(write_model_with_study(
+        "    model.study(\"std1\").feature(\"time\").set(\"usertol\", \"off\");\n"
+        "    model.study(\"std1\").feature(\"time\").set(\"rtol\", \"1e-6\");\n"));
+    REQUIRE_FALSE(physics_controlled.study.tolerance.has_value());
+}
+
+TEST_CASE("parse_model_java reads a user-set time tolerance", "[app][java]")
+{
+    auto model = parse_model_java(write_model_with_study(
+        "    model.study(\"std1\").feature(\"time\").set(\"usertol\", \"on\");\n"
+        "    model.study(\"std1\").feature(\"time\").set(\"rtol\", \"1e-6\");\n"));
+    REQUIRE(model.study.transient);
+    REQUIRE(model.study.tolerance.has_value());
+    REQUIRE(*model.study.tolerance == Catch::Approx(1e-6));
+}
+
+TEST_CASE("the study tolerance may name a parameter", "[app][java]")
+{
+    // A model may state its tolerance as a parameter, so the value resolves
+    // once every parameter is known — the same way the time list does.
+    auto model = parse_model_java(write_model_with_study(
+        "    model.param().set(\"tol_rel\", \"1e-5\", \"step tolerance\");\n"
+        "    model.study(\"std1\").feature(\"time\").set(\"usertol\", \"on\");\n"
+        "    model.study(\"std1\").feature(\"time\").set(\"rtol\", \"tol_rel\");\n"));
+    REQUIRE(model.study.tolerance.has_value());
+    REQUIRE(*model.study.tolerance == Catch::Approx(1e-5));
 }
