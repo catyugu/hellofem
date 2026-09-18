@@ -130,11 +130,20 @@ namespace hellofem::app::kernels {
     void elasticity(double* Ae, const CellKernelData<double>& d)
     {
         constexpr int vdim = 3;
+        // Scalar dofs of a cell of the app's heaviest element: a cubic
+        // Lagrange hexahedron. The strain rows below are formed on the stack.
+        constexpr int max_scalar_dofs = 64;
         const int nq = d.num_points, nd = d.num_dofs0, tdim = d.tdim;
         // Blocked vector element: local dof = scalar_dof * vdim + component.
         const int nds = nd / vdim;
         const int nn = nd * nd;
         std::memset(Ae, 0, nn * sizeof(double));
+
+        // Strain rows of the test and trial dofs and the trial's C : B. None
+        // of them depends on the other side's dof, so each is formed once per
+        // quadrature point and the element tensor only pairs them.
+        double BA[max_scalar_dofs][vdim][6];
+        double CB[max_scalar_dofs][vdim][6];
         for (int q = 0; q < nq; ++q) {
             const double w = d.w[q] * d.detJ[q];
             const double E = d.coeffs[0 * nq + q];
@@ -143,30 +152,37 @@ namespace hellofem::app::kernels {
             const double mu = E / (2 * (1 + nu));
             double C[36];
             elasticity_C(C, lambda, mu);
+
             for (int a = 0; a < nds; ++a) {
                 // Scalar basis function a is identical across components.
-                const double* gA = &d.dphi0[(q * nd + a * vdim) * tdim];
-                double BA[3][6]; // BA[c][r] = strain row r for component c
+                const double* g = &d.dphi0[(q * nd + a * vdim) * tdim];
                 for (int c = 0; c < vdim; ++c)
-                    strain_B(BA[c], gA[0], gA[1], gA[2], c);
-                for (int b = 0; b < nds; ++b) {
-                    const double* gB = &d.dphi1[(q * nd + b * vdim) * tdim];
-                    double BB[3][6];
-                    for (int c = 0; c < vdim; ++c)
-                        strain_B(BB[c], gB[0], gB[1], gB[2], c);
-                    for (int cb = 0; cb < vdim; ++cb) {
-                        // CB[r] = sum_s C[r][s] * BB[cb][s]
-                        double CB[6];
-                        for (int r = 0; r < 6; ++r) {
-                            double acc = 0;
-                            for (int s = 0; s < 6; ++s)
-                                acc += C[r * 6 + s] * BB[cb][s];
-                            CB[r] = acc;
-                        }
-                        for (int ca = 0; ca < vdim; ++ca) {
+                    strain_B(BA[a][c], g[0], g[1], g[2], c);
+            }
+            for (int b = 0; b < nds; ++b) {
+                const double* g = &d.dphi1[(q * nd + b * vdim) * tdim];
+                double BB[vdim][6];
+                for (int c = 0; c < vdim; ++c) {
+                    strain_B(BB[c], g[0], g[1], g[2], c);
+                    // CB[c][r] = sum_s C[r][s] * BB[c][s]
+                    for (int r = 0; r < 6; ++r) {
+                        double acc = 0;
+                        for (int s = 0; s < 6; ++s)
+                            acc += C[r * 6 + s] * BB[c][s];
+                        CB[b][c][r] = acc;
+                    }
+                }
+            }
+
+            for (int a = 0; a < nds; ++a) {
+                for (int ca = 0; ca < vdim; ++ca) {
+                    const double* bA = BA[a][ca];
+                    for (int b = 0; b < nds; ++b) {
+                        for (int cb = 0; cb < vdim; ++cb) {
+                            const double* cB = CB[b][cb];
                             double acc = 0;
                             for (int r = 0; r < 6; ++r)
-                                acc += BA[ca][r] * CB[r];
+                                acc += bA[r] * cB[r];
                             Ae[(a * vdim + ca) * nd + (b * vdim + cb)] += w * acc;
                         }
                     }
