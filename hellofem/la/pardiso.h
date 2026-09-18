@@ -17,12 +17,13 @@ namespace hellofem::la {
     /// factorization is wanted (see `KrylovSolver`), it replaces the Eigen
     /// factorizations.
     ///
-    /// The matrix is read as the unsymmetric CSR it is. An assembled system
-    /// with Dirichlet rows is not symmetric — those rows are zeroed and their
-    /// diagonal set, while the columns of the neighbouring rows keep their
-    /// entries — so the factorization is the general LU, which reads the whole
-    /// matrix. A symmetric factorization reads one triangle only and is
-    /// therefore both cheaper and a correctness hazard here.
+    /// The factorization is the one the matrix calls for, and the caller names
+    /// none of them. An assembled system whose boundary conditions are imposed
+    /// by zeroing the constrained rows and columns and setting their diagonal
+    /// is symmetric, and its principal submatrix is what the physics makes it —
+    /// definite for the diffusion, mass and elasticity operators — so it is
+    /// factorized as the symmetric positive definite LLT of one triangle.
+    /// Anything else is factorized as the general LU of the whole matrix.
     class PardisoSolver {
     public:
         /// Analyze the pattern of `A` and factorize it.
