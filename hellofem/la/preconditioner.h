@@ -21,6 +21,7 @@
 #include <cassert>
 #include <memory>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 namespace hellofem::la {
@@ -385,6 +386,23 @@ namespace hellofem::la {
         if (bs0 == bs1 and bs0 == 3)
             return std::make_shared<AmgPreconditioner<T, 3>>(A);
         return std::make_shared<AmgPreconditioner<T>>(A);
+    }
+
+    /// The ILU(0) preconditioner of a matrix: MKL's `dcsrilu0` where the build
+    /// has MKL, Eigen's `IncompleteLUT` otherwise. A caller asks for an ILU and
+    /// does not name a library; the definition is in `ilu.cpp`.
+    std::shared_ptr<Preconditioner<double>> make_ilu_preconditioner(
+        const MatrixCSR<double>& A);
+
+    template <typename T>
+    std::shared_ptr<Preconditioner<T>> make_ilu_preconditioner(
+        const MatrixCSR<T>& A)
+    {
+        // MKL's routine is real double only; every other scalar is Eigen's.
+        if constexpr (std::is_same_v<T, double>)
+            return make_ilu_preconditioner(A);
+        else
+            return std::make_shared<IluPreconditioner<T>>(A);
     }
 
 } // namespace hellofem::la
