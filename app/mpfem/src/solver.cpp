@@ -22,17 +22,14 @@ namespace hellofem::app {
         la::Vector<double>& x, const la::SparsityPattern& pattern,
         la::LinearSolver<double>& solver, const la::LinearSettings& settings)
     {
-        const NonlinearSettings cfg;
-        nls::AndersonConfig picard;
-        picard.depth = cfg.depth;
-        picard.warmup_iters = cfg.warmup_iterations;
-        picard.dampening = cfg.dampening;
-        picard.max_growth = cfg.max_growth;
-        picard.relative_tolerance = cfg.relative_tolerance;
-        picard.absolute_tolerance = cfg.absolute_tolerance;
-        picard.max_iterations = cfg.max_iterations;
-        picard.linear = settings;
-        picard.warm_start_linear_solve = cfg.warm_start;
+        // COMSOL's Anderson settings, with a full mixing parameter: a full
+        // step is what makes an operator that does not read the solution reach
+        // its fixed point in one iteration, where the damped step of a smaller
+        // value approaches it geometrically at the cost of a re-assembly per
+        // iteration.
+        nls::AndersonConfig cfg;
+        cfg.mixing = 1.0;
+        cfg.linear = settings;
 
         auto result = nls::anderson_picard<double>(
             [&](const la::Vector<double>&) {
@@ -41,7 +38,7 @@ namespace hellofem::app {
                 assemble(A, b);
                 return std::make_pair(std::move(A), std::move(b));
             },
-            x, solver, picard);
+            x, solver, cfg);
         if (not result.converged)
             throw std::runtime_error(
                 "solve_system: the nonlinear iteration did not converge");

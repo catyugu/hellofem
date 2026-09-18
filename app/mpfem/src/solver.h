@@ -20,24 +20,6 @@ namespace hellofem::app {
     /// silently wrong, in a run that looks like it succeeded.
     bool converged(int iterations, int max_iterations);
 
-    /// Defaults of the fixed-point iteration that solves a field's system
-    /// (Anderson-accelerated Picard).
-    struct NonlinearSettings {
-        int depth = 5;
-        int warmup_iterations = 3;
-        /// Anderson damping. A full step (1.0) is what makes an operator that
-        /// does not read the solution reach its fixed point in one iteration:
-        /// the damped step of a smaller value approaches it geometrically, at
-        /// the cost of a re-assembly per iteration.
-        double dampening = 1.0;
-        double max_growth = 1.5;
-        double relative_tolerance = 1e-8;
-        double absolute_tolerance = 1e-12;
-        int max_iterations = 50;
-        /// Seed the inner linear solve with the current iterate.
-        bool warm_start = true;
-    };
-
     /// Solve the system `assemble` builds for the unknown `x`, starting from
     /// `x` as the initial guess.
     ///

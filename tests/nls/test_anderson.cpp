@@ -46,6 +46,9 @@ namespace {
     using LV = basis::element::lagrange_variant;
     using DV = basis::element::dpc_variant;
 
+    /// Vector type of the iterate.
+    using Vec = Eigen::Matrix<double, Eigen::Dynamic, 1>;
+
     /// Nonlinear Poisson -Delta u + u^3 = 0 with homogeneous Dirichlet,
     /// P1, solved by Anderson-accelerated Picard. The fixed-point map is
     /// G(u) = K^-1 (b - M(u^3)) where K is the stiffness matrix and M the
@@ -226,55 +229,136 @@ namespace {
         }
     };
 
+    /// The frozen system of the fixture at `x`: `K u = -M(u^3)`, whose
+    /// solution is the fixed-point image `G(x)`.
+    std::pair<la::MatrixCSR<double>, la::Vector<double>> picard_system(
+        const PicardPoisson& nl, const la::Vector<double>& x)
+    {
+        nl.set_iterate(x);
+        la::MatrixCSR<double> A = nl.stiffness();
+        la::Vector<double> b = nl.mass3();
+        for (std::size_t i = 0; i < b.array().size(); ++i)
+            b[i] = -b[i];
+        return {std::move(A), std::move(b)};
+    }
+
+    /// A linear contraction towards `(1, 5/9)`, at two different rates.
+    Vec contract(const Vec& x)
+    {
+        Vec G(2);
+        G << 0.5 + 0.5 * x[0], 0.5 + 0.1 * x[1];
+        return G;
+    }
+
 } // namespace
 
-// Unit: the Anderson mixer falls back to Picard during warmup, mixes after,
-// and respects the depth bound.
-TEST_CASE("AndersonMixer warmup, mixing and depth", "[nls]")
+// The configuration takes COMSOL's Anderson acceleration settings.
+TEST_CASE("Anderson configuration defaults are COMSOL's", "[nls]")
 {
-    nls::AndersonMixer<double> mixer(3, 2, 0.8, 1.5, true);
-    auto imap = std::make_shared<common::IndexMap>(0, 4);
-    la::Vector<double> x(imap, 1), G(imap, 1);
-    for (int i = 0; i < 4; ++i) {
-        x[i] = static_cast<double>(i + 1);
-        G[i] = 0.5 * static_cast<double>(i + 1);
-    }
-
-    // Warmup: no history -> plain Picard.
-    REQUIRE(not mixer.step(x, G).has_value());
-    mixer.push(x, G);
-
-    // Still within warmup (iter_count == 1 < 2).
-    REQUIRE(not mixer.step(x, G).has_value());
-    mixer.push(x, G);
-
-    // Now mixing is active (iter_count == 2 >= warmup).
-    REQUIRE(mixer.step(x, G).has_value());
-    REQUIRE(mixer.has_history());
+    const nls::AndersonConfig cfg;
+    REQUIRE(cfg.dimension == 5);
+    REQUIRE(cfg.mixing == Catch::Approx(0.9));
+    REQUIRE(cfg.delay == 0);
+    REQUIRE(cfg.threshold == Catch::Approx(10.0));
 }
 
-// Unit: on a linear contraction the mixer converges to the fixed point.
+// Unit: the mixer takes plain steps during the iteration delay, mixes after
+// it, and keeps at most `dimension` pairs.
+TEST_CASE("AndersonMixer delays the mixing and bounds its history", "[nls]")
+{
+    nls::AndersonConfig cfg;
+    cfg.dimension = 2;
+    cfg.delay = 2;
+    nls::AndersonMixer<double> mixer(cfg);
+
+    Vec x = Vec::Zero(2);
+    for (int it = 0; it < 6; ++it) {
+        const Vec G = contract(x);
+        const Vec f = G - x;
+        const Vec s = mixer.step(x, G);
+
+        if (it < cfg.delay)
+            REQUIRE((s - f).cwiseAbs().maxCoeff() == 0.0);
+        if (it == cfg.delay)
+            REQUIRE((s - f).cwiseAbs().maxCoeff() > 1e-3);
+        REQUIRE(mixer.history_size() == std::min(it + 1, cfg.dimension));
+        x += s;
+    }
+}
+
+// Unit: COMSOL's threshold for the Anderson step falls back to the plain
+// step when the mixed one is far longer than the previous one.
+TEST_CASE("AndersonMixer rejects a step past the threshold", "[nls]")
+{
+    const auto second_step = [](double threshold) {
+        nls::AndersonConfig cfg;
+        cfg.threshold = threshold;
+        nls::AndersonMixer<double> mixer(cfg);
+        Vec x = Vec::Zero(2);
+        mixer.step(x, contract(x)); // plain: no history yet
+        x = contract(x);
+        return mixer.step(x, contract(x));
+    };
+
+    Vec f(2);
+    f << 0.25, 0.05; // the plain step of the second call
+    REQUIRE((second_step(10.0) - f).cwiseAbs().maxCoeff() > 1e-3);
+    REQUIRE((second_step(0.1) - f).cwiseAbs().maxCoeff() < 1e-15);
+}
+
+// Unit: on a linear contraction the mixing converges to the fixed point.
 TEST_CASE("AndersonMixer converges on a linear contraction", "[nls]")
 {
-    nls::AndersonMixer<double> mixer(5, 2, 0.8, 1.5, true);
-    auto imap = std::make_shared<common::IndexMap>(0, 8);
-    la::Vector<double> x(imap, 1), G(imap, 1);
-    x.set(0.0);
+    nls::AndersonMixer<double> mixer(nls::AndersonConfig {});
+    Vec x = Vec::Zero(8);
     for (int it = 0; it < 200; ++it) {
-        for (int i = 0; i < 8; ++i)
-            G[i] = 1.0 + 0.5 * x[i]; // contraction to 2.0
-        const auto prop = mixer.step(x, G);
-        if (prop)
-            x = *prop;
-        else
-            for (int i = 0; i < 8; ++i)
-                x[i] += 0.8 * (G[i] - x[i]);
-        mixer.push(x, G);
+        const Vec G = Vec::Constant(8, 1.0) + 0.5 * x;
+        x += mixer.step(x, G);
     }
-    double err = 0;
-    for (int i = 0; i < 8; ++i)
-        err = std::max(err, std::abs(x[i] - 2.0));
-    REQUIRE(err < 1e-8);
+    REQUIRE((x - Vec::Constant(8, 2.0)).cwiseAbs().maxCoeff() < 1e-8);
+}
+
+// Contract: an initial guess that already solves the frozen system is
+// returned without an iteration or an inner solve.
+TEST_CASE("anderson_picard returns a converged initial guess at once", "[nls]")
+{
+    PicardPoisson nl(8);
+    la::Vector<double> x(nl.V->dofmap()->index_map,
+        nl.V->dofmap()->index_map_bs());
+    x.set(0.0); // u = 0 solves -Delta u + u^3 = 0 with homogeneous Dirichlet
+
+    la::LinearSolver<double> inner;
+    const auto result = nls::anderson_picard<double>(
+        [&](const la::Vector<double>& xx) { return picard_system(nl, xx); }, x,
+        inner, nls::AndersonConfig {});
+
+    REQUIRE(result.converged);
+    REQUIRE(result.iterations == 0);
+    REQUIRE(result.krylov_iterations == 0);
+}
+
+// Contract: an operator that does not read the iterate has one frozen
+// system, which a full mixing parameter solves in the first step.
+TEST_CASE("anderson_picard solves a frozen operator in one iteration", "[nls]")
+{
+    PicardPoisson nl(8);
+    la::Vector<double> x(nl.V->dofmap()->index_map,
+        nl.V->dofmap()->index_map_bs());
+    nl.set_initial_guess(x);
+    la::Vector<double> frozen(nl.V->dofmap()->index_map,
+        nl.V->dofmap()->index_map_bs());
+    frozen.set(0.5);
+
+    nls::AndersonConfig cfg;
+    cfg.mixing = 1.0;
+
+    la::LinearSolver<double> inner;
+    const auto result = nls::anderson_picard<double>(
+        [&](const la::Vector<double>&) { return picard_system(nl, frozen); },
+        x, inner, cfg);
+
+    REQUIRE(result.converged);
+    REQUIRE(result.iterations == 1);
 }
 
 // End-to-end: Anderson-accelerated Picard solves the nonlinear Poisson.
@@ -292,16 +376,8 @@ TEST_CASE("Anderson-accelerated Picard solves nonlinear Poisson", "[nls]")
 
     la::LinearSolver<double> inner;
     auto result = nls::anderson_picard<double>(
-        [&](const la::Vector<double>& xx)
-            -> std::pair<la::MatrixCSR<double>, la::Vector<double>> {
-            nl.set_iterate(xx);
-            la::MatrixCSR<double> A = nl.stiffness();
-            la::Vector<double> b = nl.mass3();
-            for (std::size_t i = 0; i < b.array().size(); ++i)
-                b[i] = -b[i]; // G = A^-1 b is the fixed-point map
-            return {std::move(A), std::move(b)};
-        },
-        x, inner, cfg);
+        [&](const la::Vector<double>& xx) { return picard_system(nl, xx); }, x,
+        inner, cfg);
 
     REQUIRE(result.converged);
     REQUIRE(result.iterations > 0);
@@ -312,4 +388,29 @@ TEST_CASE("Anderson-accelerated Picard solves nonlinear Poisson", "[nls]")
     for (const double xi : x.array())
         maxu = std::max(maxu, std::abs(xi));
     REQUIRE(maxu < 1e-6);
+}
+
+// Unit: the mixing accelerates a stiff linear contraction. Plain Picard
+// converges at the slowest rate of the map; mixing five increments resolves
+// it in a handful of steps.
+TEST_CASE("AndersonMixer accelerates a stiff linear contraction", "[nls]")
+{
+    const Vec d = (Vec(4) << 0.5, 0.9, 0.99, 0.995).finished();
+    const Vec target = Vec::Constant(4, 1.0);
+    const auto iterations = [&](int dimension) {
+        nls::AndersonConfig cfg;
+        cfg.dimension = dimension;
+        nls::AndersonMixer<double> mixer(cfg);
+        Vec x = Vec::Zero(4);
+        int it = 0;
+        for (; it < 3000; ++it) {
+            const Vec G = d.cwiseProduct(x) + (target - d);
+            if ((G - x).cwiseAbs().maxCoeff() <= 1e-8)
+                break;
+            x += mixer.step(x, G);
+        }
+        return it;
+    };
+    REQUIRE(iterations(0) > 1000); // plain Picard, at the slowest rate
+    REQUIRE(iterations(5) <= 20); // mixed, in a handful of steps
 }

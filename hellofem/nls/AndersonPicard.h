@@ -9,50 +9,51 @@
 
 #include <Eigen/Dense>
 
+#include <algorithm>
 #include <cmath>
-#include <cstdint>
+#include <concepts>
+#include <cstddef>
 #include <deque>
 #include <functional>
-#include <optional>
 #include <stdexcept>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include <spdlog/spdlog.h>
 
 namespace hellofem::nls {
 
-    /// Configuration of the Anderson-accelerated Picard iteration.
-    ///
-    /// Mirrors the MetaHotspot nonlinear solver settings. During the
-    /// first `warmup_iters` iterations (and whenever `max_growth` trips)
-    /// the iteration falls back to a damped Picard step
-    /// `x += dampening * (G(x) - x)`.
+    /// Settings of the Anderson-accelerated Picard iteration, named after
+    /// the COMSOL nonlinear solver fields they mirror. The defaults are
+    /// COMSOL's.
     struct AndersonConfig {
-        /// Number of past (x, G) pairs kept for the Anderson mixing.
-        int depth = 5;
+        /// "Dimension of iteration space": number of past iterates kept for
+        /// the mixing.
+        int dimension = 5;
 
-        /// Number of initial plain Picard iterations before mixing.
-        int warmup_iters = 2;
+        /// "Mixing parameter": under-relaxation applied to every step.
+        double mixing = 0.9;
 
-        /// Anderson damping (1.0 = full AA, 0.0 = plain Picard). Also the
-        /// under-relaxation used for the damped-Picard fallback.
-        double dampening = 0.8;
+        /// "Iteration delay": iterations taken before the mixing starts.
+        /// The history is recorded from the first iteration on, so the
+        /// mixing has the iterates of the delay to work with when it starts.
+        int delay = 0;
 
-        /// Divergence guard: reject the mixed step if its infinity norm
-        /// exceeds `max_growth` times the plain step's.
-        double max_growth = 1.5;
+        /// "Threshold for Anderson step": the mixed step is taken while its
+        /// infinity norm stays below this multiple of the previous step's,
+        /// and the plain step is taken past it. Lowering it trades speed for
+        /// robustness.
+        double threshold = 10.0;
 
-        /// Reset the mixing history when the divergence guard trips.
-        bool reset_on_growth = true;
+        /// Relative tolerance on the residual of the frozen system.
+        double relative_tolerance = 1e-8;
 
-        /// Relative tolerance on the residual and on the update.
-        double relative_tolerance = 1e-6;
-
-        /// Absolute tolerance on the residual and on the update.
+        /// Absolute tolerance on the residual of the frozen system.
         double absolute_tolerance = 1e-12;
 
-        /// Maximum number of Picard iterations.
-        int max_iterations = 200;
+        /// Maximum number of iterations.
+        int max_iterations = 50;
 
         /// Log each iteration.
         bool report = true;
@@ -60,14 +61,10 @@ namespace hellofem::nls {
         /// Settings of the inner solve of the frozen system `A G = b`.
         la::LinearSettings linear;
 
-        /// Seed the inner linear solve with the current iterate. The
-        /// linearization changes slowly between iterations, so this cuts
-        /// the Krylov work; it does not affect the converged iterate.
-        bool warm_start_linear_solve = false;
-
-        /// Called after each inner linear solve, before the mixing step
-        /// (e.g. to apply Dirichlet lifting or update auxiliary state).
-        std::function<void()> post_linear_solve = [] { };
+        /// Seed the inner solve with the current iterate. The frozen system
+        /// moves little between iterations, so this cuts the Krylov work; it
+        /// does not affect the converged iterate.
+        bool warm_start_linear_solve = true;
     };
 
     /// Result of an Anderson-accelerated Picard solve.
@@ -76,167 +73,155 @@ namespace hellofem::nls {
         /// Whether the iteration converged.
         bool converged = false;
 
-        /// Number of Picard iterations used.
+        /// Number of iterations used.
         int iterations = 0;
 
         /// Number of inner linear-solver iterations accumulated.
         int krylov_iterations = 0;
     };
 
-    /// Anderson mixing for a fixed-point iteration `x <- G(x)`.
+    /// Anderson mixing of the fixed-point iteration `x <- G(x)`.
     ///
-    /// Given the current iterate `x_k` and its fixed-point image `G_k`,
-    /// solves the least-squares problem `F alpha ~= f_k` for the mixing
-    /// coefficients over the last `depth` iterates and proposes the mixed
-    /// iterate. History index 0 is the most recent pair.
+    /// With `f = G(x) - x` and, over the history, `df_i = f - f_i`, the step
+    /// the mixer returns is
+    ///
+    ///     s = f - sum_i alpha_i (G - G_i),
+    ///     alpha = argmin_alpha || f - sum_i alpha_i df_i ||_2 .
+    ///
+    /// Anderson's mixing writes the next iterate as `sum_i a_i G_i` with the
+    /// coefficients summing to one; that is this least-squares problem in the
+    /// residuals `f_i`, and `G - G_i = df_i + (x - x_i)` is what leaves the
+    /// plain `f` in the step.
+    ///
+    /// The mixing is applied to the step rather than to the iterate, so the
+    /// mixing parameter is a plain under-relaxation of it:
+    /// `x += mixing * step(x, G)`.
     ///
     /// @tparam T Scalar type.
     template <std::floating_point T>
     class AndersonMixer {
     public:
+        /// Vector type of the iterate.
+        using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+
         /// Create a mixer.
-        /// @param[in] depth History depth.
-        /// @param[in] warmup_iters Plain-Picard iterations before mixing.
-        /// @param[in] dampening Mixing damping.
-        /// @param[in] max_growth Divergence-guard ratio (> 0 to enable).
-        /// @param[in] reset_on_growth Clear history when the guard trips.
-        AndersonMixer(int depth, int warmup_iters, double dampening,
-            double max_growth, bool reset_on_growth)
-            : _depth(depth), _warmup_iters(warmup_iters), _dampening(dampening), _max_growth(max_growth), _reset_on_growth(reset_on_growth)
+        /// @param[in] cfg Configuration of the mixing.
+        explicit AndersonMixer(const AndersonConfig& cfg)
+            : _dimension(std::max(cfg.dimension, 0)), _delay(std::max(cfg.delay, 0)),
+              _threshold(cfg.threshold)
         {
         }
 
-        /// Record the pair `(x_k, G_k)` and advance the iteration counter.
-        void push(const la::Vector<T>& x_k, const la::Vector<T>& G_k)
+        /// Step to add to the iterate `x` for its image `G`, recording the
+        /// pair in the history. The caller scales the step by the mixing
+        /// parameter: `x += mixing * step(x, G)`.
+        /// @param[in] x Current iterate.
+        /// @param[in] G Fixed-point image `G(x)`.
+        /// @return The step to add to `x`.
+        Vec step(const Eigen::Ref<const Vec>& x, const Eigen::Ref<const Vec>& G)
         {
-            _x_hist.push_front(x_k);
-            _G_hist.push_front(G_k);
-            if (static_cast<int>(_x_hist.size()) > _depth) {
-                _x_hist.pop_back();
-                _G_hist.pop_back();
+            const Vec f = G - x;
+            const int m = _iterations < _delay
+                ? 0
+                : std::min(_dimension, static_cast<int>(_G_hist.size()));
+
+            Vec s = f;
+            if (m > 0) {
+                const Vec mixed = _mixed(G, f, m);
+                const double norm = static_cast<double>(
+                    mixed.template lpNorm<Eigen::Infinity>());
+                // A mixed step far longer than the one the previous iteration
+                // took, or a non-finite one out of a history the
+                // least-squares solve cannot determine, is replaced by the
+                // plain step.
+                if (std::isfinite(norm) and norm <= _threshold * _prev_step)
+                    s = mixed;
             }
-            ++_iter_count;
+            _prev_step = static_cast<double>(
+                s.template lpNorm<Eigen::Infinity>());
+            _push(f, G);
+            ++_iterations;
+            return s;
         }
 
-        /// Propose the next iterate, or `std::nullopt` to fall back to a
-        /// plain (damped) Picard step.
-        /// @param[in] x_k Current iterate.
-        /// @param[in] G_k Fixed-point image `G(x_k)`.
-        /// @return The mixed next iterate, or `std::nullopt`.
-        std::optional<la::Vector<T>> step(const la::Vector<T>& x_k,
-            const la::Vector<T>& G_k) const
-        {
-            // Disabled, still warming up, or no history: plain Picard.
-            if (_depth == 0 or _iter_count < _warmup_iters
-                or _G_hist.empty()) {
-                return std::nullopt;
-            }
-
-            const int n = static_cast<int>(x_k.array().size());
-            const int m_k = std::min(
-                static_cast<int>(_G_hist.size()), _depth);
-
-            // Residual of the fixed-point map at the current iterate.
-            la::Vector<T> f_k(_G_hist.front().index_map(),
-                _G_hist.front().bs());
-            for (int i = 0; i < n; ++i)
-                f_k[i] = G_k[i] - x_k[i];
-
-            // Normal equations F^T F alpha = F^T f_k over the history.
-            // m_k is O(5), so the m_k x m_k system is solved by dense
-            // column-pivoted QR (avoiding a full N x m_k factorization).
-            Eigen::MatrixXd FtF(m_k, m_k);
-            Eigen::VectorXd Ftf(m_k);
-            for (int i = 0; i < m_k; ++i) {
-                const la::Vector<T>& Gi = _G_hist[i];
-                const la::Vector<T>& xi = _x_hist[i];
-                double dot = 0;
-                for (int j = 0; j < n; ++j) {
-                    const double fi_j = (G_k[j] - x_k[j])
-                        - (Gi[j] - xi[j]);
-                    dot += fi_j * (G_k[j] - x_k[j]);
-                }
-                Ftf(i) = dot;
-                for (int l = 0; l <= i; ++l) {
-                    const la::Vector<T>& Gl = _G_hist[l];
-                    const la::Vector<T>& xl = _x_hist[l];
-                    double s = 0;
-                    for (int j = 0; j < n; ++j) {
-                        const double fi_j = (G_k[j] - x_k[j])
-                            - (Gi[j] - xi[j]);
-                        const double fl_j = (G_k[j] - x_k[j])
-                            - (Gl[j] - xl[j]);
-                        s += fi_j * fl_j;
-                    }
-                    FtF(i, l) = s;
-                    FtF(l, i) = s;
-                }
-            }
-
-            Eigen::VectorXd alpha
-                = FtF.colPivHouseholderQr().solve(Ftf);
-            if (_dampening < 1.0)
-                alpha *= _dampening;
-
-            // x_prop = (1 - sum(alpha)) G_k + sum_j alpha(j) G_hist[j].
-            la::Vector<T> x_prop(_G_hist.front().index_map(),
-                _G_hist.front().bs());
-            const double a_sum = alpha.sum();
-            for (int j = 0; j < n; ++j)
-                x_prop[j] = (1.0 - a_sum) * G_k[j];
-            for (int i = 0; i < m_k; ++i)
-                for (int j = 0; j < n; ++j)
-                    x_prop[j] += alpha(i) * _G_hist[i][j];
-
-            // Divergence guard: compare infinity norms of the proposed
-            // step and the plain Picard step.
-            if (_max_growth > 0) {
-                double prop_norm = 0, naive_norm = 0;
-                for (int j = 0; j < n; ++j) {
-                    prop_norm = std::max(prop_norm,
-                        static_cast<double>(std::abs(x_prop[j] - x_k[j])));
-                    naive_norm = std::max(naive_norm,
-                        static_cast<double>(std::abs(G_k[j] - x_k[j])));
-                }
-                if (naive_norm > 0 and prop_norm > _max_growth * naive_norm) {
-                    if (_reset_on_growth) {
-                        _x_hist.clear();
-                        _G_hist.clear();
-                    }
-                    return std::nullopt;
-                }
-            }
-            return x_prop;
-        }
-
-        /// Number of (x, G) pairs pushed so far.
-        int iteration_count() const { return _iter_count; }
-
-        /// Whether the history is non-empty.
-        bool has_history() const { return not _G_hist.empty(); }
+        /// Number of pairs in the history.
+        int history_size() const { return static_cast<int>(_G_hist.size()); }
 
     private:
-        int _depth;
-        int _warmup_iters;
-        double _dampening;
-        double _max_growth;
-        bool _reset_on_growth;
+        /// The mixed step `f - sum_i alpha_i (G - G_i)`.
+        Vec _mixed(const Eigen::Ref<const Vec>& G, const Vec& f, int m)
+        {
+            if (static_cast<int>(_df.size()) < m)
+                _df.resize(static_cast<std::size_t>(m), Vec(f.size()));
 
-        // History; index 0 is the most recent pair. A deque keeps
-        // push_front O(1), as push happens every iteration. Mutable so
-        // `step` can reset the history when the divergence guard trips.
-        mutable std::deque<la::Vector<T>> _x_hist;
-        mutable std::deque<la::Vector<T>> _G_hist;
-        int _iter_count = 0;
+            // The residual differences against the history, and the normal
+            // equations `F^T F alpha = F^T f` of the mixing coefficients.
+            // `m` is the dimension of the iteration space, a handful of
+            // vectors, so the small dense system is solved directly.
+            Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> gram(m, m);
+            Eigen::Matrix<T, Eigen::Dynamic, 1> rhs(m);
+            for (int i = 0; i < m; ++i) {
+                _df[i] = f - _f_hist[i]; // df_i = f - f_i
+                rhs(i) = _df[i].dot(f);
+                gram(i, i) = _df[i].squaredNorm();
+                for (int j = 0; j < i; ++j)
+                    gram(i, j) = gram(j, i) = _df[i].dot(_df[j]);
+            }
+            const Eigen::Matrix<T, Eigen::Dynamic, 1> alpha
+                = gram.colPivHouseholderQr().solve(rhs);
+
+            Vec s = f;
+            for (int i = 0; i < m; ++i)
+                s.noalias() -= alpha(i) * (G - _G_hist[i]);
+            return s;
+        }
+
+        /// Record `(f, G)`, keeping at most `dimension` pairs.
+        void _push(const Vec& f, const Eigen::Ref<const Vec>& G)
+        {
+            if (_dimension == 0)
+                return;
+            _f_hist.emplace_front(f);
+            _G_hist.emplace_front(G);
+            if (static_cast<int>(_G_hist.size()) > _dimension) {
+                _f_hist.pop_back();
+                _G_hist.pop_back();
+            }
+        }
+
+        int _dimension;
+        int _delay;
+        double _threshold;
+
+        // History; index 0 is the most recent pair. A deque keeps the
+        // push_front of every iteration O(1). The pair is kept as the
+        // residual `f = G - x` and the image `G`: the mixing needs both, and
+        // forming `f` once per iteration rather than once per history entry
+        // per mixing step is what keeps the history free of the iterate.
+        std::deque<Vec> _f_hist;
+        std::deque<Vec> _G_hist;
+
+        // Scratch for the residual differences of one mixing step, one per
+        // history entry.
+        std::vector<Vec> _df;
+
+        // Infinity norm of the step the last call returned: the reference the
+        // threshold for the Anderson step is measured against.
+        double _prev_step = 0;
+
+        // Iterations stepped through, the iteration delay being counted in
+        // those.
+        int _iterations = 0;
     };
 
-    /// Solve a nonlinear system by Anderson-accelerated Picard
-    /// iteration on the fixed-point map `x <- G(x)`.
+    /// Solve a nonlinear system by Anderson-accelerated Picard iteration on
+    /// the fixed-point map `x <- G(x)`.
     ///
-    /// At each iterate the caller provides the linear system whose
-    /// solution is `G(x)` (the fixed-point map); the iteration mixes the
-    /// last `depth` iterates to accelerate the plain Picard
-    /// `x <- x + omega (G(x) - x)`.
+    /// One iteration builds the frozen system `A(x) G = b(x)`, solves it for
+    /// `G(x)`, and takes the step the mixing proposes from it. The iteration
+    /// converges when the residual of the frozen system at the iterate is
+    /// below `relative_tolerance * max|b| + absolute_tolerance`; an initial
+    /// guess that already meets it is returned without a solve.
     ///
     /// @param[in] system_fn Builds, at the current iterate `x`, the linear
     ///   system `A G = b` whose solution is `G(x)`.
@@ -254,130 +239,78 @@ namespace hellofem::nls {
         la::Vector<T>& x, la::LinearSolver<T>& inner,
         const AndersonConfig& cfg = {})
     {
-        AndersonMixer<T> mixer(cfg.depth, cfg.warmup_iters, cfg.dampening,
-            cfg.max_growth, cfg.reset_on_growth);
-
+        using Vec = typename AndersonMixer<T>::Vec;
         AndersonResult<T> result;
+        AndersonMixer<T> mixer(cfg);
+
+        const Eigen::Index n = static_cast<Eigen::Index>(x.array().size());
+        Eigen::Map<Vec> xv(x.array().data(), n);
         la::Vector<T> G(x.index_map(), x.bs());
-        const int n = static_cast<int>(x.array().size());
-        const T one = T(1);
+        la::Vector<T> r(x.index_map(), x.bs());
+        Eigen::Map<Vec> gv(G.array().data(), n);
+        Eigen::Map<Vec> rv(r.array().data(), n);
 
         for (int it = 0; it < cfg.max_iterations; ++it) {
-            // Build the frozen linear system A G = b and its residual.
+            // The frozen system at the current iterate, and the residual of
+            // the iterate in it: the measure the iteration converges on, so
+            // it is taken before the solve it decides on.
             auto [A, b] = system_fn(x);
-            la::Vector<T> r(x.index_map(), x.bs());
+            const Eigen::Map<const Vec> bv(b.array().data(), n);
             r.set(0);
-            A.mult(x, r); // r += A x
-            double max_residual = 0, max_b = 0;
-            for (int i = 0; i < n; ++i) {
-                max_residual = std::max(
-                    max_residual, static_cast<double>(std::abs(b[i] - r[i])));
-                max_b = std::max(
-                    max_b, static_cast<double>(std::abs(b[i])));
-            }
-            const double residual_threshold
-                = cfg.relative_tolerance * max_b + cfg.absolute_tolerance;
-
-            // Early exit on the residual alone.
-            if (it > 0 and max_residual <= residual_threshold) {
+            A.mult(x, r);
+            rv = bv - rv;
+            const double residual = static_cast<double>(
+                rv.template lpNorm<Eigen::Infinity>());
+            const double scale = static_cast<double>(
+                bv.template lpNorm<Eigen::Infinity>());
+            const double threshold
+                = cfg.relative_tolerance * scale + cfg.absolute_tolerance;
+            if (residual <= threshold) {
                 result.converged = true;
                 result.iterations = it;
                 return result;
             }
 
-            // G(x) = solve(A, b). The Krylov solver starts from a zero
-            // initial guess unless a warm start is requested (the frozen
-            // system moves little between iterations), so a reused vector
-            // must be cleared when starting cold.
+            // G(x): the solution of the frozen system, from the current
+            // iterate when a warm start is asked for.
             if (cfg.warm_start_linear_solve)
-                G = x;
+                gv = xv;
             else
-                G.set(0);
-            const int k_it = inner.solve(
+                gv.setZero();
+            const int krylov = inner.solve(
                 A, G, b, cfg.warm_start_linear_solve, cfg.linear);
-            result.krylov_iterations += k_it;
-            if (k_it >= cfg.linear.max_iterations)
+            result.krylov_iterations += krylov;
+            if (krylov >= cfg.linear.max_iterations)
                 throw std::runtime_error(
-                    "anderson_picard: inner linear solve did not converge.");
-            cfg.post_linear_solve();
+                    "anderson_picard: the inner linear solve did not "
+                    "converge.");
 
-            // Residual of the frozen system at the solve's own result: the
-            // accuracy the inner solve delivers, and therefore the floor of
-            // the outer residual. The two tolerances are not comparable as
-            // written — the inner one is relative to the 2-norm of the right
-            // hand side, the outer one to its infinity norm — so an inner
-            // tolerance looser than the outer threshold leaves a floor the
-            // iteration can never get under: it would spend every remaining
-            // iteration on a fixed point that does not move.
-            {
-                la::Vector<T> r_in(x.index_map(), x.bs());
-                r_in.set(0);
-                A.mult(G, r_in);
-                double inner_residual = 0;
-                for (int i = 0; i < n; ++i)
-                    inner_residual = std::max(inner_residual,
-                        static_cast<double>(std::abs(b[i] - r_in[i])));
-                if (inner_residual > residual_threshold
-                    and max_residual <= inner_residual)
-                    throw std::runtime_error(
-                        "anderson_picard: the inner solve leaves a residual of "
-                        + std::to_string(inner_residual) + ", above the "
-                        "nonlinear threshold of "
-                        + std::to_string(residual_threshold)
-                        + ": tighten the inner tolerance (krylov_rtol / "
-                          "krylov_atol).");
-            }
+            // The accuracy the inner solve delivered bounds the residual the
+            // iteration can reach. The inner tolerance is relative to the
+            // 2-norm of the right-hand side and the outer threshold to its
+            // infinity norm, so an inner tolerance looser than the outer
+            // threshold leaves a floor the iteration can never get under: it
+            // would spend every remaining iteration on a fixed point that
+            // does not move.
+            r.set(0);
+            A.mult(G, r);
+            rv = bv - rv;
+            const double inner_residual = static_cast<double>(
+                rv.template lpNorm<Eigen::Infinity>());
+            if (inner_residual > threshold and residual <= inner_residual)
+                throw std::runtime_error(
+                    "anderson_picard: the inner solve leaves a residual of "
+                    + std::to_string(inner_residual) + ", above the nonlinear "
+                    "threshold of "
+                    + std::to_string(threshold)
+                    + ": tighten the inner tolerance (linear.rtol / "
+                      "linear.atol).");
 
-            // Mix the iterate.
-            std::optional<la::Vector<T>> prop = mixer.step(x, G);
-            la::Vector<T> next(x.index_map(), x.bs());
-            if (prop) {
-                bool finite = true;
-                for (int i = 0; i < n; ++i)
-                    if (not std::isfinite((*prop)[i])) {
-                        finite = false;
-                        break;
-                    }
-                if (finite) {
-                    next = *prop;
-                }
-                else {
-                    // Non-finite mixed step: fall back to damped Picard.
-                    for (int i = 0; i < n; ++i)
-                        next[i] = x[i] + one * cfg.dampening * (G[i] - x[i]);
-                }
-            }
-            else {
-                for (int i = 0; i < n; ++i)
-                    next[i] = x[i] + one * cfg.dampening * (G[i] - x[i]);
-            }
-
-            // Convergence test on both the update and the residual.
-            double max_update = 0, max_state = 0;
-            for (int i = 0; i < n; ++i) {
-                max_update = std::max(
-                    max_update, static_cast<double>(std::abs(next[i] - x[i])));
-                max_state = std::max(
-                    max_state, static_cast<double>(std::abs(next[i])));
-            }
-            const double update_threshold
-                = cfg.relative_tolerance * max_state + cfg.absolute_tolerance;
-            if (max_update <= update_threshold
-                and max_residual <= residual_threshold) {
-                x = next;
-                result.converged = true;
-                result.iterations = it + 1;
-                return result;
-            }
+            xv.noalias() += T(cfg.mixing) * mixer.step(xv, gv);
 
             if (cfg.report)
                 spdlog::info("Anderson Picard iteration {}: residual = {:.3e}",
-                    it + 1, max_residual);
-
-            // Record the pre-mix pair (x_k, G_k); the mixing uses the
-            // history of past iterates, so it must not include `next`.
-            mixer.push(x, G);
-            x = next;
+                    it + 1, residual);
         }
 
         if (cfg.report)
