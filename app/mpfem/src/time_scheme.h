@@ -188,6 +188,23 @@ namespace hellofem::app {
     /// recorded here rather than applied.
     inline constexpr double backward_euler_safety_factor = 20.0;
 
+    /// The accuracy with which the reference's solver lands on an event: the
+    /// tolerance of the root finding that locates an implicit event's
+    /// condition in time, so a smaller value resolves the crossing more
+    /// tightly (the reference's own guidance for overshooting an event is to
+    /// tighten it). It applies to the root finding alone and not to the
+    /// startup phase of the stepping.
+    ///
+    /// The app implements no events: an event is a feature of the model — an
+    /// explicit one states the times it triggers at, an implicit one states a
+    /// condition on the solution and an indicator whose sign change triggers
+    /// it — and it reinitializes the solution (and any discrete states) when
+    /// it fires, storing the solution before and after. Nothing of the app's
+    /// reads or writes such a feature, so there is no root to find and this
+    /// tolerance has nothing to bound. It is recorded as the mechanism it is,
+    /// not as a setting.
+    inline constexpr double event_tolerance = 0.01;
+
     /// The local truncation error of the step just taken, at the orders the
     /// order selection compares: the reference solver's own `err_k`,
     /// `err_{k-1}` and `err_{k+1}`, with `k` the order the step was taken at.
