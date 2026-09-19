@@ -69,10 +69,7 @@ namespace hellofem::app {
         /// Assemble one time step of the heat equation with the scheme
         /// weights `w`:
         ///   A = a0 M + b0 K,
-        ///   b = c_new f_new + c_old f_old - Σ_{k>=1} (a_k M + b_k K) u_k,
-        /// where M is the thermal-mass operator and K the conductivity plus
-        /// convection operator, both at the current (refreshed) state. The
-        /// Dirichlet data is taken at the level time `t`.
+        ///   b = f - Σ_{k>=1} (a_k M + b_k K) u_k
         void assemble_step(la::MatrixCSR<double>& A, la::Vector<double>& b,
             const TimeLevel& level) const override;
 

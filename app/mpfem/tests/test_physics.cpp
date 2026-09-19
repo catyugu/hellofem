@@ -97,32 +97,32 @@ TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[a
     // exactly at any order — a patch test of the space, the assembly and the
     // boundary lift together.
     for (const int order : {1, 2, 3, 4}) {
-    auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {4, 4, 1});
-    ElectrostaticsSolver es(f.mesh, f.boundary, f.cells, order);
-    auto sigma = constant_property(f.mesh, f.cells, 1.0);
-    es.set_conductivity(sigma);
-    es.add_voltage_bc(2, ScalarExpression(1.0)); // x+ : V=1
-    es.add_voltage_bc(1, ScalarExpression(0.0)); // x- : V=0
+        auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {4, 4, 1});
+        ElectrostaticsSolver es(f.mesh, f.boundary, f.cells, order);
+        auto sigma = constant_property(f.mesh, f.cells, 1.0);
+        es.set_conductivity(sigma);
+        es.add_voltage_bc(2, ScalarExpression(1.0)); // x+ : V=1
+        es.add_voltage_bc(1, ScalarExpression(0.0)); // x- : V=0
 
-    es.solve_steady(0.0);
-    auto V = es.solution();
+        es.solve_steady(0.0);
+        auto V = es.solution();
 
-    // V = x at every dof coordinate.
-    auto coords = es.space()->tabulate_dof_coordinates(false);
-    double max_err = 0;
-    double v_max = -1e9, v_min = 1e9;
-    for (std::int32_t d = 0; d < es.space()->dofmap()->index_map->size_local(); ++d) {
-        const double x = coords[3 * d];
-        const double val = V->x()->array()[static_cast<std::size_t>(d)];
-        max_err = std::max(max_err, std::abs(val - x));
-        v_max = std::max(v_max, val);
-        v_min = std::min(v_min, val);
-    }
-    INFO("order " << order << ", max error = " << max_err << ", V range ["
-                  << v_min << "," << v_max << "]");
-    REQUIRE(max_err < 1e-10);
-    REQUIRE(v_max == Catch::Approx(1.0).margin(1e-9));
-    REQUIRE(v_min == Catch::Approx(0.0).margin(1e-9));
+        // V = x at every dof coordinate.
+        auto coords = es.space()->tabulate_dof_coordinates(false);
+        double max_err = 0;
+        double v_max = -1e9, v_min = 1e9;
+        for (std::int32_t d = 0; d < es.space()->dofmap()->index_map->size_local(); ++d) {
+            const double x = coords[3 * d];
+            const double val = V->x()->array()[static_cast<std::size_t>(d)];
+            max_err = std::max(max_err, std::abs(val - x));
+            v_max = std::max(v_max, val);
+            v_min = std::min(v_min, val);
+        }
+        INFO("order " << order << ", max error = " << max_err << ", V range ["
+                      << v_min << "," << v_max << "]");
+        REQUIRE(max_err < 1e-10);
+        REQUIRE(v_max == Catch::Approx(1.0).margin(1e-9));
+        REQUIRE(v_min == Catch::Approx(0.0).margin(1e-9));
     }
 }
 
@@ -369,7 +369,7 @@ TEST_CASE("SolidMechanics: a varying temperature's load is the exact integral",
     T->x()->set(0.0);
     auto Tcoords = ht.space()->tabulate_dof_coordinates(false);
     for (std::int32_t d = 0;
-         d < ht.space()->dofmap()->index_map->size_local(); ++d)
+        d < ht.space()->dofmap()->index_map->size_local(); ++d)
         T->x()->array()[static_cast<std::size_t>(d)]
             = Tref + g * Tcoords[static_cast<std::size_t>(3 * d)];
     sm.set_thermal_expansion(T, constant_property(f.mesh, f.cells, alpha), Tref);

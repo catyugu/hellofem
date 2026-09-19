@@ -26,7 +26,7 @@ namespace hellofem::app {
     {
         const auto it = physics.element_order.find(std::string(variable));
         return it == physics.element_order.end() ? default_element_order
-                                                : it->second;
+                                                 : it->second;
     }
 
     CaseContext::CaseContext(const ModelScript& model, const LoadedMesh& mesh,

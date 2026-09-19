@@ -26,7 +26,6 @@ namespace hellofem::app {
     {
         history_.clear();
         times_.clear();
-        sources_.clear();
         history_.push_back(la::Vector<double>(*field_.solution()->x()));
         times_.push_back(t0);
     }
@@ -58,14 +57,10 @@ namespace hellofem::app {
         for (std::size_t k = 1; k < w.a.size() and k <= history_.size(); ++k)
             history.push_back(&history_[k - 1]);
 
-        la::Vector<double> source(field_.space()->dofmap()->index_map,
-            field_.space()->dofmap()->index_map_bs());
         TimeLevel level;
         level.weights = w;
         level.time = t;
         level.history = history;
-        level.source_old = sources_.empty() ? nullptr : &sources_.front();
-        level.source_new = &source;
         const int iterations = solve_system(
             [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
                 field_.refresh(t);
@@ -80,18 +75,12 @@ namespace hellofem::app {
         history_.insert(history_.begin(),
             la::Vector<double>(*field_.solution()->x()));
         times_.insert(times_.begin(), t);
-        sources_.insert(sources_.begin(), std::move(source));
         if (history_.size() > keep_levels_) {
             history_.erase(
                 history_.begin() + static_cast<std::ptrdiff_t>(keep_levels_),
                 history_.end());
             times_.erase(times_.begin() + static_cast<std::ptrdiff_t>(keep_levels_),
                 times_.end());
-            // One load fewer than levels: the first level has none.
-            if (sources_.size() >= keep_levels_)
-                sources_.erase(sources_.begin()
-                        + static_cast<std::ptrdiff_t>(keep_levels_ - 1),
-                    sources_.end());
         }
         order_ = static_cast<int>(w.a.size()) - 1;
         pending_ = true;
@@ -104,8 +93,6 @@ namespace hellofem::app {
         *field_.solution()->x() = history_[1];
         history_.erase(history_.begin());
         times_.erase(times_.begin());
-        if (not sources_.empty())
-            sources_.erase(sources_.begin());
         pending_ = false;
     }
 

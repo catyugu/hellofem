@@ -76,11 +76,6 @@ namespace hellofem::app {
         return w;
     }
 
-    double error_coefficient(int order)
-    {
-        return order <= 1 ? 1.0 : 4.0 / 3.0; // 2! * 1/2, 3! * 2/9
-    }
-
     BdfController::BdfController(const TimeSettings& settings, double span)
         : settings_(settings)
         , span_(span)

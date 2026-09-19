@@ -218,7 +218,6 @@ TEST_CASE("BDF: the weights follow the steps, the controller the estimates",
     REQUIRE(w.a[1] == Approx(-2.0));
     REQUIRE(w.b[0] == Approx(1.0));
     REQUIRE(w.b[1] == Approx(0.0));
-    REQUIRE(w.c_new == Approx(1.0));
 
     w = bdf_weights(2, TimeSteps {dt, dt});
     REQUIRE(w.a.size() == 3);

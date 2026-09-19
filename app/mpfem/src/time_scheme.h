@@ -13,15 +13,13 @@ namespace hellofem::app {
     /// Weights of the time discretization of a first-order-in-time field
     /// equation `M u' + K u = f` at the new level `t_{n+1}`, with the step
     /// `dt`, written as
-    ///     Σ_k a_k M u^{n+1-k} + Σ_k b_k K u^{n+1-k}
-    ///         = c_new f(t_{n+1}) + c_old f(t_n).
-    /// `a` and `b` are already divided by dt and index 0 is the new level;
-    /// the schemes implemented here need the source at two levels only.
+    ///     Σ_k a_k M u^{n+1-k} + Σ_k b_k K u^{n+1-k} = f(t_{n+1}).
+    /// `a` and `b` are already divided by dt and index 0 is the new level.
+    /// The BDF formulas are fully implicit, so the load enters at the new
+    /// level alone.
     struct TimeWeights {
         std::vector<double> a; // mass-operator weights
         std::vector<double> b; // stiffness-operator weights
-        double c_new = 1.0;
-        double c_old = 0.0;
     };
 
     /// One time level of a multistep scheme: the weights that apply at it,
@@ -32,10 +30,6 @@ namespace hellofem::app {
         double time = 0.0;
         /// Previous solution levels, most recent first.
         std::span<const la::Vector<double>* const> history;
-        /// Source load of the previous level (null at the first step).
-        const la::Vector<double>* source_old = nullptr;
-        /// Source load of this level; stored for the next step.
-        la::Vector<double>* source_new = nullptr;
     };
 
     /// The steps into a level: the step that reached it, and the step before
@@ -161,15 +155,6 @@ namespace hellofem::app {
     /// what keeps a BDF2 run second order when the step size changes.
     TimeWeights bdf_weights(int order, TimeSteps steps);
 
-    /// The leading coefficient of the local truncation error of a step of
-    /// `order`, against the divided difference it is estimated from: that
-    /// error is `C dt^(order+1) u^(order+1)`, and
-    /// `u^(order+1) = (order+1)! DD_(order+1)`, so the estimate the step is
-    /// controlled by is `c dt^(order+1) DD_(order+1)` with
-    /// `c = (order+1)! C`. The constants are the textbook ones: 1/2 for
-    /// backward Euler, 2/9 for BDF2.
-    double error_coefficient(int order);
-
     /// The first step of a run, as a fraction of the span it integrates: the
     /// reference takes it below this, and its own log shows the value itself
     /// (0.6 s over its 600 s span), so the derivative condition of
@@ -217,10 +202,11 @@ namespace hellofem::app {
     ///
     /// in the scaled divided differences `d_(j+1) = dt^(j+1) DD_(j+1) u` the
     /// stepper already forms. That is NOT the textbook local truncation error
-    /// `c_j d_(j+1)` with `c_j` the coefficient of `error_coefficient`: the
-    /// correction carries the polynomial's extrapolation remainder as well as
-    /// the corrector's own truncation error, and at the order 2 the two differ
-    /// by a factor of 2.5 — which is enough to decide the order differently.
+    /// `c_j d_(j+1)`, whose coefficient is 1/2 at the order 1 and 2/9 at the
+    /// order 2: the correction carries the polynomial's extrapolation
+    /// remainder as well as the corrector's own truncation error, and at the
+    /// order 2 the two differ by a factor of 2.5 — which is enough to decide
+    /// the order differently.
     ///
     /// An estimate the level history does not reach is reported as zero, which
     /// the selection reads as "not available". A step meets the tolerance

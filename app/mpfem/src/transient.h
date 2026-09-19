@@ -12,11 +12,10 @@ namespace hellofem::app {
 
     /// Advances a time-dependent field with the BDF scheme.
     ///
-    /// Owns the solution history and the source loads of the last levels,
-    /// which the scheme and the error estimate read, and refreshes the field
-    /// at every new level. The solution of the previous level is the initial
-    /// guess of the next one — for the nonlinear material update and for the
-    /// Krylov solve.
+    /// Owns the solution history, which the scheme and the error estimate
+    /// read, and refreshes the field at every new level. The solution of the
+    /// previous level is the initial guess of the next one — for the nonlinear
+    /// material update and for the Krylov solve.
     ///
     /// The step size and the order are not the stepper's: they are the case's,
     /// selected by `BdfController` from the error estimates of every field of
@@ -105,10 +104,6 @@ namespace hellofem::app {
         /// Solutions of the levels, most recent first, and their times.
         std::vector<la::Vector<double>> history_;
         std::vector<double> times_;
-        /// Source load of every level but the first, in the same order as
-        /// `times_` without its first entry: the load of the level a step
-        /// starts from is what its scheme reads as the old one.
-        std::vector<la::Vector<double>> sources_;
         /// Order of the step just taken, which its error estimates use.
         int order_ = 1;
         /// Whether the history holds a step that `undo` can drop.

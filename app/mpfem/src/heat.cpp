@@ -217,8 +217,6 @@ namespace hellofem::app {
         const TimeWeights& w = level.weights;
         const double t = level.time;
         const auto& history = level.history;
-        const la::Vector<double>* f_old = level.source_old;
-        la::Vector<double>& f_new = *level.source_new;
         const auto& dofmap = *V_->dofmap();
         const int bs = dofmap.index_map_bs();
         const bool has_mass = w.a[0] != 0.0;
@@ -251,12 +249,8 @@ namespace hellofem::app {
                 av[i] = w.b[0] * K.values()[i];
 
         // Source load of this level.
-        f_new.set(0.0);
-        assemble_sources(f_new);
         b.set(0.0);
-        for (std::size_t i = 0; i < b.array().size(); ++i)
-            b.array()[i] = w.c_new * f_new.array()[i]
-                + (w.c_old != 0.0 and f_old ? w.c_old * f_old->array()[i] : 0.0);
+        assemble_sources(b);
 
         // History: b -= (a_k M + b_k K) u^{n+1-k}.
         la::Vector<double> y(dofmap.index_map, bs);
@@ -293,7 +287,6 @@ namespace hellofem::app {
         TimeLevel level;
         level.weights = weights;
         level.time = t_;
-        level.source_new = &f_new;
         assemble_step(A, b, level);
     }
 
