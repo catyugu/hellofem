@@ -65,8 +65,12 @@ namespace hellofem::app {
                         and props.contains("HeatFluxType")
                         and props.at("HeatFluxType") == "ConvectiveHeatFlux") {
                         auto h = ctx.uniform_property(props.at("h"));
-                        auto t_inf = ctx.uniform_property(
-                            props.at("minput_temperature"));
+                        // The ambient temperature is `Text`. The feature also
+                        // carries a `minput_temperature`, but it is inert:
+                        // measured on the busbar model, setting it to 100 degC
+                        // leaves the solution bit-for-bit identical to the
+                        // default, while `Text` moves the peak by 63 K.
+                        auto t_inf = ctx.uniform_property(props.at("Text"));
                         for (int id : feature.selection)
                             solver_->add_convection(id, h, t_inf);
                     }

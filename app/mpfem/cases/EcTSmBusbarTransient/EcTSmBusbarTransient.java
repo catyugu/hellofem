@@ -275,8 +275,7 @@ public class EcTSmBusbarTransient {
         model.component(comp).physics("ht").create("hf1", "HeatFluxBoundary", 2);
         model.component(comp).physics("ht").feature("hf1").selection().set(convArr);
         model.component(comp).physics("ht").feature("hf1").set("HeatFluxType", "ConvectiveHeatFlux");
-        model.component(comp).physics("ht").feature("hf1").set("minput_temperature_src", "userdef");
-        model.component(comp).physics("ht").feature("hf1").set("minput_temperature", "T0");
+        model.component(comp).physics("ht").feature("hf1").set("Text", "T0");
         model.component(comp).physics("ht").feature("hf1")
             .set("HeatTransferCoefficientType", "UserDef");
         model.component(comp).physics("ht").feature("hf1").set("h", "htc");
