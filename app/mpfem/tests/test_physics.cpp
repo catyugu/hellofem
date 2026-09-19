@@ -338,6 +338,61 @@ TEST_CASE("SolidMechanics: uniform thermal expansion of a clamped bar", "[app][p
     REQUIRE(max_lat < 2e-3); // bounded lateral deformation
 }
 
+TEST_CASE("SolidMechanics: a varying temperature's load is the exact integral",
+    "[app][physics]")
+{
+    // The uniform-expansion test above only exercises the boundary part of the
+    // thermal load. For a constant sigma_th, int grad phi_i is zero at every
+    // interior node (the gradients sum to the gradient of one), so the whole
+    // load sits on the boundary nodes and that test passes for any interior
+    // quadrature of the load. A temperature that varies makes the load
+    // interior, which is what this checks.
+    //
+    // For v = (x, y, z) the load's work is b.v = int sigma_th div v, and with
+    // T = Tref + g x on a box [0, Lx] x [0, Ly] x [0, Lz] that is
+    //     3 alpha g E/(1 - 2 nu) * V * xbar,  V = Lx Ly Lz, xbar = Lx/2,
+    // since sigma_th = alpha (T - Tref) E/(1 - 2 nu). v is linear, so the
+    // discrete work reproduces the integral exactly and the identity holds to
+    // round-off rather than to a mesh error.
+    const double Lx = 1.0, Ly = 0.5, Lz = 0.5;
+    const double g = 100.0; // K/m
+    const double E = 200e9, nu = 0.3, alpha = 1e-5, Tref = 293.15;
+
+    auto f = make_box_fixture({0, 0, 0}, {Lx, Ly, Lz}, {4, 3, 3});
+    SolidMechanicsSolver sm(f.mesh, f.boundary, f.cells, 1);
+    sm.set_elastic(constant_property(f.mesh, f.cells, E),
+        constant_property(f.mesh, f.cells, nu));
+
+    // A scalar space carrying T = Tref + g x.
+    HeatTransferSolver ht(f.mesh, f.boundary, f.cells, 1);
+    auto T = std::make_shared<hellofem::fem::Function<double>>(ht.space());
+    T->x()->set(0.0);
+    auto Tcoords = ht.space()->tabulate_dof_coordinates(false);
+    for (std::int32_t d = 0;
+         d < ht.space()->dofmap()->index_map->size_local(); ++d)
+        T->x()->array()[static_cast<std::size_t>(d)]
+            = Tref + g * Tcoords[static_cast<std::size_t>(3 * d)];
+    sm.set_thermal_expansion(T, constant_property(f.mesh, f.cells, alpha), Tref);
+    sm.refresh(0.0);
+
+    la::MatrixCSR<double> A(sm.pattern());
+    la::Vector<double> b(sm.solution()->x()->index_map(),
+        sm.solution()->x()->bs());
+    sm.assemble_steady(A, b);
+
+    // The load against v = (x, y, z): physical dof i is component i % 3 of its
+    // node, whose coordinate is at coords[3 * i + (i % 3)].
+    auto coords = sm.space()->tabulate_dof_coordinates(false);
+    double work = 0.0;
+    for (std::size_t i = 0; i < b.array().size(); ++i)
+        work += b.array()[i] * coords[3 * i + (i % 3)];
+
+    const double exact = 3.0 * alpha * g * E / (1 - 2 * nu) * (Lx * Ly * Lz)
+        * (Lx / 2);
+    INFO("load work = " << work << " against the exact " << exact);
+    REQUIRE(std::abs(work - exact) < 1e-8 * std::abs(exact));
+}
+
 TEST_CASE("SolidMechanics: AMG preconditioning keeps the block structure",
     "[app][physics]")
 {

@@ -268,10 +268,14 @@ TEST_CASE("TimeScheme: the BDF weights follow the steps, the controller the erro
     REQUIRE(w.a[0] * u(t_new) + w.a[1] * u(t_old) + w.a[2] * u(t_older)
         == Approx(2.0 + 6.0 * t_new).margin(1e-12));
 
-    // The controller: a step that met the tolerance is left alone until it is
-    // well inside, doubled when it is, and one that missed it is repeated
-    // smaller by the asymptotic dependence of the error on the step.
-    REQUIRE(step_factor(0.5, 2) == Approx(1.0));
+    // The controller: every step proposes the size the asymptotic dependence
+    // of the error on the step allows, so a step that met the tolerance grows
+    // while its estimate sits below 0.9^(order+1) of it and shrinks above, and
+    // one that missed it is repeated smaller. The step is kept exactly at that
+    // estimate — 0.81 of the tolerance at order 1, 0.729 at order 2.
+    REQUIRE(step_factor(0.81, 1) == Approx(1.0));
+    REQUIRE(step_factor(0.729, 2) == Approx(1.0));
+    REQUIRE(step_factor(0.5, 2) == Approx(0.9 * std::cbrt(2.0)));
     REQUIRE(step_factor(1.0 / 20.0, 1) == Approx(2.0));
     REQUIRE(step_factor(2.0, 1) == Approx(0.9 / std::sqrt(2.0)));
     REQUIRE(step_factor(2.0, 2) == Approx(0.9 / std::cbrt(2.0)));

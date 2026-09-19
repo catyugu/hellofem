@@ -12,11 +12,6 @@
 #include <utility>
 
 namespace hellofem::app {
-    namespace {
-
-        constexpr double weight_floor = 1e-3;
-
-    } // namespace
 
     TimeStepper::TimeStepper(TimeDependentField& field, const TimeSettings& settings)
         : field_(field)
@@ -134,14 +129,21 @@ namespace hellofem::app {
             = divided_difference(order_ + 1, level, times_);
         const auto& u = field_.solution()->x()->array();
         const std::size_t n = u.size();
-        const double floor = tolerance_ * weight_floor * magnitude_;
 
         const double coefficient = error_coefficient(scheme_.family, order_);
+        // The weight of a dof is the field's own scale, or the dof's value
+        // where that is larger: `tolerance max(|u_i|, scale)`, COMSOL's
+        // `W_ij = max(|U_ij|, S_j)` (see its "Scales for dependent variables").
+        // The scale is what keeps a field with a wide range of values — a
+        // displacement that runs from 1e-11 near a clamped face to its own
+        // magnitude — from letting its near-zero dofs, which carry nothing but
+        // round-off, set the step of the whole case.
+        const double scale = magnitude_;
         double sum = 0.0;
         for (std::size_t i = 0; i < n; ++i) {
-            const double weight = tolerance_ * std::abs(u[i]) + floor;
-            const double estimate = coefficient * dd.array()[i];
-            const double ratio = weight > 0.0 ? estimate / weight : 0.0;
+            const double weight = tolerance_ * std::max(std::abs(u[i]), scale);
+            const double ratio
+                = weight > 0.0 ? coefficient * dd.array()[i] / weight : 0.0;
             sum += ratio * ratio;
         }
         return n > 0 ? std::sqrt(sum / static_cast<double>(n)) : 0.0;
@@ -150,6 +152,26 @@ namespace hellofem::app {
     std::vector<double> TimeStepper::scaled_derivatives() const
     {
         return derivative_scale(levels(), times_);
+    }
+
+    void TimeStepper::interpolate(double t, la::Vector<double>& out) const
+    {
+        const std::vector<const la::Vector<double>*> level = levels();
+        const std::size_t n = std::min(
+            static_cast<std::size_t>(order_) + 1, level.size());
+        if (n == 0 or times_.size() < n) {
+            out.set(0.0);
+            return;
+        }
+        out = interpolate_levels(
+            std::span<const la::Vector<double>* const>(level.data(), n),
+            std::span<const double>(times_.data(), n), t);
+    }
+
+    void TimeStepper::restore(la::Vector<double>& out) const
+    {
+        if (not history_.empty())
+            out = history_.front();
     }
 
 } // namespace hellofem::app

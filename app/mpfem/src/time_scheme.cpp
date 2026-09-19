@@ -71,16 +71,11 @@ namespace hellofem::app {
         for (const TimeScheme& scheme : schemes)
             if (scheme.name == key)
                 return scheme;
-        throw std::runtime_error("unknown time stepping scheme '" + std::string(name)
-            + "'; the available ones are " + time_scheme_names());
-    }
-
-    std::string time_scheme_names()
-    {
         std::string names;
         for (const TimeScheme& scheme : schemes)
             names += (names.empty() ? "" : ", ") + std::string(scheme.name);
-        return names;
+        throw std::runtime_error("unknown time stepping scheme '" + std::string(name)
+            + "'; the available ones are " + names);
     }
 
     TimeWeights bdf_weights(int order, TimeSteps steps)
@@ -124,13 +119,16 @@ namespace hellofem::app {
 
     double step_factor(double error, int order)
     {
-        if (error > 1.0) {
-            const double factor = 0.9 * std::pow(error, -1.0 / (order + 1));
-            return std::max(0.1, std::min(1.0, factor));
-        }
-        // A step that met the tolerance, with room: the deadbeat region of
-        // the controller is everything down to a sixteenth of it.
-        return error <= 1.0 / 16.0 ? 2.0 : 1.0;
+        if (error <= 0.0)
+            return 2.0;
+        // The elementary controller, applied to every step: the size the
+        // asymptotic dependence of the local error on the step allows,
+        // h_new = 0.9 error^(-1/(order+1)) h, with a safety factor and the
+        // clamp [0.1, 2]. A step that met the tolerance therefore grows while
+        // its estimate sits below 0.9^(order+1) of it (0.81 at order 1, 0.73 at
+        // order 2) instead of being held until it is far inside.
+        const double factor = 0.9 * std::pow(error, -1.0 / (order + 1));
+        return std::max(0.1, std::min(2.0, factor));
     }
 
     int next_order(int order, int max_order, std::span<const double> derivative_scale)
@@ -198,6 +196,33 @@ namespace hellofem::app {
                     = std::max(scale[m - 1], std::abs(weight * d[0][j]));
         }
         return scale;
+    }
+
+    la::Vector<double> interpolate_levels(
+        std::span<const la::Vector<double>* const> levels,
+        std::span<const double> times, double t)
+    {
+        la::Vector<double> out(levels[0]->index_map(), levels[0]->bs());
+        out.set(0);
+        const std::size_t n = levels[0]->array().size();
+        if (n == 0 or levels.empty() or levels.size() != times.size())
+            return out;
+
+        // The Newton form, whose passes produce the divided differences one
+        // order at a time: p(t) = u[t_0] + (t - t_0) u[t_0,t_1] + ...
+        LevelTable d = level_rows(levels, levels.size());
+        auto& values = out.array();
+        std::vector<double> product(n, 1.0);
+        for (std::size_t j = 0; j < n; ++j)
+            values[j] = d[0][j];
+        for (std::size_t m = 1; m < d.size(); ++m) {
+            newton_pass(d, times, m);
+            for (std::size_t j = 0; j < n; ++j) {
+                product[j] *= t - times[m - 1];
+                values[j] += product[j] * d[0][j];
+            }
+        }
+        return out;
     }
 
 } // namespace hellofem::app

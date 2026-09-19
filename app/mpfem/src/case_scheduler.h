@@ -59,10 +59,15 @@ namespace hellofem::app {
         /// Advance the steppers over the whole span of `times` with the step
         /// size and the order the local truncation error estimate selects
         /// (see `step_factor` and `next_order`), recording the result at each
-        /// output time. The steps are held to the output times, so those are
-        /// solved rather than interpolated: only a step that is too coarse is
-        /// rejected, and the last one of an interval is taken at whatever
-        /// size is left.
+        /// output time.
+        ///
+        /// The steps are the solver's own and are not held to the output
+        /// times: an output time between two of them is reported by
+        /// interpolating the scheme's polynomial there (see `record_at`).
+        /// That is COMSOL's configuration — its Time-Dependent Solver has
+        /// "Steps taken by solver: Free" with "Times to store: Output times by
+        /// interpolation", and its log for EcTSmBusbarTransient shows the step
+        /// 19.201 -> 38.401 with 30 marked as an output rather than solved.
         void advance_adaptive(
             std::span<TimeStepper* const> steppers, const std::vector<double>& times);
 
@@ -73,6 +78,12 @@ namespace hellofem::app {
         };
         std::vector<double> evaluate_columns() const;
         void record(double t);
+
+        /// Record the result at an output time that falls between two levels:
+        /// the stepping fields take the value their scheme's polynomial gives
+        /// there, the algebraic ones are solved at that state, and the levels
+        /// are left as they were.
+        void record_at(double t);
 
         // --- data ---
         ModelScript model_;

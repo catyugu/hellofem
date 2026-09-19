@@ -113,6 +113,7 @@ namespace hellofem::app {
         // they do not reset it.
         double dt = span * first_step_fraction;
         const double smallest = span * smallest_step_fraction;
+        const double largest = span * max_step_fraction;
         double t = times.front();
         std::size_t output = 1;
         int order = 1;
@@ -120,14 +121,7 @@ namespace hellofem::app {
         int rejected = 0;
 
         while (t < t_end) {
-            // Output times the levels have already passed: there is nothing
-            // left to solve at them.
-            while (output < times.size() and times[output] <= t)
-                ++output;
-            const double stop = times[output];
-            const double remaining = stop - t;
-            const bool held = dt > remaining;
-            const double h = held ? remaining : dt;
+            const double h = std::min(dt, largest);
 
             for (TimeStepper* stepper : steppers)
                 stepper->step(t + h, order);
@@ -171,19 +165,18 @@ namespace hellofem::app {
             for (const auto& field : fields_)
                 if (not field->stepper())
                     field->solve_level(t);
-            if (held) {
-                record(stop);
+            // The output times this step stepped over are reported by
+            // interpolating the scheme's polynomial.
+            while (output < times.size() and times[output] <= t) {
+                record_at(times[output]);
                 ++output;
             }
-            // A step that the next output time held back says nothing about
-            // the size the solution allows, so the proposal stands.
-            const double basis = held ? dt : h;
             // The order is the BDF family's to select; a family of a fixed
             // order is stepped at the order of its scheme.
             const int next = scheme.family == TimeFamily::bdf
                 ? next_order(order, scheme.order, norms)
                 : order;
-            dt = basis * step_factor(error, order);
+            dt = std::min(h * step_factor(error, order), largest);
             order = next;
             ++steps;
         }
@@ -239,6 +232,20 @@ namespace hellofem::app {
         snapshot.time = t;
         snapshot.columns = evaluate_columns();
         snapshots_.push_back(std::move(snapshot));
+    }
+
+    void CaseScheduler::record_at(double t)
+    {
+        for (const auto& field : fields_)
+            if (TimeStepper* stepper = field->stepper())
+                stepper->interpolate(t, stepper->solution());
+        for (const auto& field : fields_)
+            if (not field->stepper())
+                field->solve_level(t);
+        record(t);
+        for (const auto& field : fields_)
+            if (TimeStepper* stepper = field->stepper())
+                stepper->restore(stepper->solution());
     }
 
     void CaseScheduler::export_result(const std::string& path) const

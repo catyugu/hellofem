@@ -78,15 +78,34 @@ namespace hellofem::app {
     /// it is taken at — or, for the BDF family, the highest order the driver
     /// may select. How far apart the levels are is not the scheme's: the step
     /// size and the order of every step follow from the local truncation
-    /// error, and the output times are the times they are held to (see
-    /// `CaseScheduler::advance_adaptive`).
+    /// error, and the output times are reported by interpolating the levels
+    /// the steps produced (see `CaseScheduler::advance_adaptive`).
     struct TimeSettings {
-        std::string scheme = "bdf2";
+        /// The scheme, as `--scheme` names it.
+        ///
+        /// The app's default is the BDF family at the order the reference's own
+        /// solver selected, so that a transient comparison measures the two
+        /// models rather than the two time discretizations. COMSOL selects that
+        /// order itself (its Time-Dependent Solver has "Maximum BDF order" 2 and
+        /// "Minimum BDF order" 1, both its own defaults), and its log shows what
+        /// it selects: over the 18 steps of EcTSmBusbarTransient the "Order"
+        /// column reads 1,1,2,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2 — fourteen of the
+        /// eighteen at order 1, the two excursions to order 2 single steps at
+        /// either end.
+        ///
+        /// Measured against that reference, the order is what the comparison
+        /// turns on: order 1 reproduces it to 2.96e-05 (L2 relative, the
+        /// temperature, worst over the output times) where order 2 sits at
+        /// 2.33e-04, outside the case's tolerance on 15 of the 63 exported
+        /// columns against order 1's none. On TBlockTransient and
+        /// TBlockNonlinTransient the two orders are indistinguishable (every
+        /// column passes at either).
+        std::string scheme = "bdf1";
         /// The relative tolerance the truncation error of a step is held to,
-        /// weighted per dof by `tolerance |u|` plus a small absolute part
-        /// (see `TimeStepper::error`). It bounds the error of a step, so it
-        /// is the accuracy of the time discretization — not of the linear or
-        /// the nonlinear solver. It starts at the value COMSOL's own
+        /// weighted per dof by `tolerance max(|u|, scale)` (see
+        /// `TimeStepper::error`). It bounds the error of a step, so it is the
+        /// accuracy of the time discretization — not of the linear or the
+        /// nonlinear solver. It starts at the value COMSOL's own
         /// physics-controlled tolerance takes for the physics the app solves,
         /// so that a run measures the discretization rather than the
         /// difference between two step controllers; a model that states its
@@ -99,9 +118,6 @@ namespace hellofem::app {
 
     /// The scheme named `name`, case-insensitive. Throws for an unknown name.
     const TimeScheme& find_time_scheme(std::string_view name);
-
-    /// Comma-separated names of the available schemes.
-    std::string time_scheme_names();
 
     /// The weights of a BDF step of `order` (1 or 2) over the steps
     /// `steps`, with `h = steps.dt` and `h' = steps.dt_previous`:
@@ -147,16 +163,25 @@ namespace hellofem::app {
     /// error measured `error` against the tolerance (1 = exactly at it),
     /// following the controller of the COMSOL BDF solver:
     ///
-    ///  - a step that missed the tolerance (error > 1) is repeated at
-    ///    `0.9 error^(-1/(order+1))` of its size, the asymptotic dependence of
-    ///    the local truncation error on the step (with a safety factor);
-    ///  - a step that met it is kept as it is, until the error is more than
-    ///    16 times below the tolerance, where the step is doubled. This
-    ///    "deadbeat" region keeps the controller from chasing the noise of an
-    ///    error estimate that is already far inside the tolerance.
+    ///     h_new = clamp(0.9 error^(-1/(order+1)), 0.1, 2) h
     ///
-    /// The factor is clamped to [0.1, 2].
+    /// the asymptotic dependence of the local truncation error on the step,
+    /// with a safety factor. Every step proposes with it, the ones that met the
+    /// tolerance included, so a step whose estimate sits below 0.9^(order+1) of
+    /// the tolerance grows and one above it shrinks.
+    ///
+    /// Measured on the reference: COMSOL's own step sequence for
+    /// EcTSmBusbarTransient doubles from the first step to the cap in eight
+    /// steps (0.6, 0.6, 1.2, 2.4, 4.8, 9.6, 19.2, 19.2, 38.4, 38.4, 60, 60,
+    /// ...), which is the clamp of 2 taken at every one of them — a controller
+    /// that only grew a step once its estimate was far inside the tolerance
+    /// would not reach the cap in that many.
     double step_factor(double error, int order);
+
+    /// The largest step of a run, as a fraction of the span it integrates.
+    /// Measured on the reference: COMSOL's steps for EcTSmBusbarTransient stop
+    /// growing at 60 s over a 600 s span, and stay there.
+    inline constexpr double max_step_fraction = 0.1;
 
     /// The order the next step is taken at — the BDF family's, a scheme of a
     /// fixed order keeping its own — from the scaled derivative norms
@@ -186,5 +211,14 @@ namespace hellofem::app {
     la::Vector<double> divided_difference(int k,
         std::span<const la::Vector<double>* const> levels,
         std::span<const double> times);
+
+    /// The value at time `t` of the polynomial through `levels`, whose times
+    /// are `times` (newest first). This is the interpolation a transient
+    /// result is reported with at an output time the steps stepped over: the
+    /// polynomial is the Newton form of the levels, so it reproduces them
+    /// exactly at their own times and its degree is one less than their count.
+    la::Vector<double> interpolate_levels(
+        std::span<const la::Vector<double>* const> levels,
+        std::span<const double> times, double t);
 
 } // namespace hellofem::app

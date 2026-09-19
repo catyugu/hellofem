@@ -16,19 +16,11 @@ int main(int argc, char* argv[])
 {
     using namespace hellofem::app;
 
-    TimeSettings time;
-    bool tolerance_given = false;
     std::string positional[3];
     int npos = 0;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
-        if (arg == "--scheme" and i + 1 < argc)
-            time.scheme = argv[++i];
-        else if (arg == "--tol" and i + 1 < argc) {
-            time.tolerance = std::stod(argv[++i]);
-            tolerance_given = true;
-        }
-        else if (npos < 3)
+        if (npos < 3)
             positional[npos++] = arg;
         else {
             std::fprintf(stderr, "unexpected argument '%s'\n", arg.c_str());
@@ -37,9 +29,7 @@ int main(int argc, char* argv[])
     }
     if (npos < 3) {
         std::fprintf(stderr,
-            "usage: mpfem_app <clean_model.java> <mesh.mphtxt> <result.txt> "
-            "[--scheme <%s>] [--tol <time stepping tolerance>]\n",
-            time_scheme_names().c_str());
+            "usage: mpfem_app <clean_model.java> <mesh.mphtxt> <result.txt>\n");
         return 2;
     }
 
@@ -59,10 +49,12 @@ int main(int argc, char* argv[])
         model.name, model.parameters.size(), model.materials.size(),
         model.physics.size(), model.couplings.size());
 
-    // The accuracy of a transient study is the model's own: a study step that
-    // states a tolerance is held to it, which is what its reference solution
-    // was computed with. The command line overrides it.
-    if (not tolerance_given and model.study.tolerance)
+    // The time stepping is the model's own: the scheme and the order are the
+    // defaults the reference's solver runs at (see `TimeSettings`), and a
+    // study step that states a tolerance is held to that tolerance, which is
+    // what its reference solution was computed with.
+    TimeSettings time;
+    if (model.study.tolerance)
         time.tolerance = *model.study.tolerance;
 
     // Solve the model's study. A failing solve is reported where it happens:

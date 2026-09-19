@@ -40,17 +40,30 @@ namespace hellofem::app {
         void step(double t, int order);
 
         /// The local truncation error of the step just taken, weighted per
-        /// dof by `tolerance |u| + tolerance * 1e-3 * max|u|` and measured as
-        /// the RMS over the dofs: the step meets the tolerance while this is
-        /// at most one. The weight is relative wherever the solution is of
-        /// the level's magnitude, and the small absolute part keeps a dof the
-        /// solution has barely reached from demanding an accuracy no step
-        /// could deliver (a field that starts at zero).
+        /// dof by `tolerance max(|u_i|, scale)` and measured as the RMS over
+        /// the dofs: the step meets the tolerance while this is at most one.
+        /// The scale is the largest magnitude the solution has reached, which
+        /// is COMSOL's `W_ij = max(|U_ij|, S_j)` with its automatically
+        /// determined `S_j`: a dof the solution has barely reached is held to
+        /// the accuracy of the field's own magnitude rather than to a relative
+        /// accuracy on a value that carries nothing.
         double error() const;
 
         /// The scaled derivative norms `|dt^k DD_k u|` of the level just
         /// taken, for the order selection (see `next_order`).
         std::vector<double> scaled_derivatives() const;
+
+        /// The solution at time `t` of the scheme's own polynomial through the
+        /// levels it holds — what a transient result is reported with at an
+        /// output time the steps stepped over.
+        void interpolate(double t, la::Vector<double>& out) const;
+
+        /// Write the newest level back into `out`, undoing `interpolate`.
+        void restore(la::Vector<double>& out) const;
+
+        /// The solution vector the stepper advances, which `interpolate` and
+        /// `restore` write.
+        la::Vector<double>& solution() { return *field_.solution()->x(); }
 
         /// Drop the step just taken, back to the level it started from: the
         /// driver rejected it, and the next attempt starts from there.
