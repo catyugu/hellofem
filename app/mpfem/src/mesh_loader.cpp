@@ -63,43 +63,4 @@ namespace hellofem::app {
         return out;
     }
 
-    std::set<int> boundary_domains(const LoadedMesh& mesh, int boundary)
-    {
-        return boundary_domains(mesh, std::set<int> {boundary});
-    }
-
-    std::set<int> boundary_domains(
-        const LoadedMesh& mesh, const std::set<int>& boundaries)
-    {
-        std::set<int> domains;
-        if (not mesh.facet_tags or not mesh.cell_tags)
-            return domains;
-        const int tdim = mesh.mesh->topology()->dim();
-        auto topo = mesh.mesh->topology_mutable();
-        topo->create_entities(tdim - 1);
-        topo->create_connectivity(tdim - 1, tdim);
-        auto f_to_c = topo->connectivity(tdim - 1, tdim);
-
-        // Cell index -> domain id: the tags hold a (sorted) index and its
-        // value per tagged cell, so the lookup is a binary search.
-        const auto cell_indices = mesh.cell_tags->indices();
-        const auto cell_values = mesh.cell_tags->values();
-        auto domain_of = [&](std::int32_t cell) {
-            const auto it = std::lower_bound(
-                cell_indices.begin(), cell_indices.end(), cell);
-            if (it == cell_indices.end() or *it != cell)
-                throw std::runtime_error(
-                    "boundary_domains: a cell carries no domain tag");
-            return cell_values[static_cast<std::size_t>(it - cell_indices.begin())];
-        };
-
-        const auto& indices = mesh.facet_tags->indices();
-        const auto& values = mesh.facet_tags->values();
-        for (std::size_t i = 0; i < indices.size(); ++i)
-            if (boundaries.contains(values[i]))
-                for (std::int32_t c : f_to_c->links(indices[i]))
-                    domains.insert(domain_of(c));
-        return domains;
-    }
-
 } // namespace hellofem::app

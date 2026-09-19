@@ -96,17 +96,38 @@ namespace hellofem::app {
                                 + feature.tag + "' takes its conductivity from '"
                                 + props.at("k_mat") + "'");
                         // The thickness and the conductivity are separate
-                        // coefficients of the operator: the conductivity is
-                        // the boundary's own material (a surface material,
-                        // not the domain's).
-                        solver_->add_thin_layer(feature.selection,
-                            ctx.uniform_property(props.at("lth")),
-                            ctx.boundary_property(feature.selection,
-                                [](const Material& material) {
-                                    const MaterialProperty* k = material.property(
-                                        "thermalconductivity");
-                                    return k ? k->scalar_value() : std::string {};
-                                }));
+                        // coefficients of the operator, and the conductivity
+                        // is the material COMSOL applies on the boundary —
+                        // a surface material, which may differ from the one
+                        // of the domain it borders and from one boundary of
+                        // the selection to the next. A facet integral reads
+                        // its coefficient off the adjacent cell, so one
+                        // integral carries one value: the selection is split
+                        // by material, one integral each, with that
+                        // material's conductivity uniform over the mesh.
+                        std::map<const Material*, std::set<int>> by_material;
+                        for (int id : feature.selection) {
+                            const Material* material
+                                = ctx.model().material_on_boundary(id);
+                            if (material == nullptr)
+                                throw std::runtime_error("heat: thin layer '"
+                                    + feature.tag + "' sits on boundary "
+                                    + std::to_string(id)
+                                    + ", which carries no material");
+                            by_material[material].insert(id);
+                        }
+                        for (const auto& [material, boundaries] : by_material) {
+                            const MaterialProperty* k
+                                = material->property("thermalconductivity");
+                            if (k == nullptr)
+                                throw std::runtime_error("heat: thin layer '"
+                                    + feature.tag + "': material '"
+                                    + material->tag
+                                    + "' defines no thermalconductivity");
+                            solver_->add_thin_layer(boundaries,
+                                ctx.uniform_property(props.at("lth")),
+                                ctx.uniform_property(k->scalar_value()));
+                        }
                     }
                     if (props.contains("Tinit"))
                         solver_->set_initial_temperature(

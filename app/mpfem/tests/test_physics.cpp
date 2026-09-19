@@ -1,6 +1,7 @@
 // hellofem::app — physics solver tests: manufactured and analytic solutions
 // SPDX-License-Identifier: MIT
 
+#include "case_context.h"
 #include "catch2/catch_approx.hpp"
 #include "catch2/catch_test_macros.hpp"
 #include "common/IndexMap.h"
@@ -13,6 +14,7 @@
 #include "la/Vector.h"
 #include "mesh/generation.h"
 #include "mesh/utils.h"
+#include "physics_field.h"
 #include "solid.h"
 #include "solver.h"
 
@@ -453,6 +455,130 @@ TEST_CASE("HeatTransfer: a thin layer does not conduct across its thickness",
         REQUIRE(err < 1e-12);
         REQUIRE(at_one == Approx(0.5 * Q / k).margin(1e-12));
     }
+}
+
+TEST_CASE("HeatTransfer: a thin layer takes the material of its own boundary",
+    "[app][physics]")
+{
+    // Two boundaries of one domain carry two different surface materials,
+    // and one thin layer feature selects both. Each boundary's layer must
+    // use its own material's conductivity: a facet integral reads its
+    // coefficient off the adjacent cell, so the selection is assembled as
+    // one integral per material, each carrying one value. Reading the
+    // boundaries' materials into the domain's cells instead gives both
+    // integrals the same conductivity, which is a different field. The
+    // volumetric source keeps the bulk field off a linear profile, which a
+    // layer parallel to the flux would leave untouched.
+    auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {2, 2, 2});
+    const double thickness = 0.1, k_lower = 1.0, k_upper = 2.0;
+
+    LoadedMesh lm;
+    lm.mesh = f.mesh;
+    lm.order = 1;
+    lm.cell_tags = f.cells;
+    lm.facet_tags = f.boundary;
+    lm.num_domains = 1;
+    lm.num_boundaries = 6;
+
+    ModelScript model;
+    model.materials.push_back(Material {"bulk", {1}, {}, 3,
+        {{"thermalconductivity", "1"}}});
+    model.materials.push_back(Material {"matA", {}, {5}, 2,
+        {{"thermalconductivity", "1"}}});
+    model.materials.push_back(Material {"matB", {}, {6}, 2,
+        {{"thermalconductivity", "2"}}});
+    Physics physics;
+    physics.tag = "ht";
+    physics.type = "HeatTransfer";
+    physics.features.push_back({"init1", "Init", {}, {{"Tinit", "0"}}});
+    physics.features.push_back({"hs1", "HeatSource", {1}, {{"Q0", "1"}}});
+    physics.features.push_back(
+        {"temp1", "TemperatureBoundary", {1}, {{"T0", "0"}}});
+    physics.features.push_back({"sls1", "SolidLayeredShell", {5, 6},
+        {{"UserDefThicknessLayerType", "Conductive"}, {"lth_mat", "userdef"},
+            {"lth", "0.1"}, {"k_mat", "from_mat"}}});
+    model.physics.push_back(physics);
+
+    CaseContext ctx(model, lm, TimeSettings {});
+    // The order the app resolves for the physics is the one the reference
+    // has to be built with; a different one is a different discretization.
+    const int order = ctx.element_order(physics, "temperature");
+
+    // Reference: the same problem with its two layers, each carrying the
+    // conductivity of the boundary it sits on, added one by one.
+    HeatTransferSolver reference(f.mesh, f.boundary, f.cells, order);
+    reference.set_conductivity(constant_property(f.mesh, f.cells, 1.0));
+    reference.set_source(constant_property(f.mesh, f.cells, 1.0));
+    reference.add_temperature_bc(1, ScalarExpression(0.0));
+    reference.add_thin_layer({5}, constant_property(f.mesh, f.cells, thickness),
+        constant_property(f.mesh, f.cells, k_lower));
+    reference.add_thin_layer({6}, constant_property(f.mesh, f.cells, thickness),
+        constant_property(f.mesh, f.cells, k_upper));
+    reference.refresh(0.0);
+    reference.solve_steady(0.0);
+
+    // The app's own binding of the model.
+    const FieldKind* kind = field_kind("HeatTransfer");
+    REQUIRE(kind != nullptr);
+    auto bound = kind->create(physics, ctx);
+    bound->initialize(0.0);
+    bound->solve_level(0.0);
+
+    // Compare where the model's own export reads the field: at the mesh
+    // vertices, through the variable the physics publishes.
+    const auto [vc, vshape] = hellofem::mesh::compute_vertex_coords(*f.mesh);
+    const std::size_t nv = vshape[1];
+    std::vector<double> points(nv * 3);
+    for (std::size_t i = 0; i < nv; ++i)
+        for (int q = 0; q < 3; ++q)
+            points[i * 3 + static_cast<std::size_t>(q)] = vc[q * nv + i];
+
+    auto topo = f.mesh->topology_mutable();
+    topo->create_entities(0);
+    topo->create_connectivity(3, 0);
+    auto c_to_v = topo->connectivity(3, 0);
+    std::vector<std::int32_t> cells(nv, -1);
+    for (std::int32_t c = 0; c < static_cast<std::int32_t>(c_to_v->num_nodes()); ++c)
+        for (auto v : c_to_v->links(c))
+            if (cells[static_cast<std::size_t>(v)] < 0)
+                cells[static_cast<std::size_t>(v)] = c;
+
+    auto read = [&](const Variable& variable) {
+        std::vector<double> values(nv);
+        variable.eval(points, cells, values);
+        return values;
+    };
+    const auto& variables = bound->variables();
+    REQUIRE(variables.size() == 1);
+    const auto actual = read(variables.front());
+    auto worst_from = [&](const std::vector<double>& other) {
+        double worst = 0.0;
+        for (std::size_t i = 0; i < nv; ++i)
+            worst = std::max(worst, std::abs(actual[i] - other[i]));
+        return worst;
+    };
+    const auto expected = read(scalar_variable("T", "(K)", reference.solution()));
+    const double against_reference = worst_from(expected);
+    INFO("worst difference from the per-boundary reference = "
+        << against_reference);
+    REQUIRE(against_reference < 1e-9);
+
+    // The discrimination: one conductivity for both layers — the single
+    // value a domain-wide coefficient can carry — is a different field,
+    // and a macroscopic one, so the agreement above is not vacuous.
+    HeatTransferSolver single(f.mesh, f.boundary, f.cells, order);
+    single.set_conductivity(constant_property(f.mesh, f.cells, 1.0));
+    single.set_source(constant_property(f.mesh, f.cells, 1.0));
+    single.add_temperature_bc(1, ScalarExpression(0.0));
+    single.add_thin_layer({5, 6}, constant_property(f.mesh, f.cells, thickness),
+        constant_property(f.mesh, f.cells, k_lower));
+    single.refresh(0.0);
+    single.solve_steady(0.0);
+    const double against_single = worst_from(
+        read(scalar_variable("T", "(K)", single.solution())));
+    INFO("worst difference from the single-conductivity assembly = "
+        << against_single);
+    REQUIRE(against_single > 1e-3);
 }
 
 TEST_CASE("SolidMechanics: blocked assembly — no load with Fixed gives u=0", "[app][physics]")

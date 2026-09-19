@@ -38,11 +38,4 @@ namespace hellofem::app {
     LoadedMesh load_mphtxt_mesh(
         const std::filesystem::path& filename, double length_scale = 1.0);
 
-    /// Domain ids (1-based) of the cells bordering the boundary `boundary`.
-    std::set<int> boundary_domains(const LoadedMesh& mesh, int boundary);
-
-    /// Domain ids (1-based) of the cells bordering any of `boundaries`.
-    std::set<int> boundary_domains(
-        const LoadedMesh& mesh, const std::set<int>& boundaries);
-
 } // namespace hellofem::app
