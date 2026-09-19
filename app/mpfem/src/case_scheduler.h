@@ -47,9 +47,6 @@ namespace hellofem::app {
         /// nullptr when no field exports it.
         const Variable* variable(std::string_view name) const;
 
-        /// The unit of the variable `name`, as COMSOL writes it.
-        std::string unit(std::string_view name) const;
-
         /// The cell every mesh vertex is read on (a vertex is a dof of each
         /// cell around it, so any one of them reads the same value), with
         /// the vertex coordinates in the point-major layout `Variable::eval`
@@ -88,17 +85,26 @@ namespace hellofem::app {
             std::vector<double> columns; // expression-major, per vertex
         };
         std::vector<double> evaluate_columns() const;
+
+        /// Bring every field to time `t`: a field the study advances is
+        /// sampled there — the scheme's polynomial, which at the time of a
+        /// level is that level itself — and one it does not is solved against
+        /// that state. This is what makes a coupling or a result read the
+        /// fields at one time: the sampled state is the one the case reads
+        /// them at (see `CaseContext::publish`).
+        void bring_to(double t);
+
+        /// Store the export expressions as the fields stand (see
+        /// `bring_to`), at time `t`.
         void record(double t);
 
         /// Record the result at an output time that falls between two levels:
-        /// the stepping fields take the value their scheme's polynomial gives
-        /// there, the algebraic ones are solved at that state, and the levels
-        /// are left as they were.
+        /// the fields are brought to that time first, which is where the
+        /// algebraic ones are solved at it.
         void record_at(double t);
 
         // --- data ---
         ModelScript model_;
-        LoadedMesh lm_;
         TimeSettings time_;
         CaseContext ctx_;
 
@@ -110,6 +116,10 @@ namespace hellofem::app {
         // is read on.
         std::vector<double> vertex_points_;
         std::vector<std::int32_t> vertex_cells_;
+
+        // The variables the model's Data export writes, in the model's own
+        // order (resolved once: an expression no field provides is refused).
+        std::vector<const Variable*> columns_;
     };
 
 } // namespace hellofem::app

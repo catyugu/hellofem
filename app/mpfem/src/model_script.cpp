@@ -3,6 +3,8 @@
 
 #include "model_script.h"
 
+#include <stdexcept>
+
 namespace hellofem::app {
 
     std::string MaterialProperty::scalar_value() const
@@ -17,6 +19,15 @@ namespace hellofem::app {
             if (p.name == name)
                 return &p;
         return nullptr;
+    }
+
+    const std::string& PhysicsFeature::required(std::string_view key) const
+    {
+        const auto it = properties.find(std::string(key));
+        if (it == properties.end())
+            throw std::runtime_error("feature '" + tag + "' of type '" + type
+                + "' states no '" + std::string(key) + "'");
+        return it->second;
     }
 
     const Material* ModelScript::material_on_domain(int domain) const

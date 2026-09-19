@@ -60,7 +60,20 @@ namespace hellofem::app {
                 std::move(values), "facet_tags");
             out.num_boundaries = tag_count(out.facet_tags);
         }
+        prepare_topology(*out.mesh);
         return out;
+    }
+
+    void prepare_topology(const mesh::Mesh<double>& mesh)
+    {
+        const int tdim = mesh.topology()->dim();
+        if (mesh.topology()->connectivity(tdim - 1, tdim))
+            return; // the facets are there, so the mesh is prepared
+        auto topo = mesh.topology_mutable();
+        // The facets and the cells around them, and the cells' vertices:
+        // creating either creates the entities the other reads.
+        topo->create_connectivity(tdim - 1, tdim);
+        topo->create_connectivity(tdim, 0);
     }
 
 } // namespace hellofem::app

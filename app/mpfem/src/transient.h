@@ -6,6 +6,7 @@
 #include "time_scheme.h"
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 namespace hellofem::app {
@@ -16,6 +17,10 @@ namespace hellofem::app {
     /// read, and refreshes the field at every new level. The solution of the
     /// previous level is the initial guess of the next one — for the nonlinear
     /// material update and for the Krylov solve.
+    ///
+    /// It also owns the state a result is reported from: the polynomial the
+    /// scheme defines between the levels it holds (see `sample`), so that
+    /// reporting a result never writes the state the stepping is at.
     ///
     /// The step size and the order are not the stepper's: they are the case's,
     /// selected by `BdfController` from the error estimates of every field of
@@ -59,23 +64,29 @@ namespace hellofem::app {
         /// initial-step rule `DT yp_norm <= 1/2`.
         double derivative_norm() const;
 
-        /// The solution at time `t` of the scheme's own polynomial through the
-        /// levels it holds — what a transient result is reported with at an
-        /// output time the steps stepped over.
-        void interpolate(double t, la::Vector<double>& out) const;
+        /// The state a result is reported from: what the scheme's polynomial
+        /// gives at the last sampled time (see `sample`). It is a state of its
+        /// own, so reporting a result leaves the stepping where it is.
+        std::shared_ptr<const fem::Function<double>> sampled() const
+        {
+            return sample_;
+        }
 
-        /// Write the newest level back into `out`, undoing `interpolate`.
-        void restore(la::Vector<double>& out) const;
-
-        /// The solution vector the stepper advances, which `interpolate` and
-        /// `restore` write.
-        la::Vector<double>& solution() { return *field_.solution()->x(); }
+        /// Bring `sampled` to time `t`: the polynomial through the levels the
+        /// stepper holds, which reproduces the newest level exactly at that
+        /// level's own time.
+        void sample(double t) { interpolate(t, *sample_->x()); }
 
         /// Drop the step just taken, back to the level it started from: the
         /// driver rejected it, and the next attempt starts from there.
         void undo();
 
     private:
+        /// The solution at time `t` of the scheme's own polynomial through the
+        /// levels it holds — what a result is reported with at a time the
+        /// steps stepped over (see `sample`).
+        void interpolate(double t, la::Vector<double>& out) const;
+
         /// The stored levels, most recent first.
         std::vector<const la::Vector<double>*> levels() const;
 
@@ -93,6 +104,9 @@ namespace hellofem::app {
         double error_norm(int order) const;
 
         TimeDependentField& field_;
+        /// The state a result is reported from (see `sample`), on the field's
+        /// own space.
+        std::shared_ptr<fem::Function<double>> sample_;
         double tolerance_ = 0.0;
         double absolute_factor_ = 0.0;
         int max_order_ = 1;

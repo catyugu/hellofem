@@ -38,4 +38,14 @@ namespace hellofem::app {
     LoadedMesh load_mphtxt_mesh(
         const std::filesystem::path& filename, double length_scale = 1.0);
 
+    /// Create the topology the app's fields read: the vertices of every cell
+    /// (the points a result is exported at) and the facets with the cells
+    /// around them (the boundaries a condition or a flux sits on).
+    ///
+    /// Called once, when a mesh enters the app, so that no reader creates
+    /// topology in the middle of a run: the mesh is shared, and a query that
+    /// writes it behind a solver's back is a write to shared state. A field
+    /// solver refuses a mesh that was not prepared.
+    void prepare_topology(const mesh::Mesh<double>& mesh);
+
 } // namespace hellofem::app

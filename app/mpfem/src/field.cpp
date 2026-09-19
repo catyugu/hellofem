@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <stdexcept>
 
 namespace hellofem::app {
     namespace {
@@ -155,17 +156,6 @@ namespace hellofem::app {
             return keeping_alive(std::move(pre), std::move(kernel));
         }
 
-        /// The facets of the mesh and their neighbouring cells, created on
-        /// demand: every boundary query below needs both connectivities.
-        void ensure_facet_topology(const mesh::Mesh<double>& m)
-        {
-            const int tdim = m.topology()->dim();
-            auto topo = m.topology_mutable();
-            topo->create_entities(tdim - 1);
-            topo->create_connectivity(tdim - 1, tdim);
-            topo->create_connectivity(tdim, tdim - 1);
-        }
-
         /// Integrals of one cell or exterior-facet block of the given kernel.
         Integrals single_integral(fem::IntegralType type,
             const std::vector<std::int32_t>& entities, fem::kernel_t<double> kernel,
@@ -191,6 +181,14 @@ namespace hellofem::app {
         , facet_tags_(std::move(facet_tags))
         , cell_tags_(std::move(cell_tags))
     {
+        // The boundary queries below read the facets and the cells around
+        // them; a mesh that was not prepared for the app answers them with
+        // nothing (see `prepare_topology`).
+        const int tdim = mesh_->topology()->dim();
+        if (not mesh_->topology()->connectivity(tdim - 1, tdim))
+            throw std::runtime_error(
+                "FieldSolver: the mesh is not prepared for the app");
+
         V_ = make_space(mesh_, order, value_dim);
         u_ = std::make_shared<fem::Function<double>>(V_);
         u_->x()->set(0.0);
@@ -217,6 +215,14 @@ namespace hellofem::app {
         return cells;
     }
 
+    int FieldSolver::solve(
+        const std::function<void(la::MatrixCSR<double>&, la::Vector<double>&)>&
+            assemble,
+        la::Vector<double>& x)
+    {
+        return solve_system(assemble, x, *pattern_, linear_solver_, linear_);
+    }
+
     std::vector<std::int32_t> FieldSolver::boundary_dofs(
         const std::set<int>& ids) const
     {
@@ -225,7 +231,6 @@ namespace hellofem::app {
             facets = tagged_facets(*facet_tags_, ids);
         if (facets.empty())
             return {};
-        ensure_facet_topology(*mesh_);
         return fem::DirichletBC<double>::locate_dofs_topological(*mesh_->topology(),
             *V_->dofmap(), mesh_->topology()->dim() - 1, facets);
     }
@@ -235,7 +240,6 @@ namespace hellofem::app {
     {
         if (!facet_tags_)
             return {};
-        ensure_facet_topology(*mesh_);
         const int tdim = mesh_->topology()->dim();
         auto c_to_f = mesh_->topology()->connectivity(tdim, tdim - 1);
         auto e_to_c = mesh_->topology()->connectivity(tdim - 1, tdim);
@@ -405,12 +409,12 @@ namespace hellofem::app {
 
     int FieldSolver::solve_steady(double t)
     {
-        return solve_system(
+        return solve(
             [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
                 refresh(t);
                 assemble_steady(A, b);
             },
-            *u_->x(), *pattern_, linear_solver_, linear_);
+            *u_->x());
     }
 
 } // namespace hellofem::app

@@ -25,8 +25,9 @@ namespace hellofem::app {
                 : solver_(std::make_shared<HeatTransferSolver>(
                       ctx.mesh().mesh, ctx.mesh().facet_tags, ctx.mesh().cell_tags,
                       ctx.element_order(physics, "temperature")))
-                , variables_ {scalar_variable("T", "(K)", solver_->solution())}
             {
+                // A material law of this physics reads the field's own
+                // solution: publish it before the coefficients are built.
                 ctx.publish("T", solver_->solution());
                 solver_->set_conductivity(
                     ctx.material_property("thermalconductivity"));
@@ -49,28 +50,30 @@ namespace hellofem::app {
                 // initial values of a transient study ("Tinit").
                 auto source = ctx.zero_property();
                 for (const PhysicsFeature& feature : physics.features) {
-                    const auto& props = feature.properties;
                     if (feature.type == "HeatSource") {
                         // A domain without a source keeps the zero one.
                         for (int dom : feature.selection)
-                            source->set_expression(dom, props.at("Q0"));
+                            source->set_expression(dom, feature.required("Q0"));
                     }
                     else if (feature.type == "TemperatureBoundary"
                         or feature.type == "Temperature") {
                         for (int id : feature.selection)
                             solver_->add_temperature_bc(
-                                id, ctx.expression(props.at("T0")));
+                                id, ctx.expression(feature.required("T0")));
                     }
-                    else if (feature.type == "HeatFluxBoundary"
-                        and props.contains("HeatFluxType")
-                        and props.at("HeatFluxType") == "ConvectiveHeatFlux") {
-                        auto h = ctx.uniform_property(props.at("h"));
+                    else if (feature.type == "HeatFluxBoundary") {
+                        const std::string& flux = feature.required("HeatFluxType");
+                        if (flux != "ConvectiveHeatFlux")
+                            throw std::runtime_error("heat: the heat flux '"
+                                + feature.tag + "' is of type '" + flux
+                                + "', which the app does not solve");
+                        auto h = ctx.uniform_property(feature.required("h"));
                         // The ambient temperature is `Text`. The feature also
                         // carries a `minput_temperature`, but it is inert:
                         // measured on the busbar model, setting it to 100 degC
                         // leaves the solution bit-for-bit identical to the
                         // default, while `Text` moves the peak by 63 K.
-                        auto t_inf = ctx.uniform_property(props.at("Text"));
+                        auto t_inf = ctx.uniform_property(feature.required("Text"));
                         for (int id : feature.selection)
                             solver_->add_convection(id, h, t_inf);
                     }
@@ -82,19 +85,24 @@ namespace hellofem::app {
                         // tangential operator ds k grad_t T . grad_t phi and
                         // nothing else. The thermally thick model
                         // ("Resistive") is a different formulation.
-                        if (props.at("UserDefThicknessLayerType") != "Conductive")
+                        const std::string& layer_type
+                            = feature.required("UserDefThicknessLayerType");
+                        if (layer_type != "Conductive")
                             throw std::runtime_error("heat: thin layer '"
-                                + feature.tag + "' is of type '"
-                                + props.at("UserDefThicknessLayerType")
+                                + feature.tag + "' is of type '" + layer_type
                                 + "', which the app does not solve");
-                        if (props.at("lth_mat") != "userdef")
+                        const std::string& thickness_from
+                            = feature.required("lth_mat");
+                        if (thickness_from != "userdef")
                             throw std::runtime_error("heat: thin layer '"
                                 + feature.tag + "' takes its thickness from '"
-                                + props.at("lth_mat") + "'");
-                        if (props.at("k_mat") != "from_mat")
+                                + thickness_from + "'");
+                        const std::string& conductivity_from
+                            = feature.required("k_mat");
+                        if (conductivity_from != "from_mat")
                             throw std::runtime_error("heat: thin layer '"
                                 + feature.tag + "' takes its conductivity from '"
-                                + props.at("k_mat") + "'");
+                                + conductivity_from + "'");
                         // The thickness and the conductivity are separate
                         // coefficients of the operator, and the conductivity
                         // is the material COMSOL applies on the boundary —
@@ -125,18 +133,32 @@ namespace hellofem::app {
                                     + material->tag
                                     + "' defines no thermalconductivity");
                             solver_->add_thin_layer(boundaries,
-                                ctx.uniform_property(props.at("lth")),
+                                ctx.uniform_property(feature.required("lth")),
                                 ctx.uniform_property(k->scalar_value()));
                         }
                     }
-                    if (props.contains("Tinit"))
-                        solver_->set_initial_temperature(
-                            ctx.expression(props.at("Tinit")));
+                    else if (feature.type == "Init" or feature.type.empty()) {
+                        if (feature.properties.contains("Tinit"))
+                            solver_->set_initial_temperature(
+                                ctx.expression(feature.required("Tinit")));
+                    }
+                    else
+                        throw std::runtime_error("heat: the feature '"
+                            + feature.tag + "' is of type '" + feature.type
+                            + "', which the app does not solve");
                 }
                 solver_->set_source(source);
 
+                // The state the rest of the case reads this field at: the one
+                // the stepper samples, so that a coupling or a result at a
+                // time between two levels sees the field there — and
+                // reporting one never writes the solution the stepping is at.
                 if (ctx.model().study.transient)
                     stepper_ = std::make_unique<TimeStepper>(*solver_, ctx.time_settings());
+                const std::shared_ptr<const fem::Function<double>> state
+                    = stepper_ ? stepper_->sampled() : solver_->solution();
+                variables_ = {scalar_variable("T", "(K)", state)};
+                ctx.publish("T", state);
                 spdlog::info("heat: bound heat transfer");
             }
 

@@ -285,13 +285,8 @@ namespace {
         const hellofem::mesh::Mesh<double>& mesh, double value, int id)
     {
         const int tdim = mesh.topology()->dim();
-        auto topo = mesh.topology_mutable();
-        topo->create_entities(0);
-        topo->create_entities(tdim - 1);
-        topo->create_connectivity(tdim - 1, tdim);
-        topo->create_connectivity(tdim - 1, 0);
-        auto f_to_c = topo->connectivity(tdim - 1, tdim);
-        auto f_to_v = topo->connectivity(tdim - 1, 0);
+        auto f_to_c = mesh.topology()->connectivity(tdim - 1, tdim);
+        auto f_to_v = mesh.topology()->connectivity(tdim - 1, 0);
         const auto [vc, shape] = hellofem::mesh::compute_vertex_coords(mesh);
         const std::size_t nv = shape[1];
 
@@ -306,8 +301,8 @@ namespace {
                 indices.push_back(f);
         }
         REQUIRE_FALSE(indices.empty());
-        return std::make_shared<hellofem::mesh::MeshTags<int>>(topo, tdim - 1,
-            std::move(indices), std::vector<int>(1, id), "internal");
+        return std::make_shared<hellofem::mesh::MeshTags<int>>(mesh.topology(),
+            tdim - 1, std::move(indices), std::vector<int>(1, id), "internal");
     }
 
     /// The layer operator alone: the heat field with no conductivity, no
@@ -533,10 +528,7 @@ TEST_CASE("HeatTransfer: a thin layer takes the material of its own boundary",
         for (int q = 0; q < 3; ++q)
             points[i * 3 + static_cast<std::size_t>(q)] = vc[q * nv + i];
 
-    auto topo = f.mesh->topology_mutable();
-    topo->create_entities(0);
-    topo->create_connectivity(3, 0);
-    auto c_to_v = topo->connectivity(3, 0);
+    auto c_to_v = f.mesh->topology()->connectivity(3, 0);
     std::vector<std::int32_t> cells(nv, -1);
     for (std::int32_t c = 0; c < static_cast<std::int32_t>(c_to_v->num_nodes()); ++c)
         for (auto v : c_to_v->links(c))

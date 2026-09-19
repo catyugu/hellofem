@@ -53,9 +53,18 @@ namespace hellofem::app {
     /// A boundary-condition / feature definition on a physics interface.
     struct PhysicsFeature {
         std::string tag; // feature tag ("term1", "gnd1", ...)
-        std::string type; // "Terminal", "Ground", "HeatFluxBoundary", "Fixed", ...
+        /// Feature type ("Terminal", "Ground", "HeatFluxBoundary", "Fixed",
+        /// ...). Empty for a feature the model never created: a `.feature(tag)`
+        /// the script only sets properties on is one of the interface's own
+        /// defaults, which COMSOL creates with the interface itself.
+        std::string type;
         std::set<int> selection; // boundary/domain ids (1-based COMSOL)
         std::map<std::string, std::string> properties;
+
+        /// The property `key`, or an error naming the feature. A property the
+        /// app reads and the model does not state is a feature the app cannot
+        /// solve, not one to fall back on a default for.
+        const std::string& required(std::string_view key) const;
     };
 
     /// A physics interface (electrostatics/heat/solid).

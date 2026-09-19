@@ -246,6 +246,23 @@ TEST_CASE("parse_model_java reads a user-set time tolerance", "[app][java]")
     REQUIRE(*model.study.tolerance == Catch::Approx(1e-6));
 }
 
+TEST_CASE("a parameter is evaluated against the parameters stated before it",
+    "[app][java]")
+{
+    // COMSOL reads its parameter table in order, so a value may name the
+    // parameters above it — and one that names something else is an error:
+    // read as zero it would take the study's time list and every feature
+    // that names it with it.
+    auto model = parse_model_java(write_model_with_study(
+        "    model.param().set(\"scale\", \"2\", \"factor\");\n"
+        "    model.param().set(\"Vtot2\", \"scale*Vtot\", \"twice the voltage\");\n"));
+    REQUIRE(model.parameters.back().si == Catch::Approx(0.04));
+
+    REQUIRE_THROWS_AS(parse_model_java(write_model_with_study(
+        "    model.param().set(\"bad\", \"2*nope\", \"unknown name\");\n")),
+        std::runtime_error);
+}
+
 TEST_CASE("the study tolerance may name a parameter", "[app][java]")
 {
     // A model may state its tolerance as a parameter, so the value resolves

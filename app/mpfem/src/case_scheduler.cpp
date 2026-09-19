@@ -18,9 +18,8 @@ namespace hellofem::app {
     CaseScheduler::CaseScheduler(const ModelScript& model, const LoadedMesh& lm,
         TimeSettings time)
         : model_(model)
-        , lm_(lm)
         , time_(std::move(time))
-        , ctx_(model_, lm_, time_)
+        , ctx_(model_, lm, time_)
         , mesh_(lm.mesh)
     {
         // One field per physics interface of the model, in the model's own
@@ -39,6 +38,18 @@ namespace hellofem::app {
         for (const auto& field : fields_)
             field->bind_couplings(ctx_);
 
+        // The variables the model's Data export writes, in its own order. An
+        // expression no field provides is refused here: written as a column
+        // of zeros it would read as a solved field that is uniformly zero.
+        for (const std::string& name : model_.export_config.expressions) {
+            const Variable* found = variable(name);
+            if (not found)
+                throw std::runtime_error(
+                    "CaseScheduler: no field exports the expression '" + name
+                    + "'");
+            columns_.push_back(found);
+        }
+
         resolve_vertices();
     }
 
@@ -56,10 +67,7 @@ namespace hellofem::app {
                     = vc[q * nv + i];
 
         const int tdim = mesh_->topology()->dim();
-        auto topo = mesh_->topology_mutable();
-        topo->create_entities(0);
-        topo->create_connectivity(tdim, 0);
-        auto c_to_v = topo->connectivity(tdim, 0);
+        auto c_to_v = mesh_->topology()->connectivity(tdim, 0);
         vertex_cells_.assign(nv, -1);
         for (std::int32_t c = 0;
             c < static_cast<std::int32_t>(c_to_v->num_nodes()); ++c)
@@ -86,9 +94,7 @@ namespace hellofem::app {
         const double t0 = times.empty() ? 0.0 : times.front();
         for (const auto& field : fields_)
             field->initialize(t0);
-        for (const auto& field : fields_)
-            if (not field->stepper())
-                field->solve_level(t0);
+        bring_to(t0);
         record(t0);
 
         std::vector<TimeStepper*> steppers;
@@ -182,11 +188,10 @@ namespace hellofem::app {
             }
 
             t += h;
-            // A field that does not step is algebraic: it follows every
-            // level, not only the stored times.
-            for (const auto& field : fields_)
-                if (not field->stepper())
-                    field->solve_level(t);
+            // Every field is at the new level: the ones the study advances
+            // are sampled there, and the ones it does not are solved against
+            // that state — they follow every level, not only the stored times.
+            bring_to(t);
             control.accept(error, h);
             ++steps;
 
@@ -266,31 +271,35 @@ namespace hellofem::app {
         return nullptr;
     }
 
-    std::string CaseScheduler::unit(std::string_view name) const
-    {
-        const Variable* found = variable(name);
-        return found ? found->unit : "(1)";
-    }
-
     std::vector<double> CaseScheduler::evaluate_columns() const
     {
         const std::size_t nv = vertex_cells_.size();
-        const std::size_t nk = model_.export_config.expressions.size();
+        const std::size_t nk = columns_.size();
         std::vector<double> columns(nv * nk, 0.0);
 
         std::vector<double> values(nv);
         for (std::size_t k = 0; k < nk; ++k) {
-            const std::string& name = model_.export_config.expressions[k];
-            const Variable* found = variable(name);
-            if (not found) {
-                spdlog::warn("export '{}' not supported; writes 0", name);
-                continue;
-            }
-            found->eval(vertex_points_, vertex_cells_, values);
+            columns_[k]->eval(vertex_points_, vertex_cells_, values);
             for (std::size_t i = 0; i < nv; ++i)
                 columns[i * nk + k] = values[i];
         }
         return columns;
+    }
+
+    void CaseScheduler::bring_to(double t)
+    {
+        // A field the study advances is read at the state the scheme's
+        // polynomial gives at `t` — which at the time of a level is that
+        // level itself — and never where the stepping left it, so sampling
+        // writes no state the stepping is at.
+        for (const auto& field : fields_)
+            if (TimeStepper* stepper = field->stepper())
+                stepper->sample(t);
+        // A field the study does not advance is algebraic: it follows every
+        // level, and reads the fields it couples to at the state above.
+        for (const auto& field : fields_)
+            if (not field->stepper())
+                field->solve_level(t);
     }
 
     void CaseScheduler::record(double t)
@@ -303,22 +312,14 @@ namespace hellofem::app {
 
     void CaseScheduler::record_at(double t)
     {
-        for (const auto& field : fields_)
-            if (TimeStepper* stepper = field->stepper())
-                stepper->interpolate(t, stepper->solution());
-        for (const auto& field : fields_)
-            if (not field->stepper())
-                field->solve_level(t);
+        bring_to(t);
         record(t);
-        for (const auto& field : fields_)
-            if (TimeStepper* stepper = field->stepper())
-                stepper->restore(stepper->solution());
     }
 
     void CaseScheduler::export_result(const std::string& path) const
     {
         const std::size_t nv = vertex_cells_.size();
-        const std::size_t nk = model_.export_config.expressions.size();
+        const std::size_t nk = columns_.size();
         const std::size_t nt = snapshots_.size();
         if (nt == 0)
             throw std::runtime_error("CaseScheduler: no result to export");
@@ -335,13 +336,12 @@ namespace hellofem::app {
         out << "% Expressions:        " << nk * nt << "\n";
         out << "% Description:        ";
         for (std::size_t k = 0; k < nk; ++k)
-            out << (k ? ", " : "") << model_.export_config.expressions[k];
+            out << (k ? ", " : "") << columns_[k]->name;
         out << "% Length unit:        " << model_.length_unit << "\n";
         out << "% x                       y                        z                        ";
         for (const Snapshot& snapshot : snapshots_)
             for (std::size_t k = 0; k < nk; ++k) {
-                out << model_.export_config.expressions[k] << " "
-                    << unit(model_.export_config.expressions[k]);
+                out << columns_[k]->name << " " << columns_[k]->unit;
                 if (per_time)
                     out << " @ t=" << snapshot.time;
                 out << "  ";

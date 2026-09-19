@@ -8,6 +8,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include <stdexcept>
+
 namespace hellofem::app {
     namespace {
 
@@ -27,17 +29,35 @@ namespace hellofem::app {
                 solver_->set_conductivity(
                     ctx.material_property("electricconductivity"));
 
+                // A feature the model creates is a condition the app has to
+                // solve or refuse (the rule `heat.cpp` states at length); a
+                // feature it never creates is one of the interface's own
+                // defaults, which carries nothing of its own.
                 for (const PhysicsFeature& feature : physics.features) {
-                    if (feature.type == "Terminal"
-                        and feature.properties.contains("V0")) {
+                    if (feature.type == "Terminal") {
+                        // A terminal the app solves is a voltage one: a
+                        // current, a power or a circuit terminal constrains
+                        // the interface in another way.
+                        if (feature.properties.contains("TerminalType")) {
+                            const std::string& type
+                                = feature.required("TerminalType");
+                            if (type != "Voltage")
+                                throw std::runtime_error("electric: the terminal '"
+                                    + feature.tag + "' is of type '" + type
+                                    + "', which the app does not solve");
+                        }
                         ScalarExpression voltage
-                            = ctx.expression(feature.properties.at("V0"));
+                            = ctx.expression(feature.required("V0"));
                         for (int id : feature.selection)
                             solver_->add_voltage_bc(id, voltage);
                     }
                     else if (feature.type == "Ground")
                         for (int id : feature.selection)
                             solver_->add_voltage_bc(id, ScalarExpression(0.0));
+                    else if (not feature.type.empty())
+                        throw std::runtime_error("electric: the feature '"
+                            + feature.tag + "' is of type '" + feature.type
+                            + "', which the app does not solve");
                 }
                 spdlog::info("electric: bound conductive media");
             }

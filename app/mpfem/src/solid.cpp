@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <string_view>
 
 namespace hellofem::app {
     namespace {
@@ -43,10 +44,32 @@ namespace hellofem::app {
                 solver_->set_elastic(ctx.material_property("E"),
                     ctx.material_property("nu"));
 
-                for (const PhysicsFeature& feature : physics.features)
+                // A feature the model creates is a condition the app has to
+                // solve or refuse (the rule `heat.cpp` states at length); a
+                // feature it never creates is one of the interface's own
+                // defaults.
+                for (const PhysicsFeature& feature : physics.features) {
                     if (feature.type == "Fixed")
                         for (int id : feature.selection)
                             solver_->add_fixed_bc(id);
+                    else if (not feature.type.empty())
+                        throw std::runtime_error("solid: the feature '"
+                            + feature.tag + "' is of type '" + feature.type
+                            + "', which the app does not solve");
+                    // The elastic material feature states where its E and nu
+                    // come from; the app takes them from the model's material,
+                    // so one that states its own is a material it does not
+                    // solve.
+                    for (const std::string_view key : {"E_mat", "nu_mat"}) {
+                        const auto it = feature.properties.find(std::string(key));
+                        if (it != feature.properties.end()
+                            and it->second != "from_mat")
+                            throw std::runtime_error("solid: the feature '"
+                                + feature.tag + "' takes its " + std::string(key)
+                                + " from '" + it->second
+                                + "', and the app takes it from the model's material");
+                    }
+                }
                 spdlog::info("solid: bound solid mechanics");
             }
 

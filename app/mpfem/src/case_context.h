@@ -67,8 +67,16 @@ namespace hellofem::app {
         /// `uniform_property` start from it.
         std::shared_ptr<CellProperty> zero_property() const;
 
-        /// Publish the solution of a field under `symbol`, the COMSOL
-        /// dependent-variable name every model expression refers to it by.
+        /// Publish the state the rest of the case reads a field at, under
+        /// `symbol`, the COMSOL dependent-variable name every model
+        /// expression refers to it by: the sampled state of a field the study
+        /// advances in time (see `TimeStepper::sample`), and the solution of
+        /// one it does not.
+        ///
+        /// A physics publishes its own solution before its coefficients, so
+        /// that a law of the physics reads the field it solves; the state
+        /// above is what a coupling of another physics — and the result
+        /// export — reads it at.
         void publish(std::string_view symbol,
             std::shared_ptr<const fem::Function<double>> solution);
 

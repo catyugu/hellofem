@@ -69,15 +69,15 @@ namespace hellofem::app {
         /// All cells, the assembly range.
         std::vector<std::int32_t> cells() const;
 
-        /// The linear solver of this field's systems: the app's defaults,
-        /// changed by a physics whose operator a direct factorization suits
-        /// better (see `solid.cpp`).
-        const la::LinearSettings& linear_settings() const { return linear_; }
-
-        /// The solve of this field's systems. It is the same object at every
-        /// level, so it keeps what it built for an operator across them (see
-        /// `la::LinearSolver`).
-        la::LinearSolver<double>& linear_solver() { return linear_solver_; }
+        /// Solve the system `assemble` builds for the unknown `x`, with this
+        /// field's own solver and settings (see `solve_system`). The solver
+        /// is the field's, so it keeps what it built for an operator across
+        /// the levels of a study.
+        /// @return Iterations used.
+        int solve(
+            const std::function<void(
+                la::MatrixCSR<double>&, la::Vector<double>&)>& assemble,
+            la::Vector<double>& x);
 
     protected:
         /// Dofs on the facets carrying the given 1-based boundary ids.

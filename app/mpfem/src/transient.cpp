@@ -3,8 +3,6 @@
 
 #include "transient.h"
 
-#include "solver.h"
-
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -15,6 +13,8 @@ namespace hellofem::app {
 
     TimeStepper::TimeStepper(TimeDependentField& field, const TimeSettings& settings)
         : field_(field)
+        , sample_(std::make_shared<fem::Function<double>>(
+              field.solution()->function_space()))
         , tolerance_(settings.tolerance)
         , absolute_factor_(settings.absolute_factor)
         , max_order_(settings.max_order)
@@ -61,13 +61,12 @@ namespace hellofem::app {
         level.weights = w;
         level.time = t;
         level.history = history;
-        const int iterations = solve_system(
+        const int iterations = field_.solve(
             [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
                 field_.refresh(t);
                 field_.assemble_step(A, b, level);
             },
-            *field_.solution()->x(), field_.pattern(), field_.linear_solver(),
-            field_.linear_settings());
+            *field_.solution()->x());
 
         spdlog::debug("stepping to t = {} s (dt = {} s, order {}, {} iterations)",
             t, steps.dt, static_cast<int>(w.a.size()) - 1, iterations);
@@ -166,12 +165,6 @@ namespace hellofem::app {
         out = interpolate_levels(
             std::span<const la::Vector<double>* const>(level.data(), n),
             std::span<const double>(times_.data(), n), t);
-    }
-
-    void TimeStepper::restore(la::Vector<double>& out) const
-    {
-        if (not history_.empty())
-            out = history_.front();
     }
 
 } // namespace hellofem::app

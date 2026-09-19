@@ -7,6 +7,7 @@
 #include "mesh/MeshTags.h"
 #include "mesh/generation.h"
 #include "mesh/utils.h"
+#include "mesh_loader.h"
 
 #include <array>
 #include <memory>
@@ -18,19 +19,20 @@ namespace hellofem::app::test {
 
     /// 1-based boundary id for a 3D box face by constant coordinate:
     /// 1=x-,2=x+,3=y-,4=y+,5=z-,6=z+.
+    ///
+    /// The mesh is prepared for the app first (see `prepare_topology`): the
+    /// tags read the facets and their neighbouring cells.
     inline std::shared_ptr<mesh::MeshTags<int>> boundary_tags(
         const mesh::Mesh<double>& mesh)
     {
+        prepare_topology(mesh);
         auto topo = mesh.topology();
         const auto [vc, shape] = mesh::compute_vertex_coords(mesh);
         const std::size_t nv = shape[1];
         auto vert = [&](std::int32_t v, int d) { return vc[d * nv + v]; };
 
-        auto topo_mut = mesh.topology_mutable();
-        topo_mut->create_entities(2);
-        topo_mut->create_connectivity(2, 3);
-        auto f_to_c = topo_mut->connectivity(2, 3);
-        auto f_to_v = topo_mut->connectivity(2, 0);
+        auto f_to_c = topo->connectivity(2, 3);
+        auto f_to_v = topo->connectivity(2, 0);
         std::vector<std::int32_t> idx;
         std::vector<int> vals;
         for (std::int32_t f = 0; f < f_to_v->num_nodes(); ++f) {
@@ -69,7 +71,7 @@ namespace hellofem::app::test {
                 svals.push_back(vals[order[i]]);
             }
         }
-        return std::make_shared<mesh::MeshTags<int>>(topo_mut, 2,
+        return std::make_shared<mesh::MeshTags<int>>(topo, 2,
             std::move(sidx), std::move(svals), "boundary");
     }
 

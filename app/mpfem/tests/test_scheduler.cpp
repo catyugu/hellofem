@@ -53,7 +53,7 @@ namespace {
             {"temp1", "TemperatureBoundary", {1}, {{"T0", "t*t*t"}}},
             {"temp2", "TemperatureBoundary", {2}, {{"T0", "t*t*t"}}},
             {"hs1", "HeatSource", {1}, {{"Q0", "3*t*t"}}},
-            {"init1", "init1", {}, {{"Tinit", "0"}}},
+            {"init1", "", {}, {{"Tinit", "0"}}},
         };
         model.physics.push_back(std::move(heat));
         model.study.transient = true;
@@ -303,4 +303,31 @@ TEST_CASE("CaseScheduler: the step modes place the steps, the store mode the res
                 <= max_step_fraction);
         }
     }
+}
+
+TEST_CASE("CaseScheduler: an export expression no field provides is an error",
+    "[app][scheduler]")
+{
+    // The model's Data export names the quantities it writes. One that no
+    // field provides is refused, not written as a column of zeros: a zero
+    // column reads as a solved field that happens to be uniformly zero.
+    ModelScript model = manufactured_heat_model(2);
+    model.export_config.expressions = {"T", "V"};
+    auto box = test::make_box_fixture({0, 0, 0}, {1, 0.2, 0.2}, {2, 1, 1});
+    REQUIRE_THROWS_AS(CaseScheduler(model, loaded(box), TimeSettings {}),
+        std::runtime_error);
+}
+
+TEST_CASE("CaseScheduler: a physics feature the app does not solve is an error",
+    "[app][scheduler]")
+{
+    // A radiation boundary is a condition of another kind. A model carrying
+    // one is a model the app cannot solve, and solving it without that
+    // boundary would report a field of the wrong problem as its result.
+    ModelScript model = manufactured_heat_model(2);
+    model.physics.front().features.push_back(PhysicsFeature {
+        "rad1", "RadiationBoundary", {1}, {{"epsilon_rad", "0.9"}}});
+    auto box = test::make_box_fixture({0, 0, 0}, {1, 0.2, 0.2}, {2, 1, 1});
+    REQUIRE_THROWS_AS(CaseScheduler(model, loaded(box), TimeSettings {}),
+        std::runtime_error);
 }

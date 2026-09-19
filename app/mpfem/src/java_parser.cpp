@@ -408,7 +408,22 @@ namespace hellofem::app {
             return times;
         }
 
-        /// `model.param().set(name, value, [desc])`.
+        /// The parameters resolved so far, by name: a value may name the
+        /// parameters the model states before it, which is the order COMSOL
+        /// reads its own table in.
+        std::unordered_map<std::string, double> resolved(const ModelScript& model)
+        {
+            std::unordered_map<std::string, double> params;
+            for (const Parameter& p : model.parameters)
+                params[p.name] = p.si;
+            return params;
+        }
+
+        /// `model.param().set(name, value, [desc])`. The value is evaluated
+        /// against the parameters stated before it, and one that names
+        /// something else — or is not an expression at all — is an error: a
+        /// parameter read as zero would take the study's time list and every
+        /// feature that names it with it.
         void interpret_parameter(const std::vector<Call>& c, ModelScript& model)
         {
             if (c.size() < 2 or c[1].method != "set" or c[1].args.size() < 2)
@@ -416,14 +431,8 @@ namespace hellofem::app {
             Parameter p;
             p.name = arg_string(c[1].args[0]);
             p.value = arg_string(c[1].args[1]);
-            try {
-                p.si = parse_si(p.value);
-            }
-            catch (const std::exception&) {
-                p.si = 0.0; // expression referencing other params
-            }
+            p.si = eval_value(p.value, resolved(model));
             model.parameters.push_back(std::move(p));
-            return;
         }
 
         /// `model.component(...)`: the materials, the physics interfaces and
@@ -530,9 +539,11 @@ namespace hellofem::app {
                     const std::string ftag = arg_string(c[2].args[0]);
                     auto* feat = find_tagged(ph->features, ftag);
                     if (feat == nullptr) {
-                        // A `.feature(tag).set()` without a matching create
-                        // (e.g. referencing a default feature) — track the tag.
-                        ph->features.push_back({ftag, ftag, {}, {}});
+                        // A `.feature(tag).set()` with no matching create:
+                        // the model sets properties on a feature of the
+                        // interface itself, which carries no type of its own
+                        // (see `PhysicsFeature::type`).
+                        ph->features.push_back({ftag, {}, {}, {}});
                         feat = &ph->features.back();
                     }
                     std::size_t k = 3;
@@ -676,9 +687,7 @@ namespace hellofem::app {
             interpret(chain, model);
         // The time list and the step tolerance may reference parameters, so
         // they resolve once the whole script has been read.
-        std::unordered_map<std::string, double> params;
-        for (const Parameter& p : model.parameters)
-            params[p.name] = p.si;
+        const std::unordered_map<std::string, double> params = resolved(model);
         if (not model.study.times_expr.empty())
             model.study.times = resolve_time_list(model.study.times_expr, params);
         if (model.study.user_tolerance and not model.study.tolerance_expr.empty())
