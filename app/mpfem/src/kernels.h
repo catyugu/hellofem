@@ -31,6 +31,14 @@ namespace hellofem::app::kernels {
     // Coeffs [h, Tinf]: both from d.coeffs (one block per coefficient).
     void convection_load(double* Ae, const FacetKernelData<double>& d);
 
+    // ---- Thin layer (facet, thermally thin): Ae_ij =
+    //      Σ_q w detJ ds k [(∇φi)·(∇φj) - (∇φi·n̂)(∇φj·n̂)]
+    // The layer's own tangential conduction, from its thickness `ds` and its
+    // conductivity `k`. The gradient is projected onto the facet, so the
+    // normal component — which the layer does not conduct — drops out.
+    // Coeffs [ds, k]: one block per coefficient.
+    void thin_layer_diffusion(double* Ae, const FacetKernelData<double>& d);
+
     // ---- Linear elasticity (vector, vdim=3): Ae = Σ_q w detJ B^T C B ----
     // Block structure: dof a component i, dof b component j.
     void elasticity(double* Ae, const CellKernelData<double>& d);

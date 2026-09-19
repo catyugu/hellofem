@@ -42,7 +42,7 @@ namespace {
     {
         ModelScript model;
         model.name = "manufactured";
-        model.materials.push_back(Material {"mat1", {1},
+        model.materials.push_back(Material {"mat1", {1}, {}, 3,
             {{"thermalconductivity", "1"},
                 {"density", "1"},
                 {"heatcapacity", "1"}}});

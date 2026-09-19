@@ -160,7 +160,10 @@ def _keep_clean(stmt: str) -> bool:
     if m:
         sub = m.group(1)
         if sub == "geom":
-            return False
+            # Geometry detail is dropped — the mesh comes from mesh.mphtxt —
+            # except the length unit, which says what that mesh is measured
+            # in. The app works in SI, so it needs the statement.
+            return "lengthUnit" in s
         if sub == "material":
             return True
         if sub == "physics":

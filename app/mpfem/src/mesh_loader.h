@@ -7,6 +7,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <set>
 
 namespace hellofem::app {
 
@@ -25,10 +26,23 @@ namespace hellofem::app {
         int num_boundaries = 0;
     };
 
-    /// Read a COMSOL .mphtxt mesh and normalize the entity ids: boundary
-    /// (facet) entity indices are 0-based in the file and become 1-based
-    /// (matching COMSOL boundary selection numbers); domain ids are already
-    /// 1-based and pass through unchanged.
-    LoadedMesh load_mphtxt_mesh(const std::filesystem::path& filename);
+    /// Read a COMSOL .mphtxt mesh and normalize it for the app layer:
+    /// boundary (facet) entity indices are 0-based in the file and become
+    /// 1-based (matching COMSOL boundary selection numbers); domain ids are
+    /// already 1-based and pass through unchanged.
+    ///
+    /// The coordinates are scaled by `length_scale` — the model's geometry
+    /// length unit in SI metres — because COMSOL exports the mesh in that
+    /// unit while every material law and feature is stated in SI. The loaded
+    /// mesh is therefore always in metres.
+    LoadedMesh load_mphtxt_mesh(
+        const std::filesystem::path& filename, double length_scale = 1.0);
+
+    /// Domain ids (1-based) of the cells bordering the boundary `boundary`.
+    std::set<int> boundary_domains(const LoadedMesh& mesh, int boundary);
+
+    /// Domain ids (1-based) of the cells bordering any of `boundaries`.
+    std::set<int> boundary_domains(
+        const LoadedMesh& mesh, const std::set<int>& boundaries);
 
 } // namespace hellofem::app

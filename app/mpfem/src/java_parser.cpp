@@ -433,6 +433,14 @@ namespace hellofem::app {
             if (c.size() < 2 or c[0].args.empty()
                 or arg_string(c[0].args[0]).empty())
                 return;
+            // geom().lengthUnit(...): the unit the geometry — and so the
+            // mesh and the exported coordinates — is measured in.
+            if (c.size() >= 3 and c[1].method == "geom"
+                and c[2].method == "lengthUnit") {
+                model.length_unit = arg_string(c[2].args[0]);
+                return;
+            }
+
             // material().create / material(tag).X
             if (c.size() >= 2 and c[1].method == "material") {
                 if (c[1].args.empty() and c.size() >= 3 and c[2].method == "create") {
@@ -454,8 +462,24 @@ namespace hellofem::app {
                         mat->properties.push_back({prop, value});
                         return;
                     }
-                    if (c[k].method == "selection" and k + 1 < c.size() and c[k + 1].method == "set") {
-                        mat->domains = parse_selection(c[k + 1].args);
+                    // material(tag).selection(): the dimension of the
+                    // selection decides whether the material covers domains
+                    // (3) or boundaries (2) — a surface material. COMSOL
+                    // writes the dimension and the entities as two
+                    // statements, `selection().geom(g, dim)` then
+                    // `selection().set(...)`.
+                    if (c[k].method == "selection") {
+                        for (std::size_t j = k + 1; j < c.size(); ++j) {
+                            if (c[j].method == "geom" and c[j].args.size() > 1)
+                                mat->selection_dim
+                                    = std::stoi(arg_string(c[j].args[1]));
+                            else if (c[j].method == "set") {
+                                if (mat->selection_dim == 2)
+                                    mat->boundaries = parse_selection(c[j].args);
+                                else
+                                    mat->domains = parse_selection(c[j].args);
+                            }
+                        }
                         return;
                     }
                     if (c[k].method == "materialModel" and k + 1 < c.size() and c[k + 1].method == "create")

@@ -21,10 +21,23 @@ namespace hellofem::app {
 
     const Material* ModelScript::material_on_domain(int domain) const
     {
+        // The last material COMSOL lists wins: a domain two materials select
+        // takes the later one's properties, which is how a model refines one
+        // region of a selection without splitting it.
+        const Material* found = nullptr;
         for (const auto& m : materials)
             if (m.domains.contains(domain))
-                return &m;
-        return nullptr;
+                found = &m;
+        return found;
+    }
+
+    const Material* ModelScript::material_on_boundary(int boundary) const
+    {
+        const Material* found = nullptr;
+        for (const auto& m : materials)
+            if (m.boundaries.contains(boundary))
+                found = &m;
+        return found;
     }
 
 } // namespace hellofem::app

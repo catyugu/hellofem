@@ -51,6 +51,16 @@ namespace hellofem::app {
         std::shared_ptr<CellProperty> material_property(
             std::string_view name) const;
 
+        /// A boundary coefficient: `value(material)` gives its expression on
+        /// the domains bordering each of `boundaries`, with the material
+        /// COMSOL selected *on that boundary* — a surface material, which a
+        /// thin layer reads its properties from instead of the domain's. The
+        /// value lands on the whole bordering domain, of which a facet
+        /// integral only ever reads the cells adjacent to its facets.
+        std::shared_ptr<CellProperty> boundary_property(
+            const std::set<int>& boundaries,
+            const std::function<std::string(const Material&)>& value) const;
+
         /// One expression on every cell. A boundary coefficient is one
         /// expression on all cells: the facet kernels read the coefficient of
         /// the adjacent cell.

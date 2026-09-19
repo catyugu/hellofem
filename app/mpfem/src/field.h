@@ -84,7 +84,16 @@ namespace hellofem::app {
         std::vector<std::int32_t> boundary_dofs(const std::set<int>& ids) const;
 
         /// `(cell, local facet)` pairs of the given 1-based boundary ids.
-        std::vector<std::int32_t> boundary_facets(const std::set<int>& ids) const;
+        ///
+        /// A facet two cells share is emitted once, paired with one of them,
+        /// when `interior` is set: the integral's support is the facet itself
+        /// and the two cells share the dofs on it, so the one cell's scatter
+        /// carries the facet's whole contribution. That is what a condition
+        /// on an *interior* boundary — a thin layer imprinted inside a
+        /// domain — needs. A boundary flux or a Dirichlet condition takes the
+        /// exterior facets alone, which is the default.
+        std::vector<std::int32_t> boundary_facets(const std::set<int>& ids,
+            bool interior = false) const;
 
         /// Dirichlet conditions of `(boundary id -> value)` at time `t`.
         std::vector<fem::DirichletBC<double>> make_bcs(
@@ -128,14 +137,16 @@ namespace hellofem::app {
             fem::cell_kernel_weak_fn_t<double> w) const;
         fem::Form<double> add_operator(la::MatrixCSR<double>& A,
             const DirichletRows& bc_rows, const Coefficients& coeffs,
-            fem::facet_kernel_weak_fn_t<double> w, int boundary) const;
+            fem::facet_kernel_weak_fn_t<double> w,
+            const std::set<int>& boundaries, bool interior = false) const;
 
         /// Add the integral of the weak form `w` (coefficients `coeffs`,
         /// constants after them) to the load `b`.
         void add_load(la::Vector<double>& b, const Coefficients& coeffs,
             fem::cell_kernel_weak_fn_t<double> w, Constants constants = {}) const;
         void add_load(la::Vector<double>& b, const Coefficients& coeffs,
-            fem::facet_kernel_weak_fn_t<double> w, int boundary) const;
+            fem::facet_kernel_weak_fn_t<double> w,
+            const std::set<int>& boundaries, bool interior = false) const;
 
         /// Impose the Dirichlet data of `bcs` (dof marker `marked`) on the
         /// assembled system `a u = b`: the known boundary-column

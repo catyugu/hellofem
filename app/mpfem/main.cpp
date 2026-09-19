@@ -37,17 +37,18 @@ int main(int argc, char* argv[])
     const std::filesystem::path mesh_path = positional[1];
     const std::string result_path = positional[2];
 
-    // Mesh.
-    LoadedMesh lm = load_mphtxt_mesh(mesh_path);
-    spdlog::info("mesh: {} cells, {} domains, {} boundaries, order={}",
-        lm.mesh->topology()->index_map(lm.mesh->topology()->dim())->size_local(),
-        lm.num_domains, lm.num_boundaries, lm.order);
-
-    // Clean Java model script.
+    // Clean Java model script. It is read first: it states the unit the
+    // geometry — and so the mesh — is built in.
     ModelScript model = parse_model_java(model_path);
     spdlog::info("model '{}': {} params, {} materials, {} physics, {} couplings",
         model.name, model.parameters.size(), model.materials.size(),
         model.physics.size(), model.couplings.size());
+
+    // Mesh, brought into SI with the model's geometry length unit.
+    LoadedMesh lm = load_mphtxt_mesh(mesh_path, model.length_scale());
+    spdlog::info("mesh: {} cells, {} domains, {} boundaries, order={}",
+        lm.mesh->topology()->index_map(lm.mesh->topology()->dim())->size_local(),
+        lm.num_domains, lm.num_boundaries, lm.order);
 
     // The time stepping is the model's own: the scheme and the order are the
     // defaults the reference's solver runs at (see `TimeSettings`), and a

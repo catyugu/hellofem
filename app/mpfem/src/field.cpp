@@ -231,7 +231,7 @@ namespace hellofem::app {
     }
 
     std::vector<std::int32_t> FieldSolver::boundary_facets(
-        const std::set<int>& ids) const
+        const std::set<int>& ids, bool interior) const
     {
         if (!facet_tags_)
             return {};
@@ -244,7 +244,7 @@ namespace hellofem::app {
         // comes from the (tdim, tdim-1) connectivity.
         std::vector<std::int32_t> entities;
         for (std::int32_t f : tagged_facets(*facet_tags_, ids)) {
-            if (e_to_c->num_links(f) != 1) // interior facet
+            if (e_to_c->num_links(f) != 1 and not interior) // interior facet
                 continue;
             const std::int32_t c = e_to_c->links(f)[0];
             for (int k = 0; k < c_to_f->num_links(c); ++k)
@@ -323,9 +323,10 @@ namespace hellofem::app {
 
     fem::Form<double> FieldSolver::add_operator(la::MatrixCSR<double>& A,
         const DirichletRows& bc_rows, const Coefficients& coeffs,
-        fem::facet_kernel_weak_fn_t<double> w, int boundary) const
+        fem::facet_kernel_weak_fn_t<double> w, const std::set<int>& boundaries,
+        bool interior) const
     {
-        const auto entities = boundary_facets({boundary});
+        const auto entities = boundary_facets(boundaries, interior);
         std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> spaces {V_, V_};
         fem::Form<double> a(spaces,
             single_integral(fem::IntegralType::exterior_facet, entities,
@@ -348,9 +349,10 @@ namespace hellofem::app {
     }
 
     void FieldSolver::add_load(la::Vector<double>& b, const Coefficients& coeffs,
-        fem::facet_kernel_weak_fn_t<double> w, int boundary) const
+        fem::facet_kernel_weak_fn_t<double> w, const std::set<int>& boundaries,
+        bool interior) const
     {
-        const auto entities = boundary_facets({boundary});
+        const auto entities = boundary_facets(boundaries, interior);
         if (entities.empty())
             return;
         std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> spaces {V_};

@@ -127,6 +127,39 @@ namespace hellofem::app::kernels {
         }
     }
 
+    void thin_layer_diffusion(double* Ae, const FacetKernelData<double>& d)
+    {
+        // The facet normal always carries three components (the geometry is
+        // three-dimensional), while the gradients carry `tdim`.
+        constexpr int gdim = 3;
+        const int nq = d.num_points, nd = d.num_dofs0, tdim = d.tdim;
+        std::memset(Ae, 0, nd * nd * sizeof(double));
+        for (int q = 0; q < nq; ++q) {
+            const double w = d.w[q] * d.detJ[q];
+            const double ds_k = d.coeffs[q] * d.coeffs[nq + q];
+            // `n` is the scaled normal: dividing by detJ recovers the unit
+            // one, so the projected gradient below needs the same division.
+            double nhat[3];
+            for (int c = 0; c < tdim; ++c)
+                nhat[c] = d.n[q * gdim + c] / d.detJ[q];
+            for (int i = 0; i < nd; ++i) {
+                const double* gi = &d.dphi0[(q * nd + i) * tdim];
+                double gi_n = 0;
+                for (int c = 0; c < tdim; ++c)
+                    gi_n += gi[c] * nhat[c];
+                for (int j = 0; j < nd; ++j) {
+                    const double* gj = &d.dphi1[(q * nd + j) * tdim];
+                    double gij = 0, gj_n = 0;
+                    for (int c = 0; c < tdim; ++c) {
+                        gij += gi[c] * gj[c];
+                        gj_n += gj[c] * nhat[c];
+                    }
+                    Ae[i * nd + j] += w * ds_k * (gij - gi_n * gj_n);
+                }
+            }
+        }
+    }
+
     void elasticity(double* Ae, const CellKernelData<double>& d)
     {
         constexpr int vdim = 3;

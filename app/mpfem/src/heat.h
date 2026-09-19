@@ -6,6 +6,7 @@
 #include "field.h"
 
 #include <map>
+#include <set>
 #include <vector>
 
 namespace hellofem::app {
@@ -49,6 +50,17 @@ namespace hellofem::app {
                 {boundary_id, std::move(h), std::move(t_inf)});
         }
 
+        /// A thin layer on the given boundaries: a shell of thickness `ds`
+        /// and conductivity `k`, thermally thin — the tangential conduction
+        /// `ds k grad_t T . grad_t phi` joins the operator and no temperature
+        /// difference builds up across the layer's thickness. A boundary
+        /// inside the domain (an imprinted face) carries the layer too.
+        void add_thin_layer(const std::set<int>& boundaries,
+            std::shared_ptr<CellProperty> ds, std::shared_ptr<CellProperty> k)
+        {
+            thin_layers_.push_back({boundaries, std::move(ds), std::move(k)});
+        }
+
         /// Initial temperature of a transient run (the model's initial-value
         /// expression). Without one, COMSOL's default (see
         /// `reference_temperature`) applies.
@@ -80,6 +92,12 @@ namespace hellofem::app {
             std::shared_ptr<CellProperty> t_inf;
         };
 
+        struct ThinLayer {
+            std::set<int> boundaries;
+            std::shared_ptr<CellProperty> ds;
+            std::shared_ptr<CellProperty> k;
+        };
+
         /// Assembly pieces shared by the steady and the transient path.
         void assemble_sources(la::Vector<double>& f) const;
 
@@ -88,6 +106,7 @@ namespace hellofem::app {
         std::shared_ptr<CellProperty> joule_sigma_;
         std::map<int, ScalarExpression> temps_;
         std::vector<Convection> convections_;
+        std::vector<ThinLayer> thin_layers_;
         ScalarExpression initial_ {reference_temperature};
     };
 

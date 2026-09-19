@@ -177,7 +177,14 @@ namespace hellofem::app {
             throw std::runtime_error("parse_si: unbalanced '[' in '" + s + "'");
         const std::string value = s.substr(0, lb);
         const std::string unit = s.substr(lb + 1, s.size() - lb - 2);
-        return std::stod(value) * parse_unit(unit);
+        const double v = std::stod(value);
+        // An absolute temperature scale is not a plain factor: the model
+        // writes `30[degC]` for 303.15 K. Every other unit is multiplicative.
+        if (unit == "degC")
+            return v + 273.15;
+        if (unit == "degF")
+            return (v - 32.0) * 5.0 / 9.0 + 273.15;
+        return v * parse_unit(unit);
     }
 
 } // namespace hellofem::app

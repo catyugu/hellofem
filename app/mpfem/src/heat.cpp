@@ -74,6 +74,40 @@ namespace hellofem::app {
                         for (int id : feature.selection)
                             solver_->add_convection(id, h, t_inf);
                     }
+                    else if (feature.type == "SolidLayeredShell") {
+                        // COMSOL's thin layer, thermally thin (the layer
+                        // type "Conductive"): the shell conducts along the
+                        // boundary and holds no temperature difference
+                        // across its thickness, so the boundary carries the
+                        // tangential operator ds k grad_t T . grad_t phi and
+                        // nothing else. The thermally thick model
+                        // ("Resistive") is a different formulation.
+                        if (props.at("UserDefThicknessLayerType") != "Conductive")
+                            throw std::runtime_error("heat: thin layer '"
+                                + feature.tag + "' is of type '"
+                                + props.at("UserDefThicknessLayerType")
+                                + "', which the app does not solve");
+                        if (props.at("lth_mat") != "userdef")
+                            throw std::runtime_error("heat: thin layer '"
+                                + feature.tag + "' takes its thickness from '"
+                                + props.at("lth_mat") + "'");
+                        if (props.at("k_mat") != "from_mat")
+                            throw std::runtime_error("heat: thin layer '"
+                                + feature.tag + "' takes its conductivity from '"
+                                + props.at("k_mat") + "'");
+                        // The thickness and the conductivity are separate
+                        // coefficients of the operator: the conductivity is
+                        // the boundary's own material (a surface material,
+                        // not the domain's).
+                        solver_->add_thin_layer(feature.selection,
+                            ctx.uniform_property(props.at("lth")),
+                            ctx.boundary_property(feature.selection,
+                                [](const Material& material) {
+                                    const MaterialProperty* k = material.property(
+                                        "thermalconductivity");
+                                    return k ? k->scalar_value() : std::string {};
+                                }));
+                    }
                     if (props.contains("Tinit"))
                         solver_->set_initial_temperature(
                             ctx.expression(props.at("Tinit")));
@@ -183,6 +217,10 @@ namespace hellofem::app {
             cv.h->update(t);
             cv.t_inf->update(t);
         }
+        for (auto& layer : thin_layers_) {
+            layer.ds->update(t);
+            layer.k->update(t);
+        }
     }
 
     void HeatTransferSolver::constrain_solution(double t)
@@ -212,7 +250,7 @@ namespace hellofem::app {
         // Convection load h Tinf.
         for (const auto& cv : convections_)
             add_load(f, {cv.h->function(), cv.t_inf->function()},
-                kernels::convection_load, cv.boundary_id);
+                kernels::convection_load, {cv.boundary_id});
     }
 
     void HeatTransferSolver::assemble_step(la::MatrixCSR<double>& A,
@@ -241,7 +279,13 @@ namespace hellofem::app {
         // Convection Robin mass.
         for (const auto& cv : convections_)
             add_operator(K, rows, {cv.h->function()}, kernels::convection_mass,
-                cv.boundary_id);
+                {cv.boundary_id});
+
+        // Thin layers: their own tangential conduction, which the steady
+        // problem carries as well (the mass weight above is zero there).
+        for (const auto& layer : thin_layers_)
+            add_operator(K, rows, {layer.ds->function(), layer.k->function()},
+                kernels::thin_layer_diffusion, layer.boundaries, true);
 
         // LHS operator: a0 M + b0 K.
         auto& av = A.values();

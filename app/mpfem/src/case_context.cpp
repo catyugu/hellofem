@@ -6,6 +6,7 @@
 #include "defaults.h"
 
 #include <set>
+#include <stdexcept>
 
 namespace hellofem::app {
     namespace {
@@ -74,6 +75,26 @@ namespace hellofem::app {
             const MaterialProperty* p = material.property(name);
             return p ? p->scalar_value() : std::string {};
         });
+    }
+
+    std::shared_ptr<CellProperty> CaseContext::boundary_property(
+        const std::set<int>& boundaries,
+        const std::function<std::string(const Material&)>& value) const
+    {
+        auto coefficient = zero_property();
+        for (int boundary : boundaries) {
+            const Material* material = model_.material_on_boundary(boundary);
+            if (material == nullptr)
+                throw std::runtime_error("boundary " + std::to_string(boundary)
+                    + " carries no material");
+            const std::string expression = value(*material);
+            if (expression.empty())
+                throw std::runtime_error("boundary " + std::to_string(boundary)
+                    + ": material '" + material->tag + "' defines no value");
+            for (int dom : boundary_domains(mesh_, boundary))
+                coefficient->set_expression(dom, expression);
+        }
+        return coefficient;
     }
 
     std::shared_ptr<CellProperty> CaseContext::uniform_property(

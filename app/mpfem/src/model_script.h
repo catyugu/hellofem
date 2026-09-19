@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include "units.h"
+
 #include <map>
 #include <optional>
 #include <set>
@@ -33,6 +35,15 @@ namespace hellofem::app {
     struct Material {
         std::string tag;
         std::set<int> domains; // 1-based COMSOL domain ids
+        /// 1-based COMSOL boundary ids, for a material COMSOL selected on a
+        /// *surface*: the thin layers of a case take their properties from it
+        /// rather than from the domain's material.
+        std::set<int> boundaries;
+        /// Dimension of the selection the material was assigned on: 3 for
+        /// domains, 2 for boundaries. COMSOL states it in one statement
+        /// (`selection().geom(g, dim)`) and the entities in the next, so the
+        /// parser carries it across the two.
+        int selection_dim = 3;
         std::vector<MaterialProperty> properties;
 
         /// The property `name` of this material, if it defines one.
@@ -96,6 +107,20 @@ namespace hellofem::app {
     /// Fully-parsed model definition from the clean Java script.
     struct ModelScript {
         std::string name;
+        /// Length unit of the geometry, from the model's
+        /// `lengthUnit("mm")` (the metre when the model states none).
+        ///
+        /// The geometry — and the mesh COMSOL exports from it, and the
+        /// coordinates of its data export — is in that unit, while every
+        /// material law, parameter and feature the model states is in SI.
+        /// The app solves in SI, so the mesh is brought in with
+        /// `length_scale()` and the exported coordinates are written back in
+        /// this unit, which is what COMSOL's own export does.
+        std::string length_unit = "m";
+
+        /// SI metres per `length_unit`.
+        double length_scale() const { return parse_unit(length_unit); }
+
         std::vector<Parameter> parameters;
         std::vector<Material> materials;
         std::vector<Physics> physics;
@@ -104,6 +129,14 @@ namespace hellofem::app {
         ExportConfig export_config;
 
         const Material* material_on_domain(int domain) const;
+
+        /// The material COMSOL applies on `boundary`, i.e. the material of
+        /// its boundary (surface) selection.
+        ///
+        /// A domain or boundary two materials both select goes to the one
+        /// COMSOL lists last, which is its own resolution rule for an
+        /// overlap.
+        const Material* material_on_boundary(int boundary) const;
     };
 
 } // namespace hellofem::app

@@ -257,13 +257,24 @@ namespace hellofem::fem {
                 detJ[p] = std::sqrt(math::det(md::mdspan<const T, md::dextents<std::size_t, 2>>(
                     JfTJf.data(), nf, nf)));
 
-                // Scaled outward normal: K^T n_ref * detJ.
+                // Scaled outward normal: the facet's measure times its unit
+                // normal, detJ * normalize(K^T n_ref). `n_ref` is not a unit
+                // vector for every cell type — a simplex's slanted facet
+                // carries its co-normal — and `K^T n_ref` is not one either,
+                // so the physical normal is normalized rather than assumed
+                // (a cell of size h would otherwise scale it by 1/h).
                 for (int i = 0; i < gdim; ++i) {
                     T acc = 0;
                     for (int k = 0; k < tdim; ++k)
                         acc += K[k * gdim + i] * n_ref[k];
-                    n_phys[p * gdim + i] = acc * detJ[p];
+                    n_phys[p * gdim + i] = acc;
                 }
+                T norm = 0;
+                for (int i = 0; i < gdim; ++i)
+                    norm += n_phys[p * gdim + i] * n_phys[p * gdim + i];
+                norm = std::sqrt(norm);
+                for (int i = 0; i < gdim; ++i)
+                    n_phys[p * gdim + i] *= detJ[p] / norm;
 
                 // Physical coordinates of the point.
                 for (int i = 0; i < gdim; ++i) {

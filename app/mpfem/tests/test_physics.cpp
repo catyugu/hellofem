@@ -18,7 +18,6 @@
 
 #include <array>
 #include <cmath>
-#include <cstdio>
 #include <numeric>
 #include <random>
 #include <string>
@@ -273,6 +272,187 @@ TEST_CASE("HeatTransfer: nonlinear k(T) matches the analytic steady profile", "[
     }
     INFO("nonlinear k(T) max error = " << max_err);
     REQUIRE(max_err < 1e-3);
+}
+
+namespace {
+
+    /// 1-based boundary id on the interior facets of the plane `x = value`.
+    /// The facets of the box fixtures are tagged 1..6 for its six sides, so a
+    /// tag above those is free for an imprinted face.
+    std::shared_ptr<hellofem::mesh::MeshTags<int>> internal_plane_tags(
+        const hellofem::mesh::Mesh<double>& mesh, double value, int id)
+    {
+        const int tdim = mesh.topology()->dim();
+        auto topo = mesh.topology_mutable();
+        topo->create_entities(0);
+        topo->create_entities(tdim - 1);
+        topo->create_connectivity(tdim - 1, tdim);
+        topo->create_connectivity(tdim - 1, 0);
+        auto f_to_c = topo->connectivity(tdim - 1, tdim);
+        auto f_to_v = topo->connectivity(tdim - 1, 0);
+        const auto [vc, shape] = hellofem::mesh::compute_vertex_coords(mesh);
+        const std::size_t nv = shape[1];
+
+        std::vector<std::int32_t> indices;
+        for (std::int32_t f = 0; f < static_cast<std::int32_t>(f_to_v->num_nodes()); ++f) {
+            if (f_to_c->num_links(f) != 2)
+                continue; // exterior
+            bool on_plane = true;
+            for (auto v : f_to_v->links(f))
+                on_plane = on_plane and vc[static_cast<std::size_t>(v)] == value;
+            if (on_plane)
+                indices.push_back(f);
+        }
+        REQUIRE_FALSE(indices.empty());
+        return std::make_shared<hellofem::mesh::MeshTags<int>>(topo, tdim - 1,
+            std::move(indices), std::vector<int>(1, id), "internal");
+    }
+
+    /// The layer operator alone: the heat field with no conductivity, no
+    /// source and no condition but the thin layer, so the assembled matrix
+    /// holds nothing else.
+    la::MatrixCSR<double> thin_layer_operator(
+        const hellofem::app::test::BoxFixture& f,
+        const std::shared_ptr<hellofem::mesh::MeshTags<int>>& boundary,
+        const std::set<int>& layer_faces, double ds, double k, int order)
+    {
+        HeatTransferSolver ht(f.mesh, boundary, f.cells, order);
+        ht.set_conductivity(constant_property(f.mesh, f.cells, 0.0));
+        ht.set_source(constant_property(f.mesh, f.cells, 0.0));
+        ht.add_thin_layer(layer_faces,
+            constant_property(f.mesh, f.cells, ds),
+            constant_property(f.mesh, f.cells, k));
+        ht.refresh(0.0);
+        la::MatrixCSR<double> A(ht.pattern());
+        la::Vector<double> b(ht.solution()->x()->index_map(),
+            ht.solution()->x()->bs());
+        ht.assemble_steady(A, b);
+        return A;
+    }
+
+} // namespace
+
+TEST_CASE("HeatTransfer: a thin layer conducts along the boundary only",
+    "[app][physics]")
+{
+    // The layer's energy for a linear temperature is
+    //     v^T A v = int_Gamma ds k |grad_t T|^2 dA
+    // with grad_t the gradient projected onto the boundary — the layer does
+    // not conduct across its thickness. A temperature with a normal component
+    // is what tells the projection from its absence: with T = a + bx x +
+    // by y + bz z on the z+ face of the unit box, the layer's energy is
+    // ds k (bx^2 + by^2), against ds k (bx^2 + by^2 + bz^2) for the full
+    // gradient. Both the domain's conductivity and its source are zero here,
+    // so the matrix holds the layer and nothing else.
+    const double ds = 1e-4, k_layer = 400.0;
+    const double bx = 1.0, by = -2.0, bz = 3.0;
+    auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {2, 2, 2});
+
+    for (const int order : {1, 2}) {
+        auto A = thin_layer_operator(f, f.boundary, {6}, ds, k_layer, order);
+        HeatTransferSolver ht(f.mesh, f.boundary, f.cells, order);
+        const auto coords = ht.space()->tabulate_dof_coordinates(false);
+        la::Vector<double> v(ht.solution()->x()->index_map(),
+            ht.solution()->x()->bs());
+        for (std::int32_t d = 0;
+            d < ht.space()->dofmap()->index_map->size_local(); ++d)
+            v.array()[static_cast<std::size_t>(d)]
+                = 1.0 + bx * coords[3 * d] + by * coords[3 * d + 1]
+                + bz * coords[3 * d + 2];
+        la::Vector<double> Av(v.index_map(), v.bs());
+        A.mult(v, Av);
+        double energy = 0.0;
+        for (std::size_t i = 0; i < v.array().size(); ++i)
+            energy += v.array()[i] * Av.array()[i];
+
+        const double tangential = ds * k_layer * (bx * bx + by * by);
+        const double full = ds * k_layer * (bx * bx + by * by + bz * bz);
+        INFO("order " << order << ": layer energy " << energy
+                      << ", tangential " << tangential << ", full " << full);
+        REQUIRE(energy == Approx(tangential).epsilon(1e-12));
+    }
+}
+
+TEST_CASE("HeatTransfer: a thin layer on an imprinted face conducts too",
+    "[app][physics]")
+{
+    // The interconnect of a package is a copper layer imprinted *inside* a
+    // domain: the boundary is an interior facet, shared by two cells. Its
+    // dofs are the same for both cells, so the layer's operator must be the
+    // same one as on an exterior boundary of the same area.
+    const double ds = 5e-6, k_layer = 400.0;
+    const double bx = 1.0, by = -2.0, bz = 3.0;
+    auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {4, 1, 1});
+    auto tags = internal_plane_tags(*f.mesh, 0.25, 7);
+
+    for (const int order : {1, 2}) {
+        auto A = thin_layer_operator(f, tags, {7}, ds, k_layer, order);
+        HeatTransferSolver ht(f.mesh, tags, f.cells, order);
+        const auto coords = ht.space()->tabulate_dof_coordinates(false);
+        la::Vector<double> v(ht.solution()->x()->index_map(),
+            ht.solution()->x()->bs());
+        for (std::int32_t d = 0;
+            d < ht.space()->dofmap()->index_map->size_local(); ++d)
+            v.array()[static_cast<std::size_t>(d)]
+                = 1.0 + bx * coords[3 * d] + by * coords[3 * d + 1]
+                + bz * coords[3 * d + 2];
+        la::Vector<double> Av(v.index_map(), v.bs());
+        A.mult(v, Av);
+        double energy = 0.0;
+        for (std::size_t i = 0; i < v.array().size(); ++i)
+            energy += v.array()[i] * Av.array()[i];
+
+        // The imprinted face spans y and z, so its normal is x and the
+        // tangential gradient keeps by and bz.
+        const double tangential = ds * k_layer * (by * by + bz * bz);
+        INFO("order " << order << ": layer energy " << energy
+                      << ", tangential " << tangential);
+        REQUIRE(energy == Approx(tangential).epsilon(1e-12));
+    }
+}
+
+TEST_CASE("HeatTransfer: a thin layer does not conduct across its thickness",
+    "[app][physics]")
+{
+    // A bar along x, a uniform source, T = 0 at x- and its far end insulated:
+    // the exact profile is T(x) = Q (L x - x^2/2) / k, whatever the length.
+    // A layer on the *far* face — the one whose normal is the direction the
+    // temperature varies in — conducts only along the boundary, and its
+    // tangential gradient is the part of grad T the face does not carry,
+    // which here is nothing. So the layer leaves the profile exactly where it
+    // was. A projection that kept the normal component instead would add the
+    // layer's conductance to the bar and land on Q/(2 (k + ds k_layer)) —
+    // 1/22 against 1/2 for the numbers below.
+    const double k = 1.0, ds = 1e-3, k_layer = 1e4, Q = 1.0;
+    auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {4, 1, 1});
+
+    for (const bool with_layer : {false, true}) {
+        HeatTransferSolver ht(f.mesh, f.boundary, f.cells, 2);
+        ht.set_conductivity(constant_property(f.mesh, f.cells, k));
+        ht.set_source(constant_property(f.mesh, f.cells, Q));
+        ht.add_temperature_bc(1, ScalarExpression(0.0)); // x- : T = 0
+        if (with_layer)
+            ht.add_thin_layer({2}, constant_property(f.mesh, f.cells, ds),
+                constant_property(f.mesh, f.cells, k_layer));
+        ht.solve_steady(0.0);
+
+        const auto coords = ht.space()->tabulate_dof_coordinates(false);
+        double err = 0.0, at_one = -1e9;
+        for (std::int32_t d = 0;
+            d < ht.space()->dofmap()->index_map->size_local(); ++d) {
+            const double x = coords[3 * d];
+            const double value
+                = ht.solution()->x()->array()[static_cast<std::size_t>(d)];
+            err = std::max(err,
+                std::abs(value - Q * (x - 0.5 * x * x) / k));
+            if (std::abs(x - 1.0) < 1e-9)
+                at_one = std::max(at_one, value);
+        }
+        INFO("layer " << with_layer << ": max error " << err
+                      << ", T(1) = " << at_one);
+        REQUIRE(err < 1e-12);
+        REQUIRE(at_one == Approx(0.5 * Q / k).margin(1e-12));
+    }
 }
 
 TEST_CASE("SolidMechanics: blocked assembly — no load with Fixed gives u=0", "[app][physics]")

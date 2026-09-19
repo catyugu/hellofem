@@ -85,6 +85,16 @@ namespace {
             *Ae += data.n[p * 3 + 0] * data.w[p];
     }
 
+    /// Normal-x weighted by x: Ae[0] += w n_x x. Its integral over a closed
+    /// boundary is the divergence theorem's `int dV`, i.e. the domain's
+    /// measure, whatever the mesh.
+    void facet_normal_x_times_x_kernel(
+        double* Ae, const fem::FacetKernelData<double>& data)
+    {
+        for (int p = 0; p < data.num_points; ++p)
+            *Ae += data.n[p * 3 + 0] * data.w[p] * data.X[p * 3 + 0];
+    }
+
     /// Facet mass kernel (bilinear): Ae[i,j] += w detJ phi0_i phi1_j.
     void facet_mass_kernel(double* Ae, const fem::FacetKernelData<double>& data)
     {
@@ -190,6 +200,34 @@ TEST_CASE("facet: normal boundary integral vanishes (divergence theorem)", "[fem
         fem::make_facet_kernel(pre, facet_normal_x_kernel), entities);
     // For the unit square the x-normal boundary integral is zero.
     REQUIRE(fem::assemble_scalar(M) == Approx(0.0).margin(1e-10));
+}
+
+TEST_CASE("facet: the scaled normal is the unit normal times the measure", "[fem]")
+{
+    // `FacetKernelData::n` is the facet's outward unit normal scaled by its
+    // measure, so that `w * n` integrates the normal and `n / detJ` is the
+    // unit normal. A mesh whose cells are unit-sized cannot pin the scaling:
+    // the un-normalized `K^T n_ref detJ` agrees with it there, and so does
+    // the vanishing integral of `n` over a closed boundary, which a uniform
+    // over-scaling leaves at zero. The unit square meshed at h = 1/3 can:
+    // its cells are a third of the reference triangle, so `K^T n_ref` is
+    // three times the unit normal and the un-normalized form reads each
+    // boundary edge's `int n_x dS` as +/-1 where the truth is +/-h = 1/3.
+    // The divergence theorem states the truth without reading any geometry:
+    // `int_dOmega n_x x dS = int_Omega dV`, the unit square's measure.
+    auto V = p1_space(3);
+    auto coord = V->mesh()->geometry().cmaps().front();
+    fem::FacetPrecomputeData<double> pre(mesh::CellType::triangle,
+        *V->element(), *V->element(), {}, coord, 2);
+
+    auto entities = fem::exterior_facet_entities(*V->mesh()->topology());
+    auto M = make_form({V}, V->mesh(), fem::IntegralType::exterior_facet,
+        fem::make_facet_kernel(pre, facet_normal_x_kernel), entities);
+    REQUIRE(fem::assemble_scalar(M) == Approx(0.0).margin(1e-10));
+
+    auto W = make_form({V}, V->mesh(), fem::IntegralType::exterior_facet,
+        fem::make_facet_kernel(pre, facet_normal_x_times_x_kernel), entities);
+    REQUIRE(fem::assemble_scalar(W) == Approx(1.0).margin(1e-10));
 }
 
 TEST_CASE("facet: exterior facet mass assembly is symmetric and sums to 4", "[fem]")
