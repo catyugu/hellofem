@@ -74,6 +74,17 @@ namespace {
         return {};
     }
 
+    /// The times of the stored levels, read off a result header.
+    std::vector<double> result_times(const std::string& header)
+    {
+        std::vector<double> times;
+        const std::string token = "@ t=";
+        for (std::size_t at = header.find(token); at != std::string::npos;
+            at = header.find(token, at + token.size()))
+            times.push_back(std::stod(header.substr(at + token.size())));
+        return times;
+    }
+
     /// The values of every data row: three coordinates, then one value per
     /// exported column.
     std::vector<std::vector<double>> result_rows(const std::filesystem::path& path)
@@ -135,15 +146,14 @@ TEST_CASE("CaseScheduler: the model's physics drives the solved fields",
     // A transient heat model and no electric physics: the scheduler must
     // build the heat field alone, step it, and export exactly the variable
     // that field provides — a column per output time, of the manufactured
-    // solution of that time. The levels are the model's output times whatever
-    // the scheme: the fixed-order one steps to each of them, the adaptive one
-    // steps within the intervals and lands on them.
+    // solution of that time. The steps are the solver's own, and the output
+    // times a step stepped over are reported by interpolating it there.
     const int steps = 20;
     auto box = test::make_box_fixture({0, 0, 0}, {1, 0.2, 0.2}, {4, 1, 1});
 
     {
         CaseScheduler scheduler(manufactured_heat_model(steps), loaded(box),
-            TimeSettings {"bdf2", 1e-3});
+            TimeSettings {});
         scheduler.run();
 
         const auto path = scratch_file("hellofem_scheduler_result.txt");
@@ -180,5 +190,117 @@ TEST_CASE("CaseScheduler: the model's physics drives the solved fields",
         REQUIRE(rows.front()[3] == Approx(0.0).margin(1e-12));
         REQUIRE(rows.front()[3 + static_cast<std::size_t>(steps)]
             == Approx(1.0).margin(5e-3));
+    }
+}
+
+TEST_CASE("CaseScheduler: the step modes place the steps, the store mode the result",
+    "[app][scheduler]")
+{
+    // The same manufactured solution over four output times, with the result
+    // stored at the solver's own steps: what the export carries is then the
+    // step sequence itself, which is what the step modes are about — a mode
+    // that holds the steps to the output times, one that forces a step into
+    // every subinterval between them, and one that takes a step of the
+    // model's own.
+    const int outputs = 4;
+    const double t_end = 1.0;
+    auto box = test::make_box_fixture({0, 0, 0}, {1, 0.2, 0.2}, {4, 1, 1});
+
+    int runs = 0;
+    const auto steps_of = [&](TimeSettings settings) {
+        settings.store = StoreMode::steps;
+        CaseScheduler scheduler(
+            manufactured_heat_model(outputs), loaded(box), settings);
+        scheduler.run();
+        const auto path = scratch_file(
+            "hellofem_step_mode_result_" + std::to_string(++runs) + ".txt");
+        scheduler.export_result(path.string());
+        return result_times(result_header(path));
+    };
+
+    // Free: the solver's own steps, which are not the output times.
+    {
+        const std::vector<double> times = steps_of(TimeSettings {});
+        INFO("free: " << times.size() << " steps, last " << times.back());
+        REQUIRE(times.size() > static_cast<std::size_t>(outputs) + 1);
+    }
+
+    // The end time: the stepping may pass the last output time, whose solution
+    // is then interpolated from the steps around it, and with that
+    // interpolation off it stops at the last time instead. A manual step that
+    // does not divide the span tells the two apart.
+    {
+        TimeSettings passing;
+        passing.steps = StepsMode::manual;
+        passing.manual_step = 0.3;
+        const std::vector<double> times = steps_of(passing);
+        INFO("end time interpolated: last " << times.back() << " of "
+                                            << times.size() << " steps");
+        REQUIRE(times.back() > t_end);
+
+        TimeSettings stopped = passing;
+        stopped.interpolate_end_time = false;
+        const std::vector<double> bounded = steps_of(stopped);
+        INFO("end time not interpolated: last " << bounded.back());
+        REQUIRE(bounded.back() == Approx(t_end));
+    }
+
+    // Strict: every step ends at an output time, so each of them is a step.
+    {
+        TimeSettings settings;
+        settings.steps = StepsMode::strict;
+        const std::vector<double> times = steps_of(settings);
+        for (int n = 0; n <= outputs; ++n) {
+            const double output = static_cast<double>(n) / outputs;
+            REQUIRE(std::any_of(times.begin(), times.end(), [&](double t) {
+                return std::abs(t - output) < 1e-12;
+            }));
+        }
+    }
+
+    // Intermediate: every subinterval of the output times holds a step.
+    {
+        TimeSettings settings;
+        settings.steps = StepsMode::intermediate;
+        const std::vector<double> times = steps_of(settings);
+        for (int n = 0; n < outputs; ++n) {
+            const double lower = static_cast<double>(n) / outputs;
+            const double upper = static_cast<double>(n + 1) / outputs;
+            REQUIRE(std::any_of(times.begin(), times.end(), [&](double t) {
+                return t > lower and t < upper;
+            }));
+        }
+    }
+
+    // Manual: the step is the model's own, so the steps are exactly the ones
+    // it states — the time-step error test does not move them.
+    {
+        TimeSettings settings;
+        settings.steps = StepsMode::manual;
+        settings.manual_step = 1.0 / 8.0;
+        const std::vector<double> times = steps_of(settings);
+        INFO("manual: " << times.size() << " steps, spacing "
+                        << times[1] - times[0]);
+        REQUIRE(times.size() == 9); // the initial state and eight steps
+        for (std::size_t n = 1; n < times.size(); ++n)
+            REQUIRE(times[n] - times[n - 1] == Approx(0.125).margin(1e-9));
+    }
+
+    // Closest: one level per output time, taken from the step nearest it.
+    {
+        TimeSettings settings;
+        settings.store = StoreMode::closest;
+        CaseScheduler scheduler(
+            manufactured_heat_model(outputs), loaded(box), settings);
+        scheduler.run();
+        const auto path = scratch_file("hellofem_closest_result.txt");
+        scheduler.export_result(path.string());
+        const std::vector<double> times = result_times(result_header(path));
+        REQUIRE(times.size() == static_cast<std::size_t>(outputs) + 1);
+        for (int n = 0; n <= outputs; ++n) {
+            const double output = static_cast<double>(n) / outputs;
+            REQUIRE(std::abs(times[static_cast<std::size_t>(n)] - output)
+                <= max_step_fraction);
+        }
     }
 }

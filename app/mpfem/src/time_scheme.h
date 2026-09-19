@@ -1,4 +1,4 @@
-// hellofem::app — time stepping schemes and step-size control of a transient solve
+// hellofem::app — the BDF time discretization and step control of a transient solve
 // SPDX-License-Identifier: MIT
 #pragma once
 
@@ -6,8 +6,6 @@
 #include "la/Vector.h"
 
 #include <span>
-#include <string>
-#include <string_view>
 #include <vector>
 
 namespace hellofem::app {
@@ -48,76 +46,106 @@ namespace hellofem::app {
         double dt_previous = 0.0;
     };
 
-    /// What a family of schemes derives its weights from.
-    enum class TimeFamily {
-        /// Backward differentiation: the time derivative at the new level is
-        /// read off the polynomial through the last levels, so the weights
-        /// follow from the steps (and sum to zero, which makes a constant
-        /// state have no time derivative).
-        bdf,
-        /// Crank-Nicolson: the trapezoidal average of the two levels, second
-        /// order at a constant step.
-        crank_nicolson,
+    /// How the solver places its steps relative to the output times of the
+    /// study: COMSOL's "Steps taken by solver".
+    enum class StepsMode {
+        /// The step is the solver's own; an output time a step stepped over
+        /// is reported by interpolating the scheme's polynomial there.
+        free,
+        /// The step is the solver's own, but every subinterval of the output
+        /// times holds at least one step.
+        intermediate,
+        /// Every step ends at an output time; the solver takes the steps its
+        /// tolerance needs in between.
+        strict,
+        /// A step of the model's own, with the time-step error test off.
+        manual,
     };
 
-    /// A time stepping scheme: its family, and the order it is taken at.
-    struct TimeScheme {
-        /// Name the `--scheme` option accepts.
-        std::string_view name;
-        TimeFamily family = TimeFamily::bdf;
-        /// Order of accuracy in dt at a constant step: the order the scheme
-        /// is taken at, or, for the BDF family, the highest order the driver
-        /// may select for it.
-        int order = 1;
+    /// Which times the result is stored at: COMSOL's "Times to store".
+    enum class StoreMode {
+        /// The output times, from the steps that stepped over them.
+        interpolate,
+        /// The solver step closest to each output time.
+        closest,
+        /// The solver's own steps.
+        steps,
     };
 
-    /// The time stepping of a case: the discretization, and the accuracy its
-    /// steps are held to.
+    /// The time stepping of a case: the method, the accuracy its steps are
+    /// held to, and where its steps are placed.
     ///
-    /// The scheme says how a level is discretized: its family, and the order
-    /// it is taken at — or, for the BDF family, the highest order the driver
-    /// may select. How far apart the levels are is not the scheme's: the step
-    /// size and the order of every step follow from the local truncation
-    /// error, and the output times are reported by interpolating the levels
-    /// the steps produced (see `CaseScheduler::advance_adaptive`).
+    /// The method is the reference's BDF — the backward differentiation
+    /// formulas of order 1 to 5 with the order selected per step. The
+    /// reference states the two ends of that selection as "Minimum BDF order"
+    /// and "Maximum BDF order", 1 and 2 by default, and those defaults are
+    /// what a run takes: the app carries no scheme of its own and its command
+    /// line cannot be configured into a different time discretization from
+    /// the one the reference used (see the order selection of `BdfController`
+    /// and the measurements recorded there).
+    ///
+    /// The reference's other implicit method, generalized-α, is not
+    /// implemented: it is a one-step method on the *coupled* system, in which
+    /// every variable is advanced by the formula its own time order calls for
+    /// (first-order in time for heat and electric potential, second-order for
+    /// a structural field with inertia). The app advances one field at a time
+    /// over a shared level, so it can express a multistep method on each field
+    /// and not a coupled one-step method. Nothing of the app runs a
+    /// generalized-α transient, and the reference's structural default — which
+    /// does use it, with inertia — is the case that would need it.
     struct TimeSettings {
-        /// The scheme, as `--scheme` names it.
-        ///
-        /// The app's default is the BDF family at the order the reference's own
-        /// solver selected, so that a transient comparison measures the two
-        /// models rather than the two time discretizations. COMSOL selects that
-        /// order itself (its Time-Dependent Solver has "Maximum BDF order" 2 and
-        /// "Minimum BDF order" 1, both its own defaults), and its log shows what
-        /// it selects: over the 18 steps of EcTSmBusbarTransient the "Order"
-        /// column reads 1,1,2,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2 — fourteen of the
-        /// eighteen at order 1, the two excursions to order 2 single steps at
-        /// either end.
-        ///
-        /// Measured against that reference, the order is what the comparison
-        /// turns on: order 1 reproduces it to 2.96e-05 (L2 relative, the
-        /// temperature, worst over the output times) where order 2 sits at
-        /// 2.33e-04, outside the case's tolerance on 15 of the 63 exported
-        /// columns against order 1's none. On TBlockTransient and
-        /// TBlockNonlinTransient the two orders are indistinguishable (every
-        /// column passes at either).
-        std::string scheme = "bdf1";
-        /// The relative tolerance the truncation error of a step is held to,
-        /// weighted per dof by `tolerance max(|u|, scale)` (see
-        /// `TimeStepper::error`). It bounds the error of a step, so it is the
-        /// accuracy of the time discretization — not of the linear or the
-        /// nonlinear solver. It starts at the value COMSOL's own
-        /// physics-controlled tolerance takes for the physics the app solves,
-        /// so that a run measures the discretization rather than the
-        /// difference between two step controllers; a model that states its
-        /// own tolerance replaces it, and the command line replaces both.
+        /// Lowest order the BDF order selection may take (the reference's
+        /// "Minimum BDF order", 1 by default: it exists to keep a solver off
+        /// the first order, and at its default it holds nothing back).
+        int min_order = 1;
+
+        /// Highest order the selection may take, and the order a `manual`
+        /// step is taken at (the reference's "Maximum BDF order" and its
+        /// "BDF order" of a manual step, both 2 by default — and 2 is the
+        /// highest the app implements: the orders above it need the
+        /// variable-step weights of a longer history, and no reference of the
+        /// app's is run at them).
+        int max_order = 2;
+
+        /// Where the steps are placed relative to the output times.
+        StepsMode steps = StepsMode::free;
+
+        /// Which times are stored.
+        StoreMode store = StoreMode::interpolate;
+
+        /// Whether the stepping may pass the last output time, whose value is
+        /// then interpolated from the steps around it. With it off, the
+        /// stepping stops at the last time and takes no step past it. The
+        /// reference has it on for every setting of "Steps taken by solver"
+        /// except `strict`, which reaches the last time by its own rule and
+        /// needs nothing of this.
+        bool interpolate_end_time = true;
+
+        /// The relative tolerance `R`: the local truncation error of a step is
+        /// held to `A + R |u_i|` per dof, and the step meets the tolerance
+        /// while the weighted RMS norm of those ratios is at most one. It
+        /// bounds the error of a step, so it is the accuracy of the time
+        /// discretization — not of the linear or the nonlinear solver. It
+        /// starts at the value the reference's own physics-controlled
+        /// tolerance takes for the physics the app solves, so that a run
+        /// measures the discretization rather than the difference between two
+        /// step controllers; a model that states its own tolerance replaces
+        /// it.
         double tolerance = default_time_tolerance;
+
+        /// The reference's absolute tolerance, which is `A = R *
+        /// absolute_factor` under its `Factor` method (its default method, of
+        /// factor 0.1). It is what keeps a dof whose value is near zero —
+        /// round-off around a clamped face, a field that starts at zero —
+        /// from being held to a relative accuracy on a value that carries
+        /// nothing, and it is the whole of the absolute part of the error
+        /// weight (the reference's `Manual` method instead states `A` itself,
+        /// 0.001 by default; nothing of the app's sets one).
+        double absolute_factor = 0.1;
+
+        /// The step of `StepsMode::manual`, in seconds.
+        double manual_step = 0.0;
     };
-
-    /// The available schemes.
-    std::span<const TimeScheme> time_schemes();
-
-    /// The scheme named `name`, case-insensitive. Throws for an unknown name.
-    const TimeScheme& find_time_scheme(std::string_view name);
 
     /// The weights of a BDF step of `order` (1 or 2) over the steps
     /// `steps`, with `h = steps.dt` and `h' = steps.dt_previous`:
@@ -134,24 +162,18 @@ namespace hellofem::app {
     TimeWeights bdf_weights(int order, TimeSteps steps);
 
     /// The leading coefficient of the local truncation error of a step of
-    /// `order` of `family`, against the divided difference it is estimated
-    /// from: that error is `C dt^(order+1) u^(order+1)`, and
+    /// `order`, against the divided difference it is estimated from: that
+    /// error is `C dt^(order+1) u^(order+1)`, and
     /// `u^(order+1) = (order+1)! DD_(order+1)`, so the estimate the step is
     /// controlled by is `c dt^(order+1) DD_(order+1)` with
     /// `c = (order+1)! C`. The constants are the textbook ones: 1/2 for
-    /// backward Euler, 2/9 for BDF2, 1/12 for the trapezoidal rule.
-    double error_coefficient(TimeFamily family, int order);
+    /// backward Euler, 2/9 for BDF2.
+    double error_coefficient(int order);
 
-    /// The Crank-Nicolson weights of a step of `dt`: the trapezoidal average
-    /// of the stiffness and of the load over the two levels, which is what
-    /// makes it second order.
-    TimeWeights cn_weights(double dt);
-
-    /// The first step of a run, as a fraction of the span it integrates: a
-    /// first step has no history for the error estimate to read, so it has to
-    /// be small enough that its own error cannot escape the tolerance, and
-    /// the controller raises it within a few steps wherever the solution
-    /// allows.
+    /// The first step of a run, as a fraction of the span it integrates: the
+    /// reference takes it below this, and its own log shows the value itself
+    /// (0.6 s over its 600 s span), so the derivative condition of
+    /// `BdfController::first_step` is what may take it lower still.
     inline constexpr double first_step_fraction = 1e-3;
 
     /// The smallest step of a run, as a fraction of the span it integrates:
@@ -159,49 +181,167 @@ namespace hellofem::app {
     /// the interval is one the estimate cannot resolve.
     inline constexpr double smallest_step_fraction = 1e-10;
 
-    /// The factor the next step is multiplied by after a step whose local
-    /// error measured `error` against the tolerance (1 = exactly at it),
-    /// following the controller of the COMSOL BDF solver:
-    ///
-    ///     h_new = clamp(0.9 error^(-1/(order+1)), 0.1, 2) h
-    ///
-    /// the asymptotic dependence of the local truncation error on the step,
-    /// with a safety factor. Every step proposes with it, the ones that met the
-    /// tolerance included, so a step whose estimate sits below 0.9^(order+1) of
-    /// the tolerance grows and one above it shrinks.
-    ///
-    /// Measured on the reference: COMSOL's own step sequence for
-    /// EcTSmBusbarTransient doubles from the first step to the cap in eight
-    /// steps (0.6, 0.6, 1.2, 2.4, 4.8, 9.6, 19.2, 19.2, 38.4, 38.4, 60, 60,
-    /// ...), which is the clamp of 2 taken at every one of them — a controller
-    /// that only grew a step once its estimate was far inside the tolerance
-    /// would not reach the cap in that many.
-    double step_factor(double error, int order);
-
-    /// The largest step of a run, as a fraction of the span it integrates.
-    /// Measured on the reference: COMSOL's steps for EcTSmBusbarTransient stop
-    /// growing at 60 s over a 600 s span, and stay there.
+    /// The largest step of a run, as a fraction of the span it integrates:
+    /// the reference's "Maximum step constraint" at its automatic setting.
+    /// Measured on the reference: COMSOL's steps for EcTSmBusbarTransient
+    /// stop growing at 60 s over a 600 s span and stay there.
     inline constexpr double max_step_fraction = 0.1;
 
-    /// The order the next step is taken at — the BDF family's, a scheme of a
-    /// fixed order keeping its own — from the scaled derivative norms
-    /// `derivative_scale[k - 1] = |dt^k DD_k u|`, DD being the Newton divided
-    /// difference and the levels the last ones: the terms of the Taylor
-    /// expansion of the solution in the step. The higher order is worth
-    /// taking while those terms keep shrinking (a smooth solution resolves
-    /// against the higher order better), and the lower one is what a solution
-    /// whose terms do not shrink can be resolved at.
-    int next_order(int order, int max_order, std::span<const double> derivative_scale);
+    /// The artificial backward-Euler step of consistent initialization, as a
+    /// fraction of the initial step: the reference takes one before its BDF
+    /// stepping begins, to reconcile the initial values with the constraints
+    /// (its log shows it as the 0.0012 s the first step starts from). Its
+    /// default is 0.001.
+    inline constexpr double backward_euler_step_fraction = 1e-3;
 
-    /// The scaled derivative norms `derivative_scale[k - 1] = |dt^k DD_k u|`
-    /// of the solution levels `levels` (most recent first, that one being the
-    /// new level) at the times `times`: the terms of the Taylor expansion of
-    /// the solution in the step, maximized over the dofs. One entry per order
-    /// the level set supports — a set of n levels has n - 1 of them, so a
-    /// short one simply lacks the higher orders.
-    std::vector<double> derivative_scale(
-        std::span<const la::Vector<double>* const> levels,
-        std::span<const double> times);
+    /// The safety factor of that initialization, used in the algebraic
+    /// termination of the step: a larger value is stricter, and the default
+    /// of 20 "corresponds to the normal behavior for any new time step". The
+    /// app's level solves already terminate on the residual of the frozen
+    /// system, which is the strictest of the reference's own criteria (see
+    /// `defaults.h`), so the factor has nothing left to tighten and is
+    /// recorded here rather than applied.
+    inline constexpr double backward_euler_safety_factor = 20.0;
+
+    /// The local truncation error of the step just taken, at the orders the
+    /// order selection compares: the reference solver's own `err_k`,
+    /// `err_{k-1}` and `err_{k+1}`, with `k` the order the step was taken at.
+    ///
+    /// They are its `err_j = sigma[j] ||ee||`, where `ee` is the Newton
+    /// correction of the step — the difference between the corrected solution
+    /// and the value the degree-`j` polynomial through the last levels
+    /// extrapolates to it. At a constant step `sigma[j] = 1/(j+1)` and `ee` is
+    /// the `(j+1)`-th backward difference of the computed levels, so
+    ///
+    ///     err_j = j! |dt^(j+1) DD_(j+1) u| = |∇^(j+1) u| / (j + 1)
+    ///
+    /// in the scaled divided differences `d_(j+1) = dt^(j+1) DD_(j+1) u` the
+    /// stepper already forms. That is NOT the textbook local truncation error
+    /// `c_j d_(j+1)` with `c_j` the coefficient of `error_coefficient`: the
+    /// correction carries the polynomial's extrapolation remainder as well as
+    /// the corrector's own truncation error, and at the order 2 the two differ
+    /// by a factor of 2.5 — which is enough to decide the order differently.
+    ///
+    /// An estimate the level history does not reach is reported as zero, which
+    /// the selection reads as "not available". A step meets the tolerance
+    /// while `at` is at most one.
+    struct StepError {
+        double below = 0.0;
+        double at = 0.0;
+        double above = 0.0;
+    };
+
+    /// The step size and order control of the BDF method: the algorithm of
+    /// the solver the reference runs, IDA (LLNL), which is what its
+    /// Time-Dependent Solver uses for BDF. The reference's own solver log is
+    /// what the rules below are read from and checked against.
+    ///
+    /// - **Startup.** Until the order reaches its maximum, or a step fails,
+    ///   or the order is lowered, every step is taken one order higher and at
+    ///   twice the size: there is no history to select from yet. The
+    ///   reference's sequence over its 600 s span — steps of 0.6, 0.6, 1.2,
+    ///   2.4, 4.8, 9.6, 19.2, 19.2, 38.4, 38.4, 60, ... s at orders 1, 1, 2,
+    ///   1, 1, ... — is this phase (the first two steps) followed by the
+    ///   steady one.
+    /// - **The deadbeat region.** A step that met the tolerance is *not*
+    ///   grown by the asymptotic formula. The factor is the clamp of
+    ///   `(2 error + 1e-4)^(-1/(q+1))` to [0.5, 0.9] below one, one inside
+    ///   the band (1, 2), and 2 above it — so a step doubles only while its
+    ///   estimate sits below `2^-(q+2)` of the tolerance (1/8 at order 1,
+    ///   1/16 at order 2, which is the "16 times smaller" the reference's own
+    ///   documentation describes as the deadbeat region) and is held at its
+    ///   size otherwise. The two halves of that sentence are the same rule:
+    ///   the "deadbeat region" is the band in which the step is *held*, and
+    ///   the factor of two is what it grows by once the estimate leaves it.
+    ///   A controller that grows a step by the asymptotic factor from inside
+    ///   the band doubles the number of steps it takes (measured on the
+    ///   reference's case: 79 steps against 18).
+    /// - **A rejected step** is retried at
+    ///   `0.9 (2 error + 1e-4)^(-1/(q+1))` of its size, at most 0.9 and at
+    ///   least 0.25 of it, at the order the estimate favours; a second
+    ///   rejection takes a quarter of the step, and a third one the order 1.
+    /// - **The order** is reconsidered only after `q + 2` steps at a constant
+    ///   order `q` and a constant step size, and not on the step after a
+    ///   change of order. The estimates it reads are the reference's own (see
+    ///   `StepError`), compared as the truncation error norms `terr_j =
+    ///   (j + 1) err_j`: the order 1 is raised to 2 when `terr_2` is below half
+    ///   of `terr_1`, and the order 2 is lowered when `terr_1` is at least
+    ///   twice as small as `terr_2`. The reference's own rule at the orders
+    ///   above 2 reads one estimate further back than the history keeps, and
+    ///   those orders are refused (see `TimeSettings`).
+    ///
+    /// One controller drives the whole case: the step size and the order are
+    /// the study's, and every field is advanced at them.
+    class BdfController {
+    public:
+        /// @param[in] settings the method's settings: its order range, its
+        /// step and store modes and its tolerance.
+        /// @param[in] span the span the study integrates, from which the first
+        /// step and the largest one are taken.
+        BdfController(const TimeSettings& settings, double span);
+
+        /// The first step of the run, from the weighted norm
+        /// `derivative_norm` of the time derivative the initial state starts
+        /// with: at most `first_step_fraction` of the span, and at most
+        /// `1/2 / derivative_norm`, the derivative condition the reference
+        /// states as `DT yp_norm <= 1/2`.
+        double first_step(double derivative_norm) const;
+
+        /// Begin the run at the step `h`, the state being at its first level.
+        void start(double h);
+
+        /// The step size of the next step.
+        double step_size() const;
+
+        /// The order the next step is taken at.
+        int order() const;
+
+        /// Whether the local truncation error governs the step. It does not
+        /// in `StepsMode::manual`, where the step is the model's own and only
+        /// the algebraic error of each level's solve still applies.
+        bool error_controlled() const;
+
+        /// The smallest step the controller will propose, below which the
+        /// error cannot be met on this interval at all.
+        double smallest_step() const { return smallest_; }
+
+        /// Accept the step of size `h` just taken, whose error estimates are
+        /// `error`: select the size and the order of the next one.
+        void accept(const StepError& error, double h);
+
+        /// Drop the step of size `h` just taken: it missed the tolerance, and
+        /// the next attempt is smaller.
+        void reject(const StepError& error, double h);
+
+    private:
+        /// The order the error test suggests taking the retried step at: the
+        /// one below, when the estimate there is at least twice as small.
+        int lowered_order(const StepError& error) const;
+
+        /// The factor the step is multiplied by after a step whose estimate
+        /// was `error` (see the deadbeat region above).
+        double factor(double error, int order) const;
+
+        TimeSettings settings_;
+        double span_ = 0.0;
+        double largest_ = 0.0;
+        double smallest_ = 0.0;
+        /// The step proposed for the next step, and the one the last step
+        /// was taken at.
+        double h_ = 0.0;
+        double used_ = 0.0;
+        /// The order of the next step, and of the last one.
+        int order_ = 1;
+        int order_used_ = 0;
+        /// The steps taken at this step size and order, and the steps
+        /// accepted over the run.
+        int ns_ = 0;
+        int steps_ = 0;
+        /// The failures of the step being attempted.
+        int failures_ = 0;
+        /// Whether the startup phase is still running.
+        bool startup_ = true;
+    };
 
     /// The k-th Newton divided difference of the solution levels, scaled by
     /// the step into the newest level: `dt^k DD_k u`, per dof. `levels` are

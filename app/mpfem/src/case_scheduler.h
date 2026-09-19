@@ -18,11 +18,11 @@ namespace hellofem::app {
     /// Drives a parsed COMSOL model over a loaded mesh: builds one field per
     /// physics interface of the model (see `FieldRegistration`, which each
     /// physics holds in its own translation unit), solves the model's study —
-    /// every field prepares the first level, then solves one level per
-    /// output time, which is a step of its time scheme for the fields a
-    /// transient study advances, at a step size and order the local error
-    /// estimate selects — and exports the result
-    /// in COMSOL's Data format.
+    /// every field prepares the first level, then the study's fields are
+    /// advanced over its span by one step controller, whose step size and
+    /// order the local error estimates of every field of the level select,
+    /// and the result is stored at the times the store mode asks for — and
+    /// exports it in COMSOL's Data format.
     ///
     /// The scheduler names no physics: the fields, their order (the order of
     /// the model's physics interfaces), what they export and what steps in
@@ -56,20 +56,31 @@ namespace hellofem::app {
         /// takes. Both are fixed for the whole run.
         void resolve_vertices();
 
-        /// Advance the steppers over the whole span of `times` with the step
-        /// size and the order the local truncation error estimate selects
-        /// (see `step_factor` and `next_order`), recording the result at each
-        /// output time.
+        /// Advance the study's fields over the whole span of `times` with one
+        /// step controller: its step size and order follow from the local
+        /// truncation error of every field of the level at once (see
+        /// `BdfController`), its steps are placed as the step mode asks for,
+        /// and the result is stored as the store mode asks for.
         ///
-        /// The steps are the solver's own and are not held to the output
-        /// times: an output time between two of them is reported by
-        /// interpolating the scheme's polynomial there (see `record_at`).
-        /// That is COMSOL's configuration — its Time-Dependent Solver has
-        /// "Steps taken by solver: Free" with "Times to store: Output times by
-        /// interpolation", and its log for EcTSmBusbarTransient shows the step
-        /// 19.201 -> 38.401 with 30 marked as an output rather than solved.
+        /// The stepping starts from the state the fields prepared, advanced by
+        /// the reference's consistent-initialization step — one artificial
+        /// backward-Euler step of a fraction of the initial step, which also
+        /// gives the time derivative the initial-step rule reads.
         void advance_adaptive(
             std::span<TimeStepper* const> steppers, const std::vector<double>& times);
+
+        /// The step-error estimate of the study's fields at once: the
+        /// reference's weighted root mean square over every dependent variable
+        /// (see the definition), which is what the step is judged by.
+        StepError combine_errors(std::span<TimeStepper* const> steppers) const;
+
+        /// Store the output times of `times` that the step from `from` to `t`
+        /// reached, as the store mode asks for: interpolated from the step
+        /// that stepped over them, taken from the solver step closest to
+        /// them, or the solver's own steps.
+        /// @return the index of the next output time to store.
+        std::size_t store_outputs(std::size_t output, double from, double t,
+            const std::vector<double>& times);
 
         // --- result export ---
         struct Snapshot {

@@ -1,33 +1,15 @@
-// hellofem::app — time stepping schemes and step-size control of a transient solve
+// hellofem::app — the BDF time discretization and step control of a transient solve
 // SPDX-License-Identifier: MIT
 
 #include "time_scheme.h"
 
 #include <algorithm>
-#include <array>
-#include <cctype>
 #include <cmath>
 #include <stdexcept>
+#include <string>
 
 namespace hellofem::app {
     namespace {
-
-        std::string lower(std::string_view text)
-        {
-            std::string out(text);
-            std::ranges::transform(out, out.begin(), [](unsigned char c) {
-                return static_cast<char>(std::tolower(c));
-            });
-            return out;
-        }
-
-        // The schemes: the family and the order of each. How the steps are
-        // placed is the step control, not the scheme (see `TimeSettings`).
-        const std::array<TimeScheme, 3> schemes {{
-            {"bdf1", TimeFamily::bdf, 1},
-            {"cn", TimeFamily::crank_nicolson, 2},
-            {"bdf2", TimeFamily::bdf, 2},
-        }};
 
         /// The Newton table of a divided difference: one row of level values
         /// per level, most recent first, rewritten in place by the passes of
@@ -58,25 +40,19 @@ namespace hellofem::app {
             }
         }
 
+        // The step-size control of the reference's own implicit solver (IDA):
+        // the factor a step that met the tolerance is grown by is the clamp of
+        // the asymptotic estimate to [eta_min, eta_low] below one, one inside
+        // the band (eta_min_fx, eta_max_fx), and eta_max above it.
+        constexpr double eta_max_fx = 2.0;
+        constexpr double eta_min_fx = 1.0;
+        constexpr double eta_max = 2.0;
+        constexpr double eta_low = 0.9;
+        constexpr double eta_min = 0.5;
+        /// The largest reduction of a failed step.
+        constexpr double eta_min_ef = 0.25;
+
     } // namespace
-
-    std::span<const TimeScheme> time_schemes()
-    {
-        return schemes;
-    }
-
-    const TimeScheme& find_time_scheme(std::string_view name)
-    {
-        const std::string key = lower(name);
-        for (const TimeScheme& scheme : schemes)
-            if (scheme.name == key)
-                return scheme;
-        std::string names;
-        for (const TimeScheme& scheme : schemes)
-            names += (names.empty() ? "" : ", ") + std::string(scheme.name);
-        throw std::runtime_error("unknown time stepping scheme '" + std::string(name)
-            + "'; the available ones are " + names);
-    }
 
     TimeWeights bdf_weights(int order, TimeSteps steps)
     {
@@ -100,52 +76,173 @@ namespace hellofem::app {
         return w;
     }
 
-    TimeWeights cn_weights(double dt)
+    double error_coefficient(int order)
     {
-        TimeWeights w;
-        w.a = {1.0 / dt, -1.0 / dt};
-        w.b = {0.5, 0.5};
-        w.c_new = 0.5;
-        w.c_old = 0.5;
-        return w;
-    }
-
-    double error_coefficient(TimeFamily family, int order)
-    {
-        if (family == TimeFamily::crank_nicolson)
-            return 0.5; // 3! * 1/12
         return order <= 1 ? 1.0 : 4.0 / 3.0; // 2! * 1/2, 3! * 2/9
     }
 
-    double step_factor(double error, int order)
+    BdfController::BdfController(const TimeSettings& settings, double span)
+        : settings_(settings)
+        , span_(span)
+        , largest_(span * max_step_fraction)
+        , smallest_(span * smallest_step_fraction)
     {
-        if (error <= 0.0)
-            return 2.0;
-        // The elementary controller, applied to every step: the size the
-        // asymptotic dependence of the local error on the step allows,
-        // h_new = 0.9 error^(-1/(order+1)) h, with a safety factor and the
-        // clamp [0.1, 2]. A step that met the tolerance therefore grows while
-        // its estimate sits below 0.9^(order+1) of it (0.81 at order 1, 0.73 at
-        // order 2) instead of being held until it is far inside.
-        const double factor = 0.9 * std::pow(error, -1.0 / (order + 1));
-        return std::max(0.1, std::min(2.0, factor));
+        if (settings_.min_order < 1 or settings_.min_order > settings_.max_order)
+            throw std::runtime_error("BDF order range "
+                + std::to_string(settings_.min_order) + ".."
+                + std::to_string(settings_.max_order)
+                + " is not a range of orders");
+        if (settings_.max_order > 2)
+            throw std::runtime_error("BDF order "
+                + std::to_string(settings_.max_order)
+                + " is above the highest the app implements (2)");
+        if (settings_.steps == StepsMode::manual and settings_.manual_step <= 0.0)
+            throw std::runtime_error(
+                "a manual time step must be a positive step, not "
+                + std::to_string(settings_.manual_step));
     }
 
-    int next_order(int order, int max_order, std::span<const double> derivative_scale)
+    double BdfController::first_step(double derivative_norm) const
     {
-        // The norms are `|dt^k DD_k u|` at index k - 1, so the two the choice
-        // reads are the ones around the current order.
-        const auto norm = [&](int k) {
-            return k >= 1 and k <= static_cast<int>(derivative_scale.size())
-                ? derivative_scale[k - 1]
-                : 0.0;
-        };
+        const double bounded = span_ * first_step_fraction;
+        if (derivative_norm <= 0.0)
+            return bounded;
+        return std::min(bounded, 0.5 / derivative_norm);
+    }
 
-        if (order < max_order and norm(order + 1) < norm(order))
-            return order + 1;
-        if (order > 1 and norm(order) > norm(order - 1))
-            return order - 1;
-        return order;
+    void BdfController::start(double h)
+    {
+        h_ = std::clamp(h, smallest_, largest_);
+        order_ = 1;
+        order_used_ = 0;
+        ns_ = 0;
+        steps_ = 0;
+        failures_ = 0;
+        startup_ = true;
+    }
+
+    double BdfController::step_size() const
+    {
+        return settings_.steps == StepsMode::manual ? settings_.manual_step : h_;
+    }
+
+    int BdfController::order() const
+    {
+        return settings_.steps == StepsMode::manual ? settings_.max_order : order_;
+    }
+
+    bool BdfController::error_controlled() const
+    {
+        return settings_.steps != StepsMode::manual;
+    }
+
+    int BdfController::lowered_order(const StepError& error) const
+    {
+        // The reference compares the truncation error norms `terr_j =
+        // (j + 1) err_j` and lowers the order when the one below is at least
+        // twice as small, up to the order 2 — the top of the app's range. Its
+        // rule for the orders above 2 reads one estimate further back than the
+        // history keeps, and the orders above 2 are refused (see
+        // `TimeSettings`).
+        if (order_ == 1)
+            return order_;
+        return 2.0 * error.below <= 0.5 * 3.0 * error.at ? order_ - 1 : order_;
+    }
+
+    double BdfController::factor(double error, int order) const
+    {
+        const double estimate
+            = std::pow(2.0 * error + 1e-4, -1.0 / (order + 1));
+        if (estimate >= eta_max_fx)
+            return std::min(estimate, eta_max);
+        if (estimate <= eta_min_fx)
+            return std::max(std::min(estimate, eta_low), eta_min);
+        return 1.0;
+    }
+
+    void BdfController::accept(const StepError& error, double h)
+    {
+        ++steps_;
+        failures_ = 0;
+
+        // The steps taken at a constant step size and order, up to the order
+        // of the step before this one plus two: the run the order selection
+        // requires before it reconsiders. A driver that limits the step (a
+        // mode's own output times) breaks the run, which is what the
+        // selection's constant-step assumption needs.
+        if (h != used_ or order_ != order_used_)
+            ns_ = 0;
+        ns_ = std::min(ns_ + 1, order_used_ + 2);
+
+        const int raised = order_ - order_used_;
+        order_used_ = order_;
+        used_ = h;
+
+        if (settings_.steps == StepsMode::manual)
+            return; // the step and the order are the model's
+
+        // The startup phase ends at the maximum order, at a failure (see
+        // `reject`) or at a lowered order.
+        if (lowered_order(error) == order_ - 1 or order_ == settings_.max_order)
+            startup_ = false;
+
+        if (startup_) {
+            // Until the order reaches its maximum, every step is taken one
+            // order higher and at twice the size. The first step has no
+            // history behind it at all, so it is left as it is.
+            if (steps_ > 1) {
+                ++order_;
+                h_ = std::min(2.0 * h, largest_);
+            }
+            return;
+        }
+
+        int action = 0; // -1 lower, 0 keep, +1 raise
+        if (lowered_order(error) == order_ - 1)
+            action = -1;
+        else if (order_ == settings_.max_order)
+            action = 0;
+        else if (order_ + 1 >= ns_ or raised == 1)
+            action = 0; // the step size has not settled, or the order just changed
+        else if (3.0 * error.above < 0.5 * 2.0 * error.at)
+            action = 1; // the order 1 raises when the estimate above is 1/3 of it
+
+        double next = error.at;
+        if (action < 0 and order_ > settings_.min_order) {
+            --order_;
+            next = error.below;
+        }
+        else if (action > 0) {
+            ++order_;
+            next = error.above;
+        }
+
+        h_ = std::min(factor(next, order_) * h, largest_);
+    }
+
+    void BdfController::reject(const StepError& error, double h)
+    {
+        // A failed step ends the startup phase, and its retry is smaller — by
+        // the asymptotic factor at the first failure, by a quarter of the step
+        // from the second on, and at the order 1 from the third.
+        startup_ = false;
+        ++failures_;
+        const bool lower = lowered_order(error) == order_ - 1;
+        if (failures_ >= 3)
+            order_ = 1;
+        else if (lower)
+            order_ = order_ - 1;
+        order_ = std::max(order_, settings_.min_order);
+        order_used_ = order_;
+
+        double eta = eta_min_ef;
+        if (failures_ == 1) {
+            const double estimate = lower ? error.below : error.at;
+            eta = std::clamp(
+                0.9 * std::pow(2.0 * estimate + 1e-4, -1.0 / (order_ + 1)),
+                eta_min_ef, eta_low);
+        }
+        h_ = std::max(eta * h, smallest_);
     }
 
     la::Vector<double> divided_difference(int k,
@@ -173,29 +270,6 @@ namespace hellofem::app {
         for (std::size_t j = 0; j < n; ++j)
             values[j] = scale * d[0][j];
         return out;
-    }
-
-    std::vector<double> derivative_scale(
-        std::span<const la::Vector<double>* const> levels,
-        std::span<const double> times)
-    {
-        // One entry per order the level set supports: a set too short for an
-        // order has no entry for it rather than a zero (see `next_order`).
-        if (levels.size() != times.size() or levels.size() < 2)
-            return {};
-
-        const std::size_t n = levels[0]->array().size();
-        std::vector<double> scale(levels.size() - 1, 0.0);
-        LevelTable d = level_rows(levels, levels.size());
-        const double dt = times[0] - times[1];
-        for (std::size_t m = 1; m < levels.size(); ++m) {
-            newton_pass(d, times, m);
-            const double weight = std::pow(dt, static_cast<double>(m));
-            for (std::size_t j = 0; j < n; ++j)
-                scale[m - 1]
-                    = std::max(scale[m - 1], std::abs(weight * d[0][j]));
-        }
-        return scale;
     }
 
     la::Vector<double> interpolate_levels(

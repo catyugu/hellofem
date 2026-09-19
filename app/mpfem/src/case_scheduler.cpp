@@ -105,85 +105,152 @@ namespace hellofem::app {
     void CaseScheduler::advance_adaptive(
         std::span<TimeStepper* const> steppers, const std::vector<double>& times)
     {
-        const TimeScheme& scheme = find_time_scheme(time_.scheme);
         const double t_end = times.back();
         const double span = t_end - times.front();
+        BdfController control(time_, span);
 
-        // The step is carried over the output times — those hold a step back,
-        // they do not reset it.
-        double dt = span * first_step_fraction;
-        const double smallest = span * smallest_step_fraction;
-        const double largest = span * max_step_fraction;
+        // The first level of the stepping: the state the fields prepared,
+        // advanced by one artificial backward-Euler step of a fraction of the
+        // initial step. That is the reference's consistent initialization — it
+        // reconciles the initial values with the constraints of the level, and
+        // its increment is the time derivative the initial-step rule reads.
         double t = times.front();
-        std::size_t output = 1;
-        int order = 1;
+        const double probe
+            = span * first_step_fraction * backward_euler_step_fraction;
+        for (TimeStepper* stepper : steppers)
+            stepper->step(t + probe, 1);
+        double derivative_norm = 0.0;
+        for (TimeStepper* stepper : steppers)
+            derivative_norm = std::max(derivative_norm, stepper->derivative_norm());
+        t += probe;
+        control.start(control.first_step(derivative_norm));
+        spdlog::info("transient: first step {} s (derivative norm {}), "
+                     "largest step {} s, orders {}..{}",
+            control.step_size(), derivative_norm, span * max_step_fraction,
+            time_.min_order, time_.max_order);
+
+        // The state at times.front() is already stored; an output time the
+        // initialization step itself reached is not (it is not a step of the
+        // stepping, and the mode counts those).
+        std::size_t output = store_outputs(1, times.front(), t, times);
+        bool landed = false; // a step has landed inside the current subinterval
         int steps = 0;
         int rejected = 0;
 
         while (t < t_end) {
-            const double h = std::min(dt, largest);
-
-            for (TimeStepper* stepper : steppers)
-                stepper->step(t + h, order);
-
-            // The step is as good as its worst field, and the order of the
-            // next one follows the worst of their derivative norms.
-            double error = 0.0;
-            std::vector<double> norms;
-            for (TimeStepper* stepper : steppers) {
-                error = std::max(error, stepper->error());
-                const std::vector<double> field_norms
-                    = stepper->scaled_derivatives();
-                norms.resize(std::max(norms.size(), field_norms.size()), 0.0);
-                for (std::size_t k = 0; k < field_norms.size(); ++k)
-                    norms[k] = std::max(norms[k], field_norms[k]);
+            const double next = output < times.size() ? times[output] : t_end;
+            double h = control.step_size();
+            if (time_.steps == StepsMode::strict) {
+                // Every step ends at an output time; the solver takes the
+                // steps its tolerance needs in between.
+                h = std::min(h, next - t);
             }
+            else if (time_.steps == StepsMode::intermediate and not landed
+                and t + h >= next) {
+                // Every subinterval of the output times holds at least one
+                // step: this one is cut short to land inside the current one.
+                h = 0.5 * (next - t);
+            }
+            if (not time_.interpolate_end_time)
+                h = std::min(h, t_end - t);
 
-            if (error > 1.0) {
-                // The step missed the tolerance: the fields go back to the
-                // level it started from, and it is retried smaller and at the
-                // order below, the more robust one.
-                for (TimeStepper* stepper : steppers)
-                    stepper->undo();
-                dt = h * step_factor(error, order);
-                order = std::max(1, order - 1);
-                ++rejected;
-                if (dt < smallest)
-                    throw std::runtime_error(
-                        "CaseScheduler: the time step at t = "
-                        + std::to_string(t) + " s fell to " + std::to_string(dt)
-                        + " s and the local error is still "
-                        + std::to_string(error) + "; the tolerance "
-                        + std::to_string(time_.tolerance)
-                        + " cannot be met on this interval");
-                continue;
+            const double from = t;
+            for (TimeStepper* stepper : steppers)
+                stepper->step(t + h, control.order());
+
+            StepError error;
+            if (control.error_controlled()) {
+                error = combine_errors(steppers);
+                if (error.at > 1.0) {
+                    // The step missed the tolerance: the fields go back to the
+                    // level it started from, and it is retried smaller.
+                    for (TimeStepper* stepper : steppers)
+                        stepper->undo();
+                    control.reject(error, h);
+                    ++rejected;
+                    if (control.step_size() <= control.smallest_step())
+                        throw std::runtime_error(
+                            "CaseScheduler: the time step at t = "
+                            + std::to_string(t) + " s fell to "
+                            + std::to_string(control.step_size())
+                            + " s and the local error is still "
+                            + std::to_string(error.at) + "; the tolerance "
+                            + std::to_string(time_.tolerance)
+                            + " cannot be met on this interval");
+                    continue;
+                }
             }
 
             t += h;
             // A field that does not step is algebraic: it follows every
-            // level, not only the output times.
+            // level, not only the stored times.
             for (const auto& field : fields_)
                 if (not field->stepper())
                     field->solve_level(t);
-            // The output times this step stepped over are reported by
-            // interpolating the scheme's polynomial.
-            while (output < times.size() and times[output] <= t) {
-                record_at(times[output]);
-                ++output;
-            }
-            // The order is the BDF family's to select; a family of a fixed
-            // order is stepped at the order of its scheme.
-            const int next = scheme.family == TimeFamily::bdf
-                ? next_order(order, scheme.order, norms)
-                : order;
-            dt = std::min(h * step_factor(error, order), largest);
-            order = next;
+            control.accept(error, h);
             ++steps;
+
+            if (time_.store == StoreMode::steps)
+                record(t);
+            output = store_outputs(output, from, t, times);
+            landed = output < times.size() and t < times[output];
         }
 
-        spdlog::info(
-            "transient: {} steps over {} s ({} rejected, order {})", steps, span,
-            rejected, order);
+        spdlog::info("transient: {} steps over {} s ({} rejected)", steps, span,
+            rejected);
+    }
+
+    StepError CaseScheduler::combine_errors(
+        std::span<TimeStepper* const> steppers) const
+    {
+        // The reference's norm is the weighted root mean square over every
+        // dependent variable of the study, `(1/M) sum_j (1/N_j) sum_i
+        // (e_i/W_i)^2`, so a field enters it as its own mean square divided by
+        // the number of the study's fields — not as its norm taken against the
+        // others'. A field the study does not advance contributes nothing: the
+        // app solves it exactly at each level, so it carries no truncation
+        // error of its own (the reference's such fields do carry a small one,
+        // measured at a thousandth of the temperature's).
+        //
+        // Taking the largest field's norm instead is not the same thing and
+        // costs steps: measured on EcTSmBusbarTransient, it holds the step at
+        // 9.6 s where the reference doubles, and lands 4 of the 63 columns
+        // outside the case's tolerance where this norm lands all of them
+        // inside it, on the reference's own sequence of steps.
+        const double fields = static_cast<double>(fields_.size());
+        StepError combined;
+        for (TimeStepper* stepper : steppers) {
+            const StepError field = stepper->error_estimates();
+            combined.below += field.below * field.below / fields;
+            combined.at += field.at * field.at / fields;
+            combined.above += field.above * field.above / fields;
+        }
+        combined.below = std::sqrt(combined.below);
+        combined.at = std::sqrt(combined.at);
+        combined.above = std::sqrt(combined.above);
+        return combined;
+    }
+
+    std::size_t CaseScheduler::store_outputs(std::size_t output, double from,
+        double t, const std::vector<double>& times)
+    {
+        while (output < times.size() and times[output] <= t) {
+            const double target = times[output];
+            if (time_.store == StoreMode::interpolate)
+                record_at(target);
+            else if (time_.store == StoreMode::closest) {
+                // The solver step closest to the output time, among the steps
+                // that passed it: the one just taken, or the level it started
+                // from.
+                record_at(std::abs(target - from) < std::abs(target - t) ? from
+                                                                         : target);
+            }
+            // With the solver's own steps stored, the output times are only
+            // counted here — the modes that place the steps need them, and
+            // their own solutions are the steps themselves.
+            ++output;
+        }
+        return output;
     }
 
     // -------------------------------------------------------------------------

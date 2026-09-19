@@ -15,8 +15,10 @@ namespace hellofem::app {
 
     TimeStepper::TimeStepper(TimeDependentField& field, const TimeSettings& settings)
         : field_(field)
-        , scheme_(find_time_scheme(settings.scheme))
         , tolerance_(settings.tolerance)
+        , absolute_factor_(settings.absolute_factor)
+        , max_order_(settings.max_order)
+        , keep_levels_(static_cast<std::size_t>(settings.max_order) + 2)
     {
     }
 
@@ -27,14 +29,6 @@ namespace hellofem::app {
         sources_.clear();
         history_.push_back(la::Vector<double>(*field_.solution()->x()));
         times_.push_back(t0);
-        magnitude_ = 0.0;
-        track_magnitude();
-    }
-
-    void TimeStepper::track_magnitude()
-    {
-        for (const double value : field_.solution()->x()->array())
-            magnitude_ = std::max(magnitude_, std::abs(value));
     }
 
     std::vector<const la::Vector<double>*> TimeStepper::levels() const
@@ -48,12 +42,10 @@ namespace hellofem::app {
 
     TimeWeights TimeStepper::weights(int order, TimeSteps steps) const
     {
-        if (scheme_.family == TimeFamily::crank_nicolson)
-            return cn_weights(steps.dt);
-        // The order is the driver's, up to the one the scheme integrates at;
-        // a step with no history behind it (or no step at all) is first order
+        // The order is the case's, up to the one the settings reach; a step
+        // with no history behind it (or no step at all) is first order
         // whatever the request.
-        return bdf_weights(std::min(order, scheme_.order), steps);
+        return bdf_weights(std::min(order, max_order_), steps);
     }
 
     void TimeStepper::step(double t, int order)
@@ -82,24 +74,23 @@ namespace hellofem::app {
             *field_.solution()->x(), field_.pattern(), field_.linear_solver(),
             field_.linear_settings());
 
-        spdlog::debug("stepping '{}' to t = {} s (dt = {} s, order {}, {} iterations)",
-            scheme_.name, t, steps.dt, static_cast<int>(w.a.size()) - 1,
-            iterations);
+        spdlog::debug("stepping to t = {} s (dt = {} s, order {}, {} iterations)",
+            t, steps.dt, static_cast<int>(w.a.size()) - 1, iterations);
 
-        track_magnitude();
         history_.insert(history_.begin(),
             la::Vector<double>(*field_.solution()->x()));
         times_.insert(times_.begin(), t);
         sources_.insert(sources_.begin(), std::move(source));
-        if (history_.size() > keep_levels) {
-            history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(keep_levels),
+        if (history_.size() > keep_levels_) {
+            history_.erase(
+                history_.begin() + static_cast<std::ptrdiff_t>(keep_levels_),
                 history_.end());
-            times_.erase(times_.begin() + static_cast<std::ptrdiff_t>(keep_levels),
+            times_.erase(times_.begin() + static_cast<std::ptrdiff_t>(keep_levels_),
                 times_.end());
             // One load fewer than levels: the first level has none.
-            if (sources_.size() >= keep_levels)
-                sources_.erase(
-                    sources_.begin() + static_cast<std::ptrdiff_t>(keep_levels - 1),
+            if (sources_.size() >= keep_levels_)
+                sources_.erase(sources_.begin()
+                        + static_cast<std::ptrdiff_t>(keep_levels_ - 1),
                     sources_.end());
         }
         order_ = static_cast<int>(w.a.size()) - 1;
@@ -118,40 +109,62 @@ namespace hellofem::app {
         pending_ = false;
     }
 
-    double TimeStepper::error() const
+    double TimeStepper::weighted_norm(
+        double scale, const la::Vector<double>& values) const
     {
-        if (times_.size() < static_cast<std::size_t>(order_) + 2
-            or history_.empty())
-            return 0.0; // too short a history to estimate: the step stands
-
-        const std::vector<const la::Vector<double>*> level = levels();
-        const la::Vector<double> dd
-            = divided_difference(order_ + 1, level, times_);
         const auto& u = field_.solution()->x()->array();
+        const auto& v = values.array();
         const std::size_t n = u.size();
-
-        const double coefficient = error_coefficient(scheme_.family, order_);
-        // The weight of a dof is the field's own scale, or the dof's value
-        // where that is larger: `tolerance max(|u_i|, scale)`, COMSOL's
-        // `W_ij = max(|U_ij|, S_j)` (see its "Scales for dependent variables").
-        // The scale is what keeps a field with a wide range of values — a
-        // displacement that runs from 1e-11 near a clamped face to its own
-        // magnitude — from letting its near-zero dofs, which carry nothing but
-        // round-off, set the step of the whole case.
-        const double scale = magnitude_;
         double sum = 0.0;
         for (std::size_t i = 0; i < n; ++i) {
-            const double weight = tolerance_ * std::max(std::abs(u[i]), scale);
-            const double ratio
-                = weight > 0.0 ? coefficient * dd.array()[i] / weight : 0.0;
+            const double weight = tolerance_ * (absolute_factor_ + std::abs(u[i]));
+            const double ratio = weight > 0.0 ? scale * v[i] / weight : 0.0;
             sum += ratio * ratio;
         }
         return n > 0 ? std::sqrt(sum / static_cast<double>(n)) : 0.0;
     }
 
-    std::vector<double> TimeStepper::scaled_derivatives() const
+    double TimeStepper::error_norm(int order) const
     {
-        return derivative_scale(levels(), times_);
+        // `err_order = order! |d_(order+1)|` reads order + 2 levels. A shorter
+        // history — the first steps of a run, whose sizes the startup phase
+        // sets — has no estimate at this order, and the step stands on the
+        // tolerance it was proposed with.
+        if (order < 1 or order > max_order_
+            or times_.size() < static_cast<std::size_t>(order) + 2)
+            return 0.0;
+        double factorial = 1.0;
+        for (int j = 2; j <= order; ++j)
+            factorial *= static_cast<double>(j);
+        return factorial
+            * weighted_norm(1.0, divided_difference(order + 1, levels(), times_));
+    }
+
+    StepError TimeStepper::error_estimates() const
+    {
+        StepError out;
+        out.at = error_norm(order_);
+        if (order_ > 1)
+            out.below = error_norm(order_ - 1);
+        if (order_ < max_order_)
+            out.above = error_norm(order_ + 1);
+        return out;
+    }
+
+    double TimeStepper::derivative_norm() const
+    {
+        if (times_.size() < 2)
+            return 0.0;
+        const double dt = times_[0] - times_[1];
+        if (dt <= 0.0)
+            return 0.0;
+        la::Vector<double> derivative(history_[0].index_map(), history_[0].bs());
+        auto& d = derivative.array();
+        const auto& u_new = history_[0].array();
+        const auto& u_old = history_[1].array();
+        for (std::size_t i = 0; i < d.size(); ++i)
+            d[i] = (u_new[i] - u_old[i]) / dt;
+        return weighted_norm(1.0, derivative);
     }
 
     void TimeStepper::interpolate(double t, la::Vector<double>& out) const
