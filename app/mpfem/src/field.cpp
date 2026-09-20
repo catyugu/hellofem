@@ -440,7 +440,7 @@ namespace hellofem::app {
         return solve(
             [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
                 refresh(t);
-                assemble_steady(A, b);
+                assemble_steady(A, b, t);
             },
             *u_->x());
     }

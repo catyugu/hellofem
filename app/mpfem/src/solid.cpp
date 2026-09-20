@@ -166,7 +166,6 @@ namespace hellofem::app {
 
     void SolidMechanicsSolver::refresh(double t)
     {
-        t_ = t;
         if (E_)
             E_->update(t);
         if (nu_)
@@ -176,8 +175,9 @@ namespace hellofem::app {
     }
 
     void SolidMechanicsSolver::assemble_steady(la::MatrixCSR<double>& A,
-        la::Vector<double>& b) const
+        la::Vector<double>& b, double t) const
     {
+        (void)t; // the elastic law and the fixed boundaries carry no time
         auto bcs = fixed_bcs();
         auto rows = marked_rows(bcs);
         auto a = add_operator(A, rows, {E_->function(), nu_->function()},

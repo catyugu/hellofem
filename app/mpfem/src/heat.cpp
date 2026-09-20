@@ -281,7 +281,6 @@ namespace hellofem::app {
 
     void HeatTransferSolver::refresh(double t)
     {
-        t_ = t;
         if (k_)
             k_->update(t);
         if (rho_cp_)
@@ -403,18 +402,10 @@ namespace hellofem::app {
     }
 
     void HeatTransferSolver::assemble_steady(la::MatrixCSR<double>& A,
-        la::Vector<double>& b) const
+        la::Vector<double>& b, double t) const
     {
         // The steady problem is the degenerate one-level scheme: K u = f.
-        TimeWeights weights;
-        weights.a = {0.0};
-        weights.b = {1.0};
-        la::Vector<double> f_new(V_->dofmap()->index_map,
-            V_->dofmap()->index_map_bs());
-        TimeLevel level;
-        level.weights = weights;
-        level.time = t_;
-        assemble_step(A, b, level);
+        assemble_step(A, b, steady_level(t));
     }
 
 } // namespace hellofem::app

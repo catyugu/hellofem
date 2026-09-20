@@ -109,15 +109,14 @@ namespace hellofem::app {
 
     void ElectrostaticsSolver::refresh(double t)
     {
-        t_ = t;
         if (sigma_)
             sigma_->update(t);
     }
 
     void ElectrostaticsSolver::assemble_steady(la::MatrixCSR<double>& A,
-        la::Vector<double>& b) const
+        la::Vector<double>& b, double t) const
     {
-        auto bcs = make_bcs(voltages_, t_);
+        auto bcs = make_bcs(voltages_, t);
         auto rows = marked_rows(bcs);
         auto a = add_operator(A, rows, {sigma_->function()},
             kernels::diffusion_scalar);

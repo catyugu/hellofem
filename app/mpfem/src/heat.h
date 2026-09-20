@@ -72,7 +72,7 @@ namespace hellofem::app {
 
         void refresh(double t) override;
         void assemble_steady(la::MatrixCSR<double>& A,
-            la::Vector<double>& b) const override;
+            la::Vector<double>& b, double t) const override;
         void constrain_solution(double t) override;
 
         /// Assemble one time step of the heat equation with the scheme

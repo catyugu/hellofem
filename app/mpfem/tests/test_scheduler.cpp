@@ -454,7 +454,7 @@ TEST_CASE("CaseScheduler: a length-valued export follows the geometry's unit",
             ux_max = std::max(ux_max, row[3]);
     }
     INFO("exported solid.disp at the bar's end = " << ux_max
-                                                  << " mm, against alpha*DT*L = 1.0 mm");
+                                                   << " mm, against alpha*DT*L = 1.0 mm");
     REQUIRE(ux_max > 0.9);
     REQUIRE(ux_max < 1.1);
 }

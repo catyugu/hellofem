@@ -636,10 +636,13 @@ TEST_CASE("Nonlinear iteration: a warm start from the previous solution converge
         const double target = u(t0) + (u(t1) - u(t0)) * x;
         return t_ref + (-1.0 + std::sqrt(1.0 + 2.0 * alpha * target)) / alpha;
     };
-    const auto coords = rod.solver->space()->tabulate_dof_coordinates(false);
+    const auto coords
+        = rod.solver->solution()->function_space()->tabulate_dof_coordinates(
+            false);
     double max_err = 0;
     for (std::int32_t d = 0;
-        d < rod.solver->space()->dofmap()->index_map->size_local(); ++d)
+        d < rod.solver->solution()->function_space()->dofmap()->index_map->size_local();
+        ++d)
         max_err = std::max(max_err,
             std::abs(rod.solver->solution()->x()->array()[static_cast<std::size_t>(d)]
                 - exact(coords[3 * d])));

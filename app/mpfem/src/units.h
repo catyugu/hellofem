@@ -6,13 +6,6 @@
 
 namespace hellofem::app {
 
-    /// Parse a unit string ("mm", "W/(m*K)", "kg*m/s^2", ...) to its SI
-    /// multiplicative factor. Returns 1.0 for an empty unit.
-    ///
-    /// The factor alone: it is what a *unit expression* means, and a unit
-    /// that is not multiplicative (an absolute temperature scale) has none.
-    double parse_unit(std::string_view unit);
-
     /// `value` stated in `unit`, in SI: the conversion of one quantity.
     ///
     /// Every unit is multiplicative except the absolute temperature scales,

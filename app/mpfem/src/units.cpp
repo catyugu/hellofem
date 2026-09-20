@@ -150,22 +150,29 @@ namespace hellofem::app {
             }
         };
 
-    } // namespace
+        /// Parse a unit string ("mm", "W/(m*K)", "kg*m/s^2", ...) to its SI
+        /// multiplicative factor. Returns 1.0 for an empty unit.
+        ///
+        /// The factor alone: it is what a *unit expression* means, and a unit
+        /// that is not multiplicative (an absolute temperature scale) has
+        /// none — which is why a quantity crosses between units through
+        /// `to_si` / `from_si` and never through this.
+        double parse_unit(std::string_view unit)
+        {
+            // Whole-string fast path first (exact table hit).
+            std::string trimmed(unit);
+            while (!trimmed.empty() and std::isspace(static_cast<unsigned char>(trimmed.front())))
+                trimmed.erase(trimmed.begin());
+            while (!trimmed.empty() and std::isspace(static_cast<unsigned char>(trimmed.back())))
+                trimmed.pop_back();
+            if (trimmed.empty())
+                return 1.0;
+            if (auto it = base_units().find(trimmed); it != base_units().end())
+                return it->second;
+            return UnitParser(trimmed).parse();
+        }
 
-    double parse_unit(std::string_view unit)
-    {
-        // Whole-string fast path first (exact table hit).
-        std::string trimmed(unit);
-        while (!trimmed.empty() and std::isspace(static_cast<unsigned char>(trimmed.front())))
-            trimmed.erase(trimmed.begin());
-        while (!trimmed.empty() and std::isspace(static_cast<unsigned char>(trimmed.back())))
-            trimmed.pop_back();
-        if (trimmed.empty())
-            return 1.0;
-        if (auto it = base_units().find(trimmed); it != base_units().end())
-            return it->second;
-        return UnitParser(trimmed).parse();
-    }
+    } // namespace
 
     double to_si(double value, std::string_view unit)
     {

@@ -11,15 +11,6 @@
 
 namespace hellofem::app {
 
-    /// Whether a Krylov solve that used `iterations` of `max_iterations`
-    /// solved its system.
-    ///
-    /// A solver that stops at its iteration cap has not: it returns the cap
-    /// and leaves an intermediate iterate in `x`. Reading that iterate as the
-    /// field's value reports a non-solution as a result — a field that is
-    /// silently wrong, in a run that looks like it succeeded.
-    bool converged(int iterations, int max_iterations);
-
     /// Solve the system `assemble` builds for the unknown `x`, starting from
     /// `x` as the initial guess.
     ///

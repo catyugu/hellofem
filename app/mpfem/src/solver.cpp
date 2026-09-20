@@ -12,11 +12,6 @@
 
 namespace hellofem::app {
 
-    bool converged(int iterations, int max_iterations)
-    {
-        return iterations < max_iterations;
-    }
-
     int solve_system(
         const std::function<void(la::MatrixCSR<double>&, la::Vector<double>&)>& assemble,
         la::Vector<double>& x, const la::SparsityPattern& pattern,

@@ -43,9 +43,10 @@ namespace hellofem::app {
         virtual void refresh(double t) = 0;
 
         /// Assemble the linearized steady system `A u = b` at the current
-        /// state, with the Dirichlet conditions imposed.
+        /// state, with the Dirichlet conditions imposed. `t` is the time the
+        /// model data that depends on it (boundary values) is evaluated at.
         virtual void assemble_steady(la::MatrixCSR<double>& A,
-            la::Vector<double>& b) const = 0;
+            la::Vector<double>& b, double t) const = 0;
 
         /// Solve the steady system at time `t`, starting from the current
         /// solution (the previous level, or the previous linearization — both
@@ -61,9 +62,9 @@ namespace hellofem::app {
 
         std::shared_ptr<fem::Function<double>> solution() const { return u_; }
 
-        std::shared_ptr<fem::FunctionSpace<double>> space() const { return V_; }
-
-        /// Sparsity pattern of the linearized system.
+        /// Sparsity pattern of the linearized system: the matrix a caller
+        /// assembling this field's system by hand builds it on (the field's
+        /// own solves build theirs on it too).
         const la::SparsityPattern& pattern() const { return *pattern_; }
 
         /// All cells, the assembly range.
@@ -179,7 +180,6 @@ namespace hellofem::app {
         std::shared_ptr<la::SparsityPattern> pattern_;
         la::LinearSettings linear_;
         la::LinearSolver<double> linear_solver_;
-        double t_ = 0.0; // time of the last refresh
         int order_ = 1; // element order of the field, sizes the quadrature
     };
 

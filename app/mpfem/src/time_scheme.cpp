@@ -76,6 +76,18 @@ namespace hellofem::app {
         return w;
     }
 
+    TimeLevel steady_level(double t)
+    {
+        // The mass weight is stated as zero rather than left out: a physics
+        // reads `weights.a[0]` to decide whether it has a mass operator at
+        // all.
+        TimeLevel level;
+        level.weights.a = {0.0};
+        level.weights.b = {1.0};
+        level.time = t;
+        return level;
+    }
+
     BdfController::BdfController(const TimeSettings& settings, double span)
         : settings_(settings)
         , span_(span)

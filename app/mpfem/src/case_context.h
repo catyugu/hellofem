@@ -66,12 +66,6 @@ namespace hellofem::app {
         std::shared_ptr<FacetProperty> facet_property(
             std::string_view text, int boundary) const;
 
-        /// A cell coefficient without a model value: zero on every domain,
-        /// with every solution published so far bound to it. A physics fills
-        /// it per domain from its own features; `property` and
-        /// `uniform_property` start from it.
-        std::shared_ptr<DomainProperty> zero_property() const;
-
         /// Publish the state the rest of the case reads a field at, under
         /// `symbol`, the COMSOL dependent-variable name every model
         /// expression refers to it by: the sampled state of a field the study
@@ -90,6 +84,11 @@ namespace hellofem::app {
             std::string_view symbol) const;
 
     private:
+        /// A cell coefficient without a model value: zero on every domain,
+        /// with every solution published so far bound to it. The public
+        /// lookups start from it and fill it per domain.
+        std::shared_ptr<DomainProperty> zero_property() const;
+
         const ModelScript& model_;
         const LoadedMesh& mesh_;
         TimeSettings time_;

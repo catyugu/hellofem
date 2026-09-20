@@ -46,8 +46,8 @@ TEST_CASE("DomainProperty: sparse domains and field-dependent values", "[app][ph
     // A temperature field that varies along x: T = x.
     HeatTransferSolver ht(fixture.mesh, fixture.boundary, fixture.cells, 1);
     auto& field = *ht.solution();
-    const auto coords = ht.space()->tabulate_dof_coordinates(false);
-    for (std::int32_t d = 0; d < ht.space()->dofmap()->index_map->size_local(); ++d)
+    const auto coords = ht.solution()->function_space()->tabulate_dof_coordinates(false);
+    for (std::int32_t d = 0; d < ht.solution()->function_space()->dofmap()->index_map->size_local(); ++d)
         field.x()->array()[static_cast<std::size_t>(d)] = coords[3 * d];
 
     DomainProperty property(fixture.mesh, tags, {});
@@ -191,10 +191,10 @@ TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[a
         auto V = es.solution();
 
         // V = x at every dof coordinate.
-        auto coords = es.space()->tabulate_dof_coordinates(false);
+        auto coords = es.solution()->function_space()->tabulate_dof_coordinates(false);
         double max_err = 0;
         double v_max = -1e9, v_min = 1e9;
-        for (std::int32_t d = 0; d < es.space()->dofmap()->index_map->size_local(); ++d) {
+        for (std::int32_t d = 0; d < es.solution()->function_space()->dofmap()->index_map->size_local(); ++d) {
             const double x = coords[3 * d];
             const double val = V->x()->array()[static_cast<std::size_t>(d)];
             max_err = std::max(max_err, std::abs(val - x));
@@ -239,10 +239,10 @@ TEST_CASE("Electrostatics: a linear potential is exact on a tetrahedral mesh",
         es.add_voltage_bc(5, ScalarExpression(0.0)); // z- : V=0
         es.solve_steady(0.0);
 
-        auto coords = es.space()->tabulate_dof_coordinates(false);
+        auto coords = es.solution()->function_space()->tabulate_dof_coordinates(false);
         double max_err = 0;
         for (std::int32_t d = 0;
-            d < es.space()->dofmap()->index_map->size_local(); ++d)
+            d < es.solution()->function_space()->dofmap()->index_map->size_local(); ++d)
             max_err = std::max(max_err,
                 std::abs(es.solution()->x()->array()[static_cast<std::size_t>(d)]
                     - coords[3 * d + 2]));
@@ -270,9 +270,9 @@ TEST_CASE("Electrostatics: voltage-dependent conductivity drives a nonlinear sol
 
     es.solve_steady(0.0);
 
-    auto coords = es.space()->tabulate_dof_coordinates(false);
+    auto coords = es.solution()->function_space()->tabulate_dof_coordinates(false);
     double err_exact = 0, err_linear = 0;
-    for (std::int32_t d = 0; d < es.space()->dofmap()->index_map->size_local(); ++d) {
+    for (std::int32_t d = 0; d < es.solution()->function_space()->dofmap()->index_map->size_local(); ++d) {
         const double x = coords[3 * d];
         const double value
             = es.solution()->x()->array()[static_cast<std::size_t>(d)];
@@ -303,9 +303,9 @@ TEST_CASE("HeatTransfer: steady -div(k grad T)=0 with Robin convection", "[app][
     ht.solve_steady(0.0);
     auto T = ht.solution();
 
-    auto coords = ht.space()->tabulate_dof_coordinates(false);
+    auto coords = ht.solution()->function_space()->tabulate_dof_coordinates(false);
     double max_err = 0;
-    for (std::int32_t d = 0; d < ht.space()->dofmap()->index_map->size_local(); ++d) {
+    for (std::int32_t d = 0; d < ht.solution()->function_space()->dofmap()->index_map->size_local(); ++d) {
         const double x = coords[3 * d];
         const double exact = 1.0 - 0.5 * x;
         max_err = std::max(max_err,
@@ -338,9 +338,9 @@ TEST_CASE("HeatTransfer: a boundary value is read on the boundary", "[app][physi
 
     ht.solve_steady(0.0);
 
-    auto coords = ht.space()->tabulate_dof_coordinates(false);
+    auto coords = ht.solution()->function_space()->tabulate_dof_coordinates(false);
     double at_end = 0.0;
-    for (std::int32_t d = 0; d < ht.space()->dofmap()->index_map->size_local(); ++d)
+    for (std::int32_t d = 0; d < ht.solution()->function_space()->dofmap()->index_map->size_local(); ++d)
         if (coords[3 * d] > 0.99)
             at_end = ht.solution()->x()->array()[static_cast<std::size_t>(d)];
     INFO("T(1) = " << at_end);
@@ -377,9 +377,9 @@ TEST_CASE("HeatTransfer: nonlinear k(T) matches the analytic steady profile", "[
 
     ht.solve_steady(0.0);
 
-    auto coords = ht.space()->tabulate_dof_coordinates(false);
+    auto coords = ht.solution()->function_space()->tabulate_dof_coordinates(false);
     double max_err = 0;
-    for (std::int32_t d = 0; d < ht.space()->dofmap()->index_map->size_local(); ++d) {
+    for (std::int32_t d = 0; d < ht.solution()->function_space()->dofmap()->index_map->size_local(); ++d) {
         const double x = coords[3 * d];
         max_err = std::max(max_err,
             std::abs(ht.solution()->x()->array()[static_cast<std::size_t>(d)]
@@ -436,7 +436,7 @@ namespace {
         la::MatrixCSR<double> A(ht.pattern());
         la::Vector<double> b(ht.solution()->x()->index_map(),
             ht.solution()->x()->bs());
-        ht.assemble_steady(A, b);
+        ht.assemble_steady(A, b, 0.0);
         return A;
     }
 
@@ -461,11 +461,11 @@ TEST_CASE("HeatTransfer: a thin layer conducts along the boundary only",
     for (const int order : {1, 2}) {
         auto A = thin_layer_operator(f, f.boundary, 6, ds, k_layer, order);
         HeatTransferSolver ht(f.mesh, f.boundary, f.cells, order);
-        const auto coords = ht.space()->tabulate_dof_coordinates(false);
+        const auto coords = ht.solution()->function_space()->tabulate_dof_coordinates(false);
         la::Vector<double> v(ht.solution()->x()->index_map(),
             ht.solution()->x()->bs());
         for (std::int32_t d = 0;
-            d < ht.space()->dofmap()->index_map->size_local(); ++d)
+            d < ht.solution()->function_space()->dofmap()->index_map->size_local(); ++d)
             v.array()[static_cast<std::size_t>(d)]
                 = 1.0 + bx * coords[3 * d] + by * coords[3 * d + 1]
                 + bz * coords[3 * d + 2];
@@ -498,11 +498,11 @@ TEST_CASE("HeatTransfer: a thin layer on an imprinted face conducts too",
     for (const int order : {1, 2}) {
         auto A = thin_layer_operator(f, tags, 7, ds, k_layer, order);
         HeatTransferSolver ht(f.mesh, tags, f.cells, order);
-        const auto coords = ht.space()->tabulate_dof_coordinates(false);
+        const auto coords = ht.solution()->function_space()->tabulate_dof_coordinates(false);
         la::Vector<double> v(ht.solution()->x()->index_map(),
             ht.solution()->x()->bs());
         for (std::int32_t d = 0;
-            d < ht.space()->dofmap()->index_map->size_local(); ++d)
+            d < ht.solution()->function_space()->dofmap()->index_map->size_local(); ++d)
             v.array()[static_cast<std::size_t>(d)]
                 = 1.0 + bx * coords[3 * d] + by * coords[3 * d + 1]
                 + bz * coords[3 * d + 2];
@@ -547,10 +547,10 @@ TEST_CASE("HeatTransfer: a thin layer does not conduct across its thickness",
                 constant_facet_property(f.mesh, f.boundary, 2, k_layer));
         ht.solve_steady(0.0);
 
-        const auto coords = ht.space()->tabulate_dof_coordinates(false);
+        const auto coords = ht.solution()->function_space()->tabulate_dof_coordinates(false);
         double err = 0.0, at_one = -1e9;
         for (std::int32_t d = 0;
-            d < ht.space()->dofmap()->index_map->size_local(); ++d) {
+            d < ht.solution()->function_space()->dofmap()->index_map->size_local(); ++d) {
             const double x = coords[3 * d];
             const double value
                 = ht.solution()->x()->array()[static_cast<std::size_t>(d)];
@@ -865,10 +865,10 @@ TEST_CASE("SolidMechanics: uniform thermal expansion of a clamped bar", "[app][p
     // Blocked space: dof coordinates are per physical dof (bs*block + comp),
     // so vertex d lives at dofcoords[(3*d)*gdim + q] = coords[9*d+q], and the
     // solution component c of vertex d is xa[3*d+c].
-    auto coords = sm.space()->tabulate_dof_coordinates(false);
+    auto coords = sm.solution()->function_space()->tabulate_dof_coordinates(false);
     double ux_max = 0, ux_at_1 = -1e9;
     double max_lat = 0;
-    for (std::int32_t d = 0; d < sm.space()->dofmap()->index_map->size_local(); ++d) {
+    for (std::int32_t d = 0; d < sm.solution()->function_space()->dofmap()->index_map->size_local(); ++d) {
         const std::size_t cd = static_cast<std::size_t>(9 * d);
         const double x = coords[cd];
         const double ux = xa[static_cast<std::size_t>(3 * d)];
@@ -914,11 +914,11 @@ TEST_CASE("SolidMechanics: a varying temperature's load is the exact integral",
 
     // A scalar space carrying T = Tref + g x.
     HeatTransferSolver ht(f.mesh, f.boundary, f.cells, 1);
-    auto T = std::make_shared<hellofem::fem::Function<double>>(ht.space());
+    auto T = std::make_shared<hellofem::fem::Function<double>>(ht.solution()->function_space());
     T->x()->set(0.0);
-    auto Tcoords = ht.space()->tabulate_dof_coordinates(false);
+    auto Tcoords = ht.solution()->function_space()->tabulate_dof_coordinates(false);
     for (std::int32_t d = 0;
-        d < ht.space()->dofmap()->index_map->size_local(); ++d)
+        d < ht.solution()->function_space()->dofmap()->index_map->size_local(); ++d)
         T->x()->array()[static_cast<std::size_t>(d)]
             = Tref + g * Tcoords[static_cast<std::size_t>(3 * d)];
     sm.set_thermal_expansion(T, constant_property(f.mesh, f.cells, alpha), Tref);
@@ -927,11 +927,11 @@ TEST_CASE("SolidMechanics: a varying temperature's load is the exact integral",
     la::MatrixCSR<double> A(sm.pattern());
     la::Vector<double> b(sm.solution()->x()->index_map(),
         sm.solution()->x()->bs());
-    sm.assemble_steady(A, b);
+    sm.assemble_steady(A, b, 0.0);
 
     // The load against v = (x, y, z): physical dof i is component i % 3 of its
     // node, whose coordinate is at coords[3 * i + (i % 3)].
-    auto coords = sm.space()->tabulate_dof_coordinates(false);
+    auto coords = sm.solution()->function_space()->tabulate_dof_coordinates(false);
     double work = 0.0;
     for (std::size_t i = 0; i < b.array().size(); ++i)
         work += b.array()[i] * coords[3 * i + (i % 3)];
@@ -963,9 +963,9 @@ TEST_CASE("SolidMechanics: AMG preconditioning keeps the block structure",
     sm.refresh(0.0);
 
     la::MatrixCSR<double> A(sm.pattern());
-    la::Vector<double> b(sm.space()->dofmap()->index_map,
-        sm.space()->dofmap()->index_map_bs());
-    sm.assemble_steady(A, b);
+    la::Vector<double> b(sm.solution()->function_space()->dofmap()->index_map,
+        sm.solution()->function_space()->dofmap()->index_map_bs());
+    sm.assemble_steady(A, b, 0.0);
 
     // The AMG-preconditioned CG solve of a matrix, from a zero guess.
     auto solve = [](const la::MatrixCSR<double>& M, const la::Vector<double>& rhs,
@@ -1083,12 +1083,13 @@ namespace {
 
 } // namespace
 
-TEST_CASE("solve_linear: an iterate left at the iteration cap is not a solution",
+TEST_CASE("solve_system: an iterate left at the iteration cap is refused",
     "[app][solver]")
 {
     // A pure-Neumann Laplacian is singular, and a right-hand side whose mean
     // lies in its null space is one no iterate can reproduce: the Krylov
-    // residual never reaches the tolerance and the solve stops at its cap.
+    // residual never reaches the tolerance and the solve stops at its cap,
+    // leaving an intermediate iterate in `x`.
     constexpr std::int32_t n = 400;
     auto A = make_neumann_laplacian(n);
     auto imap = std::make_shared<hellofem::common::IndexMap>(0, n);
@@ -1104,12 +1105,33 @@ TEST_CASE("solve_linear: an iterate left at the iteration cap is not a solution"
     solver.set_tolerances(1e-12, 1e-14, 2000);
     REQUIRE(solver.solve(x, b) == 2000);
 
-    // Which the app must read as a failure: a field whose solve stopped at
-    // the cap is a field that was never solved, and exporting its iterate
-    // reports a non-solution as a result.
-    REQUIRE_FALSE(converged(2000, 2000));
-    REQUIRE(converged(165, 2000));
-    REQUIRE(converged(1, 2000));
+    // The app's own solve refuses that iterate instead of reporting it: the
+    // inner linear solve throws when it stops at its cap, so a field is never
+    // exported from a solve that did not converge. The nonlinear iteration
+    // the app runs reads the same condition.
+    la::SparsityPattern pattern(imap);
+    for (std::int32_t i = 0; i < n; ++i) {
+        pattern.insert(i, i);
+        if (i > 0)
+            pattern.insert(i, i - 1);
+        if (i + 1 < n)
+            pattern.insert(i, i + 1);
+    }
+    pattern.finalize();
+    la::LinearSolver<double> inner;
+    la::LinearSettings settings;
+    settings.solver_type = "cg";
+    settings.rtol = 1e-12;
+    settings.atol = 1e-14;
+    settings.max_iterations = 2000;
+    la::Vector<double> guess(imap, 1);
+    guess.set(0.0);
+    REQUIRE_THROWS(solve_system(
+        [&](la::MatrixCSR<double>& assembled, la::Vector<double>& rhs) {
+            assembled = A;
+            rhs = b;
+        },
+        guess, pattern, inner, settings));
 }
 
 TEST_CASE("SolidMechanics: a linear displacement is exact on a tetrahedral mesh",
@@ -1145,8 +1167,8 @@ TEST_CASE("SolidMechanics: a linear displacement is exact on a tetrahedral mesh"
         sm.refresh(0.0);
 
         auto u = sm.solution();
-        const std::int32_t nnodes = sm.space()->dofmap()->index_map->size_local();
-        auto coords = sm.space()->tabulate_dof_coordinates(false);
+        const std::int32_t nnodes = sm.solution()->function_space()->dofmap()->index_map->size_local();
+        auto coords = sm.solution()->function_space()->tabulate_dof_coordinates(false);
 
         // u = (x, 0, 0): linear, and zero on the clamped face.
         la::Vector<double> exact(u->x()->index_map(), u->x()->bs());
@@ -1159,7 +1181,7 @@ TEST_CASE("SolidMechanics: a linear displacement is exact on a tetrahedral mesh"
 
         la::MatrixCSR<double> A(sm.pattern());
         la::Vector<double> b(u->x()->index_map(), u->x()->bs());
-        sm.assemble_steady(A, b);
+        sm.assemble_steady(A, b, 0.0);
         A.mult(exact, b); // solve for the field we already know
 
         la::Vector<double> sol(u->x()->index_map(), u->x()->bs());
@@ -1197,7 +1219,7 @@ namespace {
         auto x = es.solution()->x();
         la::MatrixCSR<double> A(es.pattern());
         la::Vector<double> b(x->index_map(), x->bs());
-        es.assemble_steady(A, b);
+        es.assemble_steady(A, b, 0.0);
 
         la::KrylovSolver<double> solver;
         solver.set_operator(A);

@@ -20,21 +20,7 @@ using hellofem::app::Expression;
 using hellofem::app::from_si;
 using hellofem::app::parse_model_java;
 using hellofem::app::parse_si;
-using hellofem::app::parse_unit;
 using hellofem::app::to_si;
-
-TEST_CASE("parse_unit converts to SI", "[app][units]")
-{
-    REQUIRE(parse_unit("m") == Approx(1.0));
-    REQUIRE(parse_unit("cm") == Approx(1e-2));
-    REQUIRE(parse_unit("mm") == Approx(1e-3));
-    REQUIRE(parse_unit("GPa") == Approx(1e9));
-    REQUIRE(parse_unit("MPa") == Approx(1e6));
-    REQUIRE(parse_unit("mV") == Approx(1e-3));
-    REQUIRE(parse_unit("W/(m*K)") == Approx(1.0));
-    REQUIRE(parse_unit("kg/m^3") == Approx(1.0));
-    REQUIRE(parse_unit("1/K") == Approx(1.0));
-}
 
 TEST_CASE("parse_si handles bare numbers and unit literals", "[app][units]")
 {
@@ -284,7 +270,7 @@ TEST_CASE("a parameter is evaluated against the parameters stated before it",
     REQUIRE(model.parameters.back().si == Catch::Approx(0.04));
 
     REQUIRE_THROWS_AS(parse_model_java(write_model_with_study(
-        "    model.param().set(\"bad\", \"2*nope\", \"unknown name\");\n")),
+                          "    model.param().set(\"bad\", \"2*nope\", \"unknown name\");\n")),
         std::runtime_error);
 }
 

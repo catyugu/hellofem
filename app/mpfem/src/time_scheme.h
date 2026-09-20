@@ -156,6 +156,12 @@ namespace hellofem::app {
     /// what keeps a BDF2 run second order when the step size changes.
     TimeWeights bdf_weights(int order, TimeSteps steps);
 
+    /// The one time level of a steady problem: the degenerate one-level
+    /// scheme `K u = f` of the same `M u' + K u = f` a transient assembles a
+    /// step of, so a physics states its steady system through the same
+    /// `assemble_step` it states a time step through.
+    TimeLevel steady_level(double t);
+
     /// The first step of a run, as a fraction of the span it integrates: the
     /// reference takes it below this, and its own log shows the value itself
     /// (0.6 s over its 600 s span), so the derivative condition of
