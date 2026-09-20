@@ -158,9 +158,10 @@ namespace hellofem::app {
 
     void SolidMechanicsSolver::set_thermal_expansion(
         std::shared_ptr<const fem::Function<double>> T,
-        std::shared_ptr<CellProperty> alpha, double t_ref)
+        std::shared_ptr<DomainProperty> alpha, double t_ref)
     {
-        thermal_ = Thermal {std::move(T), std::move(alpha), t_ref};
+        thermal_expansion_
+            = ThermalExpansion {std::move(T), std::move(alpha), t_ref};
     }
 
     void SolidMechanicsSolver::refresh(double t)
@@ -170,8 +171,8 @@ namespace hellofem::app {
             E_->update(t);
         if (nu_)
             nu_->update(t);
-        if (thermal_)
-            thermal_->alpha->update(t);
+        if (thermal_expansion_)
+            thermal_expansion_->alpha->update(t);
     }
 
     void SolidMechanicsSolver::assemble_steady(la::MatrixCSR<double>& A,
@@ -184,11 +185,12 @@ namespace hellofem::app {
 
         // RHS: thermal expansion load ∫ Bᵀ sigma_th.
         b.set(0.0);
-        if (thermal_) {
-            auto t_ref = std::make_shared<fem::Constant<double>>(thermal_->t_ref);
+        if (thermal_expansion_) {
+            auto t_ref = std::make_shared<fem::Constant<double>>(
+                thermal_expansion_->t_ref);
             add_load(b,
-                {thermal_->T, thermal_->alpha->function(), E_->function(),
-                    nu_->function()},
+                {thermal_expansion_->T, thermal_expansion_->alpha->function(),
+                    E_->function(), nu_->function()},
                 kernels::thermal_expansion_load, {std::move(t_ref)});
         }
 

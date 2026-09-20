@@ -58,7 +58,7 @@ namespace {
             box.mesh, box.boundary, box.cells, 1);
         solver->set_conductivity(test::constant_property(box.mesh, box.cells, 1.0));
         solver->set_thermal_mass(test::constant_property(box.mesh, box.cells, 1.0));
-        auto source = std::make_shared<CellProperty>(box.mesh, box.cells,
+        auto source = std::make_shared<DomainProperty>(box.mesh, box.cells,
             no_params());
         source->set_expression(1, problem.derivative);
         solver->add_source({1}, source);
@@ -192,7 +192,7 @@ namespace {
             box = test::make_box_fixture({0, 0, 0}, {1, 0.2, 0.2}, {8, 1, 1});
             solver = std::make_shared<HeatTransferSolver>(
                 box.mesh, box.boundary, box.cells, 1);
-            auto k = std::make_shared<CellProperty>(box.mesh, box.cells,
+            auto k = std::make_shared<DomainProperty>(box.mesh, box.cells,
                 std::unordered_map<std::string, double> {
                     {"k0", 45.0}, {"alpha_k", alpha}, {"Tref", 293.15}});
             k->bind_field("T", solver->solution());
@@ -388,7 +388,7 @@ TEST_CASE("BDF: the weights follow the steps, the controller the estimates",
                 test::constant_property(box.mesh, box.cells, 1.0));
             solver->set_thermal_mass(
                 test::constant_property(box.mesh, box.cells, 1.0));
-            auto source = std::make_shared<CellProperty>(
+            auto source = std::make_shared<DomainProperty>(
                 box.mesh, box.cells, no_params());
             source->set_expression(1, "3*t*t");
             solver->add_source({1}, source);
@@ -565,7 +565,7 @@ TEST_CASE("Transient heat: a solution-independent nonlinear law matches the line
     auto run = [&](bool field_dependent) {
         auto solver = std::make_shared<HeatTransferSolver>(
             box.mesh, box.boundary, box.cells, 1);
-        auto k = std::make_shared<CellProperty>(box.mesh, box.cells,
+        auto k = std::make_shared<DomainProperty>(box.mesh, box.cells,
             std::unordered_map<std::string, double> {
                 {"k0", 1.0}, {"alpha_k", 0.0}, {"Tref", 0.0}});
         if (field_dependent) {
@@ -576,7 +576,7 @@ TEST_CASE("Transient heat: a solution-independent nonlinear law matches the line
             k->set_expression(1, "k0");
         solver->set_conductivity(k);
         solver->set_thermal_mass(test::constant_property(box.mesh, box.cells, 1.0));
-        auto source = std::make_shared<CellProperty>(box.mesh, box.cells,
+        auto source = std::make_shared<DomainProperty>(box.mesh, box.cells,
             no_params());
         source->set_expression(1, "3*t*t");
         solver->add_source({1}, source);

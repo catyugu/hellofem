@@ -68,15 +68,15 @@ namespace hellofem::app {
                             throw std::runtime_error("heat: the heat flux '"
                                 + feature.tag + "' is of type '" + flux
                                 + "', which the app does not solve");
-                        auto h = ctx.uniform_property(feature.required("h"));
                         // The ambient temperature is `Text`. The feature also
                         // carries a `minput_temperature`, but it is inert:
                         // measured on the busbar model, setting it to 100 degC
                         // leaves the solution bit-for-bit identical to the
                         // default, while `Text` moves the peak by 63 K.
-                        auto t_inf = ctx.uniform_property(feature.required("Text"));
                         for (int id : feature.selection)
-                            solver_->add_convection(id, h, t_inf);
+                            solver_->add_convection(
+                                ctx.facet_property(feature.required("h"), id),
+                                ctx.facet_property(feature.required("Text"), id));
                     }
                     else if (feature.type == "SolidLayeredShell") {
                         // COMSOL's thin layer, thermally thin (the layer
@@ -111,10 +111,8 @@ namespace hellofem::app {
                         // of the domain it borders and from one boundary of
                         // the selection to the next. A facet integral reads
                         // its coefficient off the adjacent cell, so one
-                        // integral carries one value: the selection is split
-                        // by material, one integral each, with that
-                        // material's conductivity uniform over the mesh.
-                        std::map<const Material*, std::set<int>> by_material;
+                        // integral carries one value: one integral per
+                        // boundary, each with its own boundary's material.
                         for (int id : feature.selection) {
                             const Material* material
                                 = ctx.model().material_on_boundary(id);
@@ -123,9 +121,6 @@ namespace hellofem::app {
                                     + feature.tag + "' sits on boundary "
                                     + std::to_string(id)
                                     + ", which carries no material");
-                            by_material[material].insert(id);
-                        }
-                        for (const auto& [material, boundaries] : by_material) {
                             const MaterialProperty* k
                                 = material->property("thermalconductivity");
                             if (k == nullptr)
@@ -133,9 +128,9 @@ namespace hellofem::app {
                                     + feature.tag + "': material '"
                                     + material->tag
                                     + "' defines no thermalconductivity");
-                            solver_->add_thin_layer(boundaries,
-                                ctx.uniform_property(feature.required("lth")),
-                                ctx.uniform_property(k->scalar_value()));
+                            solver_->add_thin_layer(
+                                ctx.facet_property(feature.required("lth"), id),
+                                ctx.facet_property(k->scalar_value(), id));
                         }
                     }
                     else if (feature.type == "Init" or feature.type.empty()) {
@@ -238,7 +233,7 @@ namespace hellofem::app {
     }
 
     void HeatTransferSolver::add_source(const std::set<int>& domains,
-        std::shared_ptr<CellProperty> Q)
+        std::shared_ptr<DomainProperty> Q)
     {
         // COMSOL lets a later feature override an earlier one on the same
         // domain. The app integrates a source per feature, so two features
@@ -254,9 +249,31 @@ namespace hellofem::app {
         sources_.push_back({domains, std::move(Q)});
     }
 
+    void HeatTransferSolver::add_convection(std::shared_ptr<FacetProperty> h,
+        std::shared_ptr<FacetProperty> t_inf)
+    {
+        // One integral carries the data of one boundary: the coefficients of
+        // another boundary would leave this one at zero.
+        if (h->boundary() != t_inf->boundary())
+            throw std::runtime_error("heat: convection with h on boundary "
+                + std::to_string(h->boundary()) + " and Text on boundary "
+                + std::to_string(t_inf->boundary()));
+        convections_.push_back({std::move(h), std::move(t_inf)});
+    }
+
+    void HeatTransferSolver::add_thin_layer(std::shared_ptr<FacetProperty> ds,
+        std::shared_ptr<FacetProperty> k)
+    {
+        if (ds->boundary() != k->boundary())
+            throw std::runtime_error("heat: thin layer with ds on boundary "
+                + std::to_string(ds->boundary()) + " and k on boundary "
+                + std::to_string(k->boundary()));
+        thin_layers_.push_back({std::move(ds), std::move(k)});
+    }
+
     void HeatTransferSolver::set_joule_source(
         std::shared_ptr<const fem::Function<double>> V,
-        std::shared_ptr<CellProperty> sigma)
+        std::shared_ptr<DomainProperty> sigma)
     {
         joule_V_ = std::move(V);
         joule_sigma_ = std::move(sigma);
@@ -312,7 +329,7 @@ namespace hellofem::app {
         // Convection load h Tinf.
         for (const auto& cv : convections_)
             add_load(f, {cv.h->function(), cv.t_inf->function()},
-                kernels::convection_load, {cv.boundary_id});
+                kernels::convection_load, {cv.h->boundary()});
     }
 
     void HeatTransferSolver::assemble_step(la::MatrixCSR<double>& A,
@@ -341,13 +358,13 @@ namespace hellofem::app {
         // Convection Robin mass.
         for (const auto& cv : convections_)
             add_operator(K, rows, {cv.h->function()}, kernels::convection_mass,
-                {cv.boundary_id});
+                {cv.h->boundary()});
 
         // Thin layers: their own tangential conduction, which the steady
         // problem carries as well (the mass weight above is zero there).
         for (const auto& layer : thin_layers_)
             add_operator(K, rows, {layer.ds->function(), layer.k->function()},
-                kernels::thin_layer_diffusion, layer.boundaries, true);
+                kernels::thin_layer_diffusion, {layer.ds->boundary()}, true);
 
         // LHS operator: a0 M + b0 K.
         auto& av = A.values();

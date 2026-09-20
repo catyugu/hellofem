@@ -54,10 +54,10 @@ namespace hellofem::app {
     /// bound with `bind_field`; a bound field shadows a parameter of the
     /// same name (as in COMSOL, where the dependent variable wins inside a
     /// physics-owned expression).
-    class CellProperty {
+    class DomainProperty {
     public:
         /// @param[in] params Model parameters, bound by value.
-        CellProperty(std::shared_ptr<const mesh::Mesh<double>> mesh,
+        DomainProperty(std::shared_ptr<const mesh::Mesh<double>> mesh,
             std::shared_ptr<const mesh::MeshTags<int>> cell_tags,
             std::unordered_map<std::string, double> params);
 
@@ -127,6 +127,89 @@ namespace hellofem::app {
         double& cell_entry(std::int32_t cell);
         void cell_centroids();
         void resolve_cell_expressions();
+    };
+
+    /// A material property on a boundary: the value of one COMSOL boundary
+    /// (1-based id), either a constant or a model expression. An expression
+    /// may reference the model parameters, the coordinates, time and the
+    /// solution fields bound with `bind_field`.
+    ///
+    /// A facet integral reads its coefficient off the cell adjacent to its
+    /// facet, so a boundary value is carried by the cells around the
+    /// boundary: the expression is read at the centroid of each facet of the
+    /// boundary and written into the cells next to it — both cells of an
+    /// interior facet, so that either side reads the same value.
+    class FacetProperty {
+    public:
+        /// @param[in] boundary 1-based COMSOL boundary id of the value.
+        /// @param[in] params Model parameters, bound by value.
+        FacetProperty(std::shared_ptr<const mesh::Mesh<double>> mesh,
+            std::shared_ptr<const mesh::MeshTags<int>> facet_tags, int boundary,
+            std::unordered_map<std::string, double> params);
+
+        /// The boundary the value belongs to.
+        int boundary() const { return boundary_; }
+
+        /// Set the model expression of the boundary. An expression that
+        /// reads a bound field makes the property solution dependent.
+        void set_expression(std::string_view text);
+
+        /// Bind the solution field that `symbol` refers to in the expression
+        /// (scalar field). Call before `set_expression`.
+        ///
+        /// The field is read at the centroids of the boundary's facets, so it
+        /// must live on the mesh this property was built on.
+        void bind_field(std::string symbol,
+            std::shared_ptr<const fem::Function<double>> field);
+
+        /// Whether the expression reads a bound solution field, i.e. whether
+        /// the property has to be re-evaluated as the solution changes.
+        bool field_dependent() const { return field_dependent_; }
+
+        /// Re-evaluate the value at time `t`, at the centroid of each facet
+        /// of the boundary. A field-bound expression reads the field values
+        /// there.
+        void update(double t);
+
+        /// The per-cell values the facet integrals of the boundary read, as
+        /// a DG0 function.
+        std::shared_ptr<fem::Function<double>> function() const { return f_; }
+
+    private:
+        std::shared_ptr<const mesh::Mesh<double>> mesh_;
+        std::shared_ptr<const mesh::MeshTags<int>> facet_tags_;
+        int boundary_;
+        std::shared_ptr<fem::Function<double>> f_;
+        std::shared_ptr<Expression> expression_;
+        bool field_dependent_ = false;
+        /// Whether the value varies from one point of the boundary to the
+        /// next, i.e. whether the expression reads the coordinates or a bound
+        /// field.
+        bool varies_over_boundary_ = false;
+
+        std::unordered_map<std::string, double> vars_;
+        std::unordered_map<std::string, double*> var_ptrs_;
+
+        struct BoundField {
+            std::string symbol;
+            std::shared_ptr<const fem::Function<double>> function;
+            std::vector<double> values; // one per facet
+            /// Whether the expression reads the field. A field no expression
+            /// reads is never evaluated.
+            bool used = false;
+        };
+        std::vector<BoundField> fields_;
+
+        // The facets of the boundary, one entry each: the point the value is
+        // read at (3 coordinates per facet, facet-major), the cell that
+        // carries it, and the cell across an interior facet (-1 for an
+        // exterior one). Filled on first use.
+        std::vector<double> site_points_;
+        std::vector<std::int32_t> site_cells_;
+        std::vector<std::int32_t> site_neighbours_;
+
+        double& cell_entry(std::int32_t cell);
+        void resolve_sites();
     };
 
 } // namespace hellofem::app

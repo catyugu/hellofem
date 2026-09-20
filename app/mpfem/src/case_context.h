@@ -5,6 +5,7 @@
 #include "field.h"
 #include "mesh_loader.h"
 #include "model_script.h"
+#include "property.h"
 
 #include <functional>
 #include <memory>
@@ -43,29 +44,33 @@ namespace hellofem::app {
         /// A cell coefficient: `value(material)` gives its expression on the
         /// domains of that material (an empty string leaves a domain without
         /// one, i.e. at the zero of the coefficient).
-        std::shared_ptr<CellProperty> property(
+        std::shared_ptr<DomainProperty> property(
             const std::function<std::string(const Material&)>& value) const;
 
         /// The material property `name`, on every domain whose material
         /// defines one.
-        std::shared_ptr<CellProperty> material_property(
+        std::shared_ptr<DomainProperty> material_property(
             std::string_view name) const;
 
-        /// One expression on every cell. A coefficient of a facet integral
-        /// is one expression on all cells, because the facet kernels read
-        /// the coefficient of the cell adjacent to their facet — so a
-        /// boundary condition whose value differs from one boundary to the
-        /// next is not one integral with one coefficient but one integral
-        /// per value, each carrying its own (COMSOL's own split of a tagged
-        /// boundary integral).
-        std::shared_ptr<CellProperty> uniform_property(
+        /// One expression on every domain of the mesh. A cell coefficient
+        /// reads its value per cell, so a source on a set of domains is one
+        /// integral with one such coefficient.
+        std::shared_ptr<DomainProperty> uniform_property(
             std::string_view text) const;
+
+        /// The value of boundary `boundary` (1-based COMSOL id): one model
+        /// expression on that boundary. A facet integral reads its coefficient
+        /// off the cell next to its facet, so a boundary condition whose value
+        /// differs from one boundary to the next is not one integral with one
+        /// coefficient but one integral per boundary, each carrying its own.
+        std::shared_ptr<FacetProperty> facet_property(
+            std::string_view text, int boundary) const;
 
         /// A cell coefficient without a model value: zero on every domain,
         /// with every solution published so far bound to it. A physics fills
         /// it per domain from its own features; `property` and
         /// `uniform_property` start from it.
-        std::shared_ptr<CellProperty> zero_property() const;
+        std::shared_ptr<DomainProperty> zero_property() const;
 
         /// Publish the state the rest of the case reads a field at, under
         /// `symbol`, the COMSOL dependent-variable name every model

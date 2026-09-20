@@ -19,11 +19,11 @@ namespace hellofem::app {
             std::shared_ptr<const mesh::MeshTags<int>> facet_tags,
             std::shared_ptr<const mesh::MeshTags<int>> cell_tags, int order);
 
-        void set_conductivity(std::shared_ptr<CellProperty> k)
+        void set_conductivity(std::shared_ptr<DomainProperty> k)
         {
             k_ = std::move(k);
         }
-        void set_thermal_mass(std::shared_ptr<CellProperty> rho_cp)
+        void set_thermal_mass(std::shared_ptr<DomainProperty> rho_cp)
         {
             rho_cp_ = std::move(rho_cp);
         }
@@ -32,12 +32,12 @@ namespace hellofem::app {
         /// source belongs to the domains its feature selects, and a domain no
         /// feature selects carries none.
         void add_source(const std::set<int>& domains,
-            std::shared_ptr<CellProperty> Q);
+            std::shared_ptr<DomainProperty> Q);
 
         /// Joule heating source from an electric solution: adds
         /// ∫ sigma |grad V|² phi to the heat load.
         void set_joule_source(std::shared_ptr<const fem::Function<double>> V,
-            std::shared_ptr<CellProperty> sigma);
+            std::shared_ptr<DomainProperty> sigma);
 
         /// T = value(t) on a boundary.
         void add_temperature_bc(int boundary_id, ScalarExpression value)
@@ -45,26 +45,18 @@ namespace hellofem::app {
             temps_[boundary_id] = std::move(value);
         }
 
-        /// Robin condition h(t) (T - Tinf(t)) on a boundary. Both
-        /// coefficients are per-cell properties (uniform boundary data is
-        /// one expression on every cell).
-        void add_convection(int boundary_id, std::shared_ptr<CellProperty> h,
-            std::shared_ptr<CellProperty> t_inf)
-        {
-            convections_.push_back(
-                {boundary_id, std::move(h), std::move(t_inf)});
-        }
+        /// Robin condition h (T - Tinf) on the boundary both coefficients
+        /// belong to.
+        void add_convection(std::shared_ptr<FacetProperty> h,
+            std::shared_ptr<FacetProperty> t_inf);
 
-        /// A thin layer on the given boundaries: a shell of thickness `ds`
+        /// A thin layer on the boundary of `ds`: a shell of thickness `ds`
         /// and conductivity `k`, thermally thin — the tangential conduction
         /// `ds k grad_t T . grad_t phi` joins the operator and no temperature
         /// difference builds up across the layer's thickness. A boundary
         /// inside the domain (an imprinted face) carries the layer too.
-        void add_thin_layer(const std::set<int>& boundaries,
-            std::shared_ptr<CellProperty> ds, std::shared_ptr<CellProperty> k)
-        {
-            thin_layers_.push_back({boundaries, std::move(ds), std::move(k)});
-        }
+        void add_thin_layer(std::shared_ptr<FacetProperty> ds,
+            std::shared_ptr<FacetProperty> k);
 
         /// Initial temperature of a transient run (the model's initial-value
         /// expression). Without one, COMSOL's default (see
@@ -92,29 +84,27 @@ namespace hellofem::app {
 
     private:
         struct Convection {
-            int boundary_id;
-            std::shared_ptr<CellProperty> h;
-            std::shared_ptr<CellProperty> t_inf;
+            std::shared_ptr<FacetProperty> h;
+            std::shared_ptr<FacetProperty> t_inf;
         };
 
         struct ThinLayer {
-            std::set<int> boundaries;
-            std::shared_ptr<CellProperty> ds;
-            std::shared_ptr<CellProperty> k;
+            std::shared_ptr<FacetProperty> ds;
+            std::shared_ptr<FacetProperty> k;
         };
 
         /// A volumetric heat source over the domains it belongs to.
         struct Source {
             std::set<int> domains;
-            std::shared_ptr<CellProperty> Q;
+            std::shared_ptr<DomainProperty> Q;
         };
 
         /// Assembly pieces shared by the steady and the transient path.
         void assemble_sources(la::Vector<double>& f) const;
 
-        std::shared_ptr<CellProperty> k_, rho_cp_;
+        std::shared_ptr<DomainProperty> k_, rho_cp_;
         std::shared_ptr<const fem::Function<double>> joule_V_;
-        std::shared_ptr<CellProperty> joule_sigma_;
+        std::shared_ptr<DomainProperty> joule_sigma_;
         std::vector<Source> sources_;
         std::map<int, ScalarExpression> temps_;
         std::vector<Convection> convections_;

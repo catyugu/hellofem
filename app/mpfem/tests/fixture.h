@@ -98,13 +98,26 @@ namespace hellofem::app::test {
 
     /// A DG0 property holding a constant on domain 1 (the single domain of
     /// the box fixtures).
-    inline std::shared_ptr<CellProperty> constant_property(
+    inline std::shared_ptr<DomainProperty> constant_property(
         const std::shared_ptr<const mesh::Mesh<double>>& mesh,
         const std::shared_ptr<const mesh::MeshTags<int>>& tags, double value)
     {
-        auto property = std::make_shared<CellProperty>(mesh, tags,
+        auto property = std::make_shared<DomainProperty>(mesh, tags,
             std::unordered_map<std::string, double> {});
         property->set_expression(1, std::to_string(value));
+        property->update(0.0); // values are otherwise written on refresh
+        return property;
+    }
+
+    /// A boundary property holding a constant on one boundary.
+    inline std::shared_ptr<FacetProperty> constant_facet_property(
+        const std::shared_ptr<const mesh::Mesh<double>>& mesh,
+        const std::shared_ptr<const mesh::MeshTags<int>>& tags, int boundary,
+        double value)
+    {
+        auto property = std::make_shared<FacetProperty>(mesh, tags, boundary,
+            std::unordered_map<std::string, double> {});
+        property->set_expression(std::to_string(value));
         property->update(0.0); // values are otherwise written on refresh
         return property;
     }

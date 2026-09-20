@@ -30,10 +30,11 @@ namespace la = hellofem::la;
 
 using Catch::Approx;
 using namespace hellofem::app;
+using hellofem::app::test::constant_facet_property;
 using hellofem::app::test::constant_property;
 using hellofem::app::test::make_box_fixture;
 
-TEST_CASE("CellProperty: sparse domains and field-dependent values", "[app][physics]")
+TEST_CASE("DomainProperty: sparse domains and field-dependent values", "[app][physics]")
 {
     // 3x1x1 box: cell 1 belongs to domain 2, cell 2 to domain 1, cell 0 to
     // neither (its value stays at the initial zero).
@@ -49,7 +50,7 @@ TEST_CASE("CellProperty: sparse domains and field-dependent values", "[app][phys
     for (std::int32_t d = 0; d < ht.space()->dofmap()->index_map->size_local(); ++d)
         field.x()->array()[static_cast<std::size_t>(d)] = coords[3 * d];
 
-    CellProperty property(fixture.mesh, tags, {});
+    DomainProperty property(fixture.mesh, tags, {});
     property.bind_field("T", ht.solution());
     property.set_expression(2, "7.0"); // domain 2: constant
     property.set_expression(1, "2*T"); // domain 1: 2x
@@ -69,7 +70,7 @@ TEST_CASE("CellProperty: sparse domains and field-dependent values", "[app][phys
     REQUIRE(value_on_cell(0) == Approx(0.0));
 }
 
-TEST_CASE("CellProperty: a law reading no field does not evaluate a bound one",
+TEST_CASE("DomainProperty: a law reading no field does not evaluate a bound one",
     "[app][physics]")
 {
     // A physics publishes its solution for every material law that may read
@@ -77,7 +78,7 @@ TEST_CASE("CellProperty: a law reading no field does not evaluate a bound one",
     // not be refused a field whose value shape it never asked for.
     auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {2, 2, 1});
     SolidMechanicsSolver sm(f.mesh, f.boundary, f.cells, 1); // vector solution
-    CellProperty property(f.mesh, f.cells, {});
+    DomainProperty property(f.mesh, f.cells, {});
     property.bind_field("u", sm.solution());
     property.set_expression(1, "3.0");
     REQUIRE_FALSE(property.field_dependent());
@@ -88,6 +89,87 @@ TEST_CASE("CellProperty: a law reading no field does not evaluate a bound one",
     REQUIRE(property.function()->x()->array()[static_cast<std::size_t>(
                 dofmap.cell_dofs(0).front())]
         == Approx(3.0));
+}
+
+TEST_CASE("FacetProperty: the value is carried by the cells around its boundary",
+    "[app][physics]")
+{
+    // A facet integral reads its coefficient off the cell next to its facet,
+    // so the value of a boundary lives on the cells around it — and only
+    // there: a cell away from the boundary keeps zero, and no other
+    // boundary's cells are touched.
+    auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {2, 2, 2});
+    auto property = constant_facet_property(f.mesh, f.boundary, 6, 3.0);
+
+    const std::size_t nc = f.mesh->topology()->index_map(3)->size_local();
+    std::vector<char> around(nc, 0);
+    std::size_t count = 0;
+    const auto& indices = f.boundary->indices();
+    const auto& boundaries = f.boundary->values();
+    auto f_to_c = f.mesh->topology()->connectivity(2, 3);
+    for (std::size_t i = 0; i < indices.size(); ++i) {
+        if (boundaries[i] != 6)
+            continue;
+        const auto cell = f_to_c->links(indices[i])[0];
+        if (not around[static_cast<std::size_t>(cell)]) {
+            around[static_cast<std::size_t>(cell)] = 1;
+            ++count;
+        }
+    }
+    REQUIRE(count > 0);
+    REQUIRE(count < nc); // the fixture separates the two sets
+
+    const auto& values = property->function()->x()->array();
+    const auto& dofmap = *property->function()->function_space()->dofmap();
+    for (std::int32_t c = 0; c < static_cast<std::int32_t>(nc); ++c)
+        REQUIRE(values[static_cast<std::size_t>(dofmap.cell_dofs(c).front())]
+            == Approx(around[static_cast<std::size_t>(c)] ? 3.0 : 0.0));
+}
+
+TEST_CASE("FacetProperty: a value that varies needs one value per facet",
+    "[app][physics]")
+{
+    // The value of a boundary is one value per facet, and the DG0 coefficient
+    // a facet integral reads carries one value per cell: a cell the boundary
+    // reaches through two facets cannot carry both. The fixture tags two
+    // facets of one cell as one boundary — a model the app refuses rather
+    // than solve with one facet's value standing in for the other's.
+    auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {2, 2, 2});
+    auto f_to_c = f.mesh->topology()->connectivity(2, 3);
+    std::vector<std::int32_t> indices;
+    std::vector<int> values;
+    std::int32_t first = -1;
+    for (std::int32_t facet = 0;
+        facet < static_cast<std::int32_t>(f_to_c->num_nodes()); ++facet) {
+        auto cells = f_to_c->links(facet);
+        if (cells.size() != 1)
+            continue; // interior
+        if (first < 0 or cells[0] == first) {
+            first = cells[0];
+            indices.push_back(facet);
+            values.push_back(9);
+        }
+        if (indices.size() == 2)
+            break;
+    }
+    REQUIRE(indices.size() == 2);
+    auto tags = std::make_shared<hellofem::mesh::MeshTags<int>>(
+        f.mesh->topology(), 2, std::move(indices), std::move(values), "doubled");
+
+    auto varying = std::make_shared<FacetProperty>(f.mesh, tags, 9,
+        std::unordered_map<std::string, double> {});
+    varying->set_expression("1+x+y+z");
+    REQUIRE_THROWS(varying->update(0.0));
+
+    // One value everywhere is what the representation carries.
+    auto constant = std::make_shared<FacetProperty>(f.mesh, tags, 9,
+        std::unordered_map<std::string, double> {});
+    constant->set_expression("5");
+    constant->update(0.0);
+    const auto& dofmap = *constant->function()->function_space()->dofmap();
+    REQUIRE(constant->function()->x()->array()[static_cast<std::size_t>(
+                dofmap.cell_dofs(first).front())]
+        == Approx(5.0));
 }
 
 TEST_CASE("Electrostatics: -div(sigma grad V)=0 with V=V0 on x+, V=0 on x-", "[app][physics]")
@@ -180,7 +262,7 @@ TEST_CASE("Electrostatics: voltage-dependent conductivity drives a nonlinear sol
     ElectrostaticsSolver es(f.mesh, f.boundary, f.cells, 1);
     es.add_voltage_bc(2, ScalarExpression(1.0));
     es.add_voltage_bc(1, ScalarExpression(0.0));
-    auto sigma = std::make_shared<CellProperty>(f.mesh, f.cells,
+    auto sigma = std::make_shared<DomainProperty>(f.mesh, f.cells,
         std::unordered_map<std::string, double> {});
     sigma->bind_field("V", es.solution());
     sigma->set_expression(1, "1 + V");
@@ -213,11 +295,10 @@ TEST_CASE("HeatTransfer: steady -div(k grad T)=0 with Robin convection", "[app][
     auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {4, 4, 1});
     HeatTransferSolver ht(f.mesh, f.boundary, f.cells, 1);
     auto k = constant_property(f.mesh, f.cells, 1.0);
-    auto h = constant_property(f.mesh, f.cells, 1.0);
-    auto t_inf = constant_property(f.mesh, f.cells, 0.0);
     ht.set_conductivity(k);
     ht.add_temperature_bc(1, ScalarExpression(1.0)); // x- : T=1
-    ht.add_convection(2, h, t_inf); // x+ : h=1, Tinf=0
+    ht.add_convection(constant_facet_property(f.mesh, f.boundary, 2, 1.0),
+        constant_facet_property(f.mesh, f.boundary, 2, 0.0)); // x+ : h=1, Tinf=0
 
     ht.solve_steady(0.0);
     auto T = ht.solution();
@@ -232,6 +313,38 @@ TEST_CASE("HeatTransfer: steady -div(k grad T)=0 with Robin convection", "[app][
     }
     INFO("heat max error = " << max_err);
     REQUIRE(max_err < 1e-8);
+}
+
+TEST_CASE("HeatTransfer: a boundary value is read on the boundary", "[app][physics]")
+{
+    // The Robin coefficient of x+ is h = 1 + x, which is 2 *on the boundary*:
+    // with k = 1 and T = 1 on x-, the exact end temperature is
+    // T(1) = 1 - h(1)/(1 + h(1)) = 1/3. Reading h at the centroid of the cells
+    // next to the boundary instead — x = 0.875 on this four-cell rod — gives
+    // 0.347826, which is what a value carried by the cells rather than by the
+    // boundary returns.
+    auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {4, 4, 1});
+    HeatTransferSolver ht(f.mesh, f.boundary, f.cells, 1);
+    ht.set_conductivity(constant_property(f.mesh, f.cells, 1.0));
+    ht.add_temperature_bc(1, ScalarExpression(1.0)); // x- : T=1
+    auto h = std::make_shared<FacetProperty>(f.mesh, f.boundary, 2,
+        std::unordered_map<std::string, double> {});
+    h->set_expression("1+x");
+    // A condition carries the data of one boundary: coefficients of another
+    // boundary are refused rather than left out of the integral.
+    REQUIRE_THROWS(ht.add_convection(
+        h, constant_facet_property(f.mesh, f.boundary, 1, 0.0)));
+    ht.add_convection(h, constant_facet_property(f.mesh, f.boundary, 2, 0.0));
+
+    ht.solve_steady(0.0);
+
+    auto coords = ht.space()->tabulate_dof_coordinates(false);
+    double at_end = 0.0;
+    for (std::int32_t d = 0; d < ht.space()->dofmap()->index_map->size_local(); ++d)
+        if (coords[3 * d] > 0.99)
+            at_end = ht.solution()->x()->array()[static_cast<std::size_t>(d)];
+    INFO("T(1) = " << at_end);
+    REQUIRE(at_end == Approx(1.0 / 3.0).margin(1e-12));
 }
 
 TEST_CASE("HeatTransfer: nonlinear k(T) matches the analytic steady profile", "[app][physics]")
@@ -253,7 +366,7 @@ TEST_CASE("HeatTransfer: nonlinear k(T) matches the analytic steady profile", "[
 
     auto f = make_box_fixture({0, 0, 0}, {length, 0.2, 0.2}, {8, 1, 1});
     HeatTransferSolver ht(f.mesh, f.boundary, f.cells, 1);
-    auto k = std::make_shared<CellProperty>(f.mesh, f.cells,
+    auto k = std::make_shared<DomainProperty>(f.mesh, f.cells,
         std::unordered_map<std::string, double> {
             {"k0", k0}, {"alpha_k", a}, {"Tref", t_ref}});
     k->bind_field("T", ht.solution());
@@ -311,14 +424,14 @@ namespace {
     la::MatrixCSR<double> thin_layer_operator(
         const hellofem::app::test::BoxFixture& f,
         const std::shared_ptr<hellofem::mesh::MeshTags<int>>& boundary,
-        const std::set<int>& layer_faces, double ds, double k, int order)
+        int layer_boundary, double ds, double k, int order)
     {
         HeatTransferSolver ht(f.mesh, boundary, f.cells, order);
         ht.set_conductivity(constant_property(f.mesh, f.cells, 0.0));
         ht.add_source({1}, constant_property(f.mesh, f.cells, 0.0));
-        ht.add_thin_layer(layer_faces,
-            constant_property(f.mesh, f.cells, ds),
-            constant_property(f.mesh, f.cells, k));
+        ht.add_thin_layer(
+            constant_facet_property(f.mesh, boundary, layer_boundary, ds),
+            constant_facet_property(f.mesh, boundary, layer_boundary, k));
         ht.refresh(0.0);
         la::MatrixCSR<double> A(ht.pattern());
         la::Vector<double> b(ht.solution()->x()->index_map(),
@@ -346,7 +459,7 @@ TEST_CASE("HeatTransfer: a thin layer conducts along the boundary only",
     auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {2, 2, 2});
 
     for (const int order : {1, 2}) {
-        auto A = thin_layer_operator(f, f.boundary, {6}, ds, k_layer, order);
+        auto A = thin_layer_operator(f, f.boundary, 6, ds, k_layer, order);
         HeatTransferSolver ht(f.mesh, f.boundary, f.cells, order);
         const auto coords = ht.space()->tabulate_dof_coordinates(false);
         la::Vector<double> v(ht.solution()->x()->index_map(),
@@ -383,7 +496,7 @@ TEST_CASE("HeatTransfer: a thin layer on an imprinted face conducts too",
     auto tags = internal_plane_tags(*f.mesh, 0.25, 7);
 
     for (const int order : {1, 2}) {
-        auto A = thin_layer_operator(f, tags, {7}, ds, k_layer, order);
+        auto A = thin_layer_operator(f, tags, 7, ds, k_layer, order);
         HeatTransferSolver ht(f.mesh, tags, f.cells, order);
         const auto coords = ht.space()->tabulate_dof_coordinates(false);
         la::Vector<double> v(ht.solution()->x()->index_map(),
@@ -429,8 +542,9 @@ TEST_CASE("HeatTransfer: a thin layer does not conduct across its thickness",
         ht.add_source({1}, constant_property(f.mesh, f.cells, Q));
         ht.add_temperature_bc(1, ScalarExpression(0.0)); // x- : T = 0
         if (with_layer)
-            ht.add_thin_layer({2}, constant_property(f.mesh, f.cells, ds),
-                constant_property(f.mesh, f.cells, k_layer));
+            ht.add_thin_layer(
+                constant_facet_property(f.mesh, f.boundary, 2, ds),
+                constant_facet_property(f.mesh, f.boundary, 2, k_layer));
         ht.solve_steady(0.0);
 
         const auto coords = ht.space()->tabulate_dof_coordinates(false);
@@ -505,10 +619,12 @@ TEST_CASE("HeatTransfer: a thin layer takes the material of its own boundary",
     reference.set_conductivity(constant_property(f.mesh, f.cells, 1.0));
     reference.add_source({1}, constant_property(f.mesh, f.cells, 1.0));
     reference.add_temperature_bc(1, ScalarExpression(0.0));
-    reference.add_thin_layer({5}, constant_property(f.mesh, f.cells, thickness),
-        constant_property(f.mesh, f.cells, k_lower));
-    reference.add_thin_layer({6}, constant_property(f.mesh, f.cells, thickness),
-        constant_property(f.mesh, f.cells, k_upper));
+    reference.add_thin_layer(
+        constant_facet_property(f.mesh, f.boundary, 5, thickness),
+        constant_facet_property(f.mesh, f.boundary, 5, k_lower));
+    reference.add_thin_layer(
+        constant_facet_property(f.mesh, f.boundary, 6, thickness),
+        constant_facet_property(f.mesh, f.boundary, 6, k_upper));
     reference.refresh(0.0);
     reference.solve_steady(0.0);
 
@@ -562,8 +678,12 @@ TEST_CASE("HeatTransfer: a thin layer takes the material of its own boundary",
     single.set_conductivity(constant_property(f.mesh, f.cells, 1.0));
     single.add_source({1}, constant_property(f.mesh, f.cells, 1.0));
     single.add_temperature_bc(1, ScalarExpression(0.0));
-    single.add_thin_layer({5, 6}, constant_property(f.mesh, f.cells, thickness),
-        constant_property(f.mesh, f.cells, k_lower));
+    single.add_thin_layer(
+        constant_facet_property(f.mesh, f.boundary, 5, thickness),
+        constant_facet_property(f.mesh, f.boundary, 5, k_lower));
+    single.add_thin_layer(
+        constant_facet_property(f.mesh, f.boundary, 6, thickness),
+        constant_facet_property(f.mesh, f.boundary, 6, k_lower));
     single.refresh(0.0);
     single.solve_steady(0.0);
     const double against_single = worst_from(
@@ -619,7 +739,7 @@ TEST_CASE("HeatTransfer: a source is integrated over the domains it belongs to",
 
     // A DG0 property holding a constant on both domains.
     const auto uniform = [&](double value) {
-        auto property = std::make_shared<CellProperty>(f.mesh, cells,
+        auto property = std::make_shared<DomainProperty>(f.mesh, cells,
             std::unordered_map<std::string, double> {});
         property->set_expression(1, std::to_string(value));
         property->set_expression(2, std::to_string(value));

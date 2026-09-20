@@ -16,7 +16,7 @@ namespace hellofem::app {
             std::shared_ptr<const mesh::MeshTags<int>> facet_tags,
             std::shared_ptr<const mesh::MeshTags<int>> cell_tags, int order);
 
-        void set_conductivity(std::shared_ptr<CellProperty> sigma)
+        void set_conductivity(std::shared_ptr<DomainProperty> sigma)
         {
             sigma_ = std::move(sigma);
         }
@@ -33,7 +33,7 @@ namespace hellofem::app {
         void constrain_solution(double t) override;
 
     private:
-        std::shared_ptr<CellProperty> sigma_;
+        std::shared_ptr<DomainProperty> sigma_;
         std::map<int, ScalarExpression> voltages_;
     };
 

@@ -16,8 +16,8 @@ namespace hellofem::app {
             std::shared_ptr<const mesh::MeshTags<int>> facet_tags,
             std::shared_ptr<const mesh::MeshTags<int>> cell_tags, int order);
 
-        void set_elastic(std::shared_ptr<CellProperty> E,
-            std::shared_ptr<CellProperty> nu)
+        void set_elastic(std::shared_ptr<DomainProperty> E,
+            std::shared_ptr<DomainProperty> nu)
         {
             E_ = std::move(E);
             nu_ = std::move(nu);
@@ -26,7 +26,7 @@ namespace hellofem::app {
         /// Thermal expansion load: sigma_th = C : (alpha (T - T_ref) I).
         void set_thermal_expansion(
             std::shared_ptr<const fem::Function<double>> T,
-            std::shared_ptr<CellProperty> alpha, double t_ref);
+            std::shared_ptr<DomainProperty> alpha, double t_ref);
 
         /// Zero displacement on a boundary.
         void add_fixed_bc(int boundary_id) { fixed_.insert(boundary_id); }
@@ -41,13 +41,13 @@ namespace hellofem::app {
         /// every component of their dofs.
         std::vector<fem::DirichletBC<double>> fixed_bcs() const;
 
-        std::shared_ptr<CellProperty> E_, nu_;
-        struct Thermal {
+        std::shared_ptr<DomainProperty> E_, nu_;
+        struct ThermalExpansion {
             std::shared_ptr<const fem::Function<double>> T;
-            std::shared_ptr<CellProperty> alpha;
+            std::shared_ptr<DomainProperty> alpha;
             double t_ref = 0.0;
         };
-        std::optional<Thermal> thermal_;
+        std::optional<ThermalExpansion> thermal_expansion_;
         std::set<int> fixed_;
     };
 

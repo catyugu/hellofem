@@ -44,9 +44,9 @@ namespace hellofem::app {
         return ScalarExpression(text, params_);
     }
 
-    std::shared_ptr<CellProperty> CaseContext::zero_property() const
+    std::shared_ptr<DomainProperty> CaseContext::zero_property() const
     {
-        auto coefficient = std::make_shared<CellProperty>(mesh_.mesh,
+        auto coefficient = std::make_shared<DomainProperty>(mesh_.mesh,
             mesh_.cell_tags, params_);
         // A material law may read any dependent variable of the model.
         for (const auto& [symbol, solution] : solutions_)
@@ -54,7 +54,7 @@ namespace hellofem::app {
         return coefficient;
     }
 
-    std::shared_ptr<CellProperty> CaseContext::property(
+    std::shared_ptr<DomainProperty> CaseContext::property(
         const std::function<std::string(const Material&)>& value) const
     {
         auto coefficient = zero_property();
@@ -67,7 +67,7 @@ namespace hellofem::app {
         return coefficient;
     }
 
-    std::shared_ptr<CellProperty> CaseContext::material_property(
+    std::shared_ptr<DomainProperty> CaseContext::material_property(
         std::string_view name) const
     {
         return property([name](const Material& material) {
@@ -76,12 +76,24 @@ namespace hellofem::app {
         });
     }
 
-    std::shared_ptr<CellProperty> CaseContext::uniform_property(
+    std::shared_ptr<DomainProperty> CaseContext::uniform_property(
         std::string_view text) const
     {
         auto coefficient = zero_property();
         for (int dom : domain_ids(*mesh_.cell_tags))
             coefficient->set_expression(dom, text);
+        return coefficient;
+    }
+
+    std::shared_ptr<FacetProperty> CaseContext::facet_property(
+        std::string_view text, int boundary) const
+    {
+        auto coefficient = std::make_shared<FacetProperty>(mesh_.mesh,
+            mesh_.facet_tags, boundary, params_);
+        // A boundary law may read any dependent variable of the model.
+        for (const auto& [symbol, solution] : solutions_)
+            coefficient->bind_field(symbol, solution);
+        coefficient->set_expression(text);
         return coefficient;
     }
 
