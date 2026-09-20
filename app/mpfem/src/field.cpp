@@ -261,6 +261,20 @@ namespace hellofem::app {
         return entities;
     }
 
+    std::vector<std::int32_t> FieldSolver::domain_cells(
+        const std::set<int>& ids) const
+    {
+        if (not cell_tags_)
+            return ids.contains(1) ? cells() : std::vector<std::int32_t> {};
+        std::vector<std::int32_t> out;
+        const auto& indices = cell_tags_->indices();
+        const auto& domains = cell_tags_->values();
+        for (std::size_t i = 0; i < indices.size(); ++i)
+            if (ids.contains(domains[i]))
+                out.push_back(indices[i]);
+        return out;
+    }
+
     std::vector<fem::DirichletBC<double>> FieldSolver::make_bcs(
         const std::map<int, ScalarExpression>& values, double t) const
     {
@@ -349,6 +363,20 @@ namespace hellofem::app {
             single_integral(fem::IntegralType::cell, cells,
                 keeping_cell_kernel(cell_precompute(coeffs), w), coeffs.size()),
             mesh_, coeffs, std::move(constants));
+        fem::assemble_vector(b, L);
+    }
+
+    void FieldSolver::add_load(la::Vector<double>& b, const Coefficients& coeffs,
+        fem::cell_kernel_weak_fn_t<double> w, const std::set<int>& domains) const
+    {
+        const auto cells = domain_cells(domains);
+        if (cells.empty())
+            return;
+        std::vector<std::shared_ptr<const fem::FunctionSpace<double>>> spaces {V_};
+        fem::Form<double> L(spaces,
+            single_integral(fem::IntegralType::cell, cells,
+                keeping_cell_kernel(cell_precompute(coeffs), w), coeffs.size()),
+            mesh_, coeffs, {});
         fem::assemble_vector(b, L);
     }
 

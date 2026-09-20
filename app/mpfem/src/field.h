@@ -95,6 +95,10 @@ namespace hellofem::app {
         std::vector<std::int32_t> boundary_facets(const std::set<int>& ids,
             bool interior = false) const;
 
+        /// The cells of the given 1-based domain ids, in ascending order. A
+        /// mesh carrying no cell tags is one domain (COMSOL domain 1).
+        std::vector<std::int32_t> domain_cells(const std::set<int>& ids) const;
+
         /// Dirichlet conditions of `(boundary id -> value)` at time `t`.
         std::vector<fem::DirichletBC<double>> make_bcs(
             const std::map<int, ScalarExpression>& values, double t) const;
@@ -144,6 +148,12 @@ namespace hellofem::app {
         /// constants after them) to the load `b`.
         void add_load(la::Vector<double>& b, const Coefficients& coeffs,
             fem::cell_kernel_weak_fn_t<double> w, Constants constants = {}) const;
+        /// Add the integral of the weak form `w` (coefficients `coeffs` in
+        /// order) to the load `b`, over the cells of the given 1-based domain
+        /// ids alone.
+        void add_load(la::Vector<double>& b, const Coefficients& coeffs,
+            fem::cell_kernel_weak_fn_t<double> w,
+            const std::set<int>& domains) const;
         void add_load(la::Vector<double>& b, const Coefficients& coeffs,
             fem::facet_kernel_weak_fn_t<double> w,
             const std::set<int>& boundaries, bool interior = false) const;

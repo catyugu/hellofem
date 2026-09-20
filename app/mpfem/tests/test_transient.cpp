@@ -61,7 +61,7 @@ namespace {
         auto source = std::make_shared<CellProperty>(box.mesh, box.cells,
             no_params());
         source->set_expression(1, problem.derivative);
-        solver->set_source(source);
+        solver->add_source({1}, source);
         solver->add_temperature_bc(1, ScalarExpression(problem.exact));
         solver->add_temperature_bc(2, ScalarExpression(problem.exact));
         solver->set_initial_temperature(ScalarExpression(problem.initial));
@@ -391,7 +391,7 @@ TEST_CASE("BDF: the weights follow the steps, the controller the estimates",
             auto source = std::make_shared<CellProperty>(
                 box.mesh, box.cells, no_params());
             source->set_expression(1, "3*t*t");
-            solver->set_source(source);
+            solver->add_source({1}, source);
             solver->set_initial_temperature(ScalarExpression(0.0));
             solver->apply_initial_condition(0.0);
 
@@ -579,7 +579,7 @@ TEST_CASE("Transient heat: a solution-independent nonlinear law matches the line
         auto source = std::make_shared<CellProperty>(box.mesh, box.cells,
             no_params());
         source->set_expression(1, "3*t*t");
-        solver->set_source(source);
+        solver->add_source({1}, source);
         solver->add_temperature_bc(1, ScalarExpression("t*t*t"));
         solver->add_temperature_bc(2, ScalarExpression("t*t*t"));
         solver->set_initial_temperature(ScalarExpression(0.0));

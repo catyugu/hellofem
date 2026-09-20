@@ -315,7 +315,7 @@ namespace {
     {
         HeatTransferSolver ht(f.mesh, boundary, f.cells, order);
         ht.set_conductivity(constant_property(f.mesh, f.cells, 0.0));
-        ht.set_source(constant_property(f.mesh, f.cells, 0.0));
+        ht.add_source({1}, constant_property(f.mesh, f.cells, 0.0));
         ht.add_thin_layer(layer_faces,
             constant_property(f.mesh, f.cells, ds),
             constant_property(f.mesh, f.cells, k));
@@ -426,7 +426,7 @@ TEST_CASE("HeatTransfer: a thin layer does not conduct across its thickness",
     for (const bool with_layer : {false, true}) {
         HeatTransferSolver ht(f.mesh, f.boundary, f.cells, 2);
         ht.set_conductivity(constant_property(f.mesh, f.cells, k));
-        ht.set_source(constant_property(f.mesh, f.cells, Q));
+        ht.add_source({1}, constant_property(f.mesh, f.cells, Q));
         ht.add_temperature_bc(1, ScalarExpression(0.0)); // x- : T = 0
         if (with_layer)
             ht.add_thin_layer({2}, constant_property(f.mesh, f.cells, ds),
@@ -503,7 +503,7 @@ TEST_CASE("HeatTransfer: a thin layer takes the material of its own boundary",
     // conductivity of the boundary it sits on, added one by one.
     HeatTransferSolver reference(f.mesh, f.boundary, f.cells, order);
     reference.set_conductivity(constant_property(f.mesh, f.cells, 1.0));
-    reference.set_source(constant_property(f.mesh, f.cells, 1.0));
+    reference.add_source({1}, constant_property(f.mesh, f.cells, 1.0));
     reference.add_temperature_bc(1, ScalarExpression(0.0));
     reference.add_thin_layer({5}, constant_property(f.mesh, f.cells, thickness),
         constant_property(f.mesh, f.cells, k_lower));
@@ -560,7 +560,7 @@ TEST_CASE("HeatTransfer: a thin layer takes the material of its own boundary",
     // and a macroscopic one, so the agreement above is not vacuous.
     HeatTransferSolver single(f.mesh, f.boundary, f.cells, order);
     single.set_conductivity(constant_property(f.mesh, f.cells, 1.0));
-    single.set_source(constant_property(f.mesh, f.cells, 1.0));
+    single.add_source({1}, constant_property(f.mesh, f.cells, 1.0));
     single.add_temperature_bc(1, ScalarExpression(0.0));
     single.add_thin_layer({5, 6}, constant_property(f.mesh, f.cells, thickness),
         constant_property(f.mesh, f.cells, k_lower));
@@ -571,6 +571,137 @@ TEST_CASE("HeatTransfer: a thin layer takes the material of its own boundary",
     INFO("worst difference from the single-conductivity assembly = "
         << against_single);
     REQUIRE(against_single > 1e-3);
+}
+
+TEST_CASE("HeatTransfer: a source is integrated over the domains it belongs to",
+    "[app][physics]")
+{
+    // One box, two domains, and a source on each with its own strength: the
+    // model selects domain 1 for Q = 2 and domain 2 for Q = 1, so the load is
+    // two integrals over disjoint cells. A binding that gave a feature's
+    // source the whole mesh, or the other domain, is a different field.
+    auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {2, 2, 2});
+    const std::size_t nc = f.mesh->topology()->index_map(3)->size_local();
+    REQUIRE(nc > 1);
+
+    // Two domains: the lower half of the cells, and the upper half.
+    std::vector<std::int32_t> indices(nc);
+    std::iota(indices.begin(), indices.end(), 0);
+    std::vector<int> domains(nc);
+    for (std::size_t c = 0; c < nc; ++c)
+        domains[c] = c < nc / 2 ? 1 : 2;
+    auto cells = std::make_shared<hellofem::mesh::MeshTags<int>>(
+        f.mesh->topology(), 3, std::move(indices), std::move(domains), "cells");
+
+    LoadedMesh lm;
+    lm.mesh = f.mesh;
+    lm.order = 1;
+    lm.cell_tags = cells;
+    lm.facet_tags = f.boundary;
+    lm.num_domains = 2;
+    lm.num_boundaries = 6;
+
+    ModelScript model;
+    model.materials.push_back(Material {"mat1", {1, 2}, {}, 3,
+        {{"thermalconductivity", "1"}}});
+    Physics physics;
+    physics.tag = "ht";
+    physics.type = "HeatTransfer";
+    physics.features.push_back({"init1", "Init", {}, {{"Tinit", "0"}}});
+    physics.features.push_back({"hs1", "HeatSource", {1}, {{"Q0", "2"}}});
+    physics.features.push_back({"hs2", "HeatSource", {2}, {{"Q0", "1"}}});
+    physics.features.push_back(
+        {"temp1", "TemperatureBoundary", {1}, {{"T0", "0"}}});
+    model.physics.push_back(physics);
+
+    CaseContext ctx(model, lm, TimeSettings {});
+    const int order = ctx.element_order(physics, "temperature");
+
+    // A DG0 property holding a constant on both domains.
+    const auto uniform = [&](double value) {
+        auto property = std::make_shared<CellProperty>(f.mesh, cells,
+            std::unordered_map<std::string, double> {});
+        property->set_expression(1, std::to_string(value));
+        property->set_expression(2, std::to_string(value));
+        property->update(0.0);
+        return property;
+    };
+
+    // Reference: the same two sources, each registered on its own domain.
+    HeatTransferSolver reference(f.mesh, f.boundary, cells, order);
+    reference.set_conductivity(uniform(1.0));
+    reference.add_source({1}, uniform(2.0));
+    reference.add_source({2}, uniform(1.0));
+    reference.add_temperature_bc(1, ScalarExpression(0.0));
+    reference.refresh(0.0);
+    reference.solve_steady(0.0);
+
+    const FieldKind* kind = field_kind("HeatTransfer");
+    REQUIRE(kind != nullptr);
+    auto bound = kind->create(physics, ctx);
+    bound->initialize(0.0);
+    bound->solve_level(0.0);
+
+    const auto [vc, vshape] = hellofem::mesh::compute_vertex_coords(*f.mesh);
+    const std::size_t nv = vshape[1];
+    std::vector<double> points(nv * 3);
+    for (std::size_t i = 0; i < nv; ++i)
+        for (int q = 0; q < 3; ++q)
+            points[i * 3 + static_cast<std::size_t>(q)] = vc[q * nv + i];
+    auto c_to_v = f.mesh->topology()->connectivity(3, 0);
+    std::vector<std::int32_t> vertex_cells(nv, -1);
+    for (std::int32_t c = 0; c < static_cast<std::int32_t>(c_to_v->num_nodes()); ++c)
+        for (auto v : c_to_v->links(c))
+            if (vertex_cells[static_cast<std::size_t>(v)] < 0)
+                vertex_cells[static_cast<std::size_t>(v)] = c;
+
+    auto read = [&](const Variable& variable) {
+        std::vector<double> values(nv);
+        variable.eval(points, vertex_cells, values);
+        return values;
+    };
+    const auto& variables = bound->variables();
+    REQUIRE(variables.size() == 1);
+    const auto actual = read(variables.front());
+    auto worst_from = [&](const std::vector<double>& other) {
+        double worst = 0.0;
+        for (std::size_t i = 0; i < nv; ++i)
+            worst = std::max(worst, std::abs(actual[i] - other[i]));
+        return worst;
+    };
+    const auto expected = read(scalar_variable("T", "(K)", reference.solution()));
+    const double against_reference = worst_from(expected);
+    INFO("worst difference from the per-domain reference = " << against_reference);
+    REQUIRE(against_reference < 1e-9);
+
+    // The discrimination: the two strengths swapped between the domains is a
+    // different field, and a macroscopic one, so the agreement above is not
+    // vacuous.
+    HeatTransferSolver swapped(f.mesh, f.boundary, cells, order);
+    swapped.set_conductivity(uniform(1.0));
+    swapped.add_source({1}, uniform(1.0));
+    swapped.add_source({2}, uniform(2.0));
+    swapped.add_temperature_bc(1, ScalarExpression(0.0));
+    swapped.refresh(0.0);
+    swapped.solve_steady(0.0);
+    const double against_swapped = worst_from(
+        read(scalar_variable("T", "(K)", swapped.solution())));
+    INFO("worst difference from the swapped assembly = " << against_swapped);
+    REQUIRE(against_swapped > 1e-3);
+}
+
+TEST_CASE("HeatTransfer: two sources on one domain are refused", "[app][physics]")
+{
+    // COMSOL replaces a domain's source when a later feature selects that
+    // domain again. The app integrates one source per feature, so two
+    // features sharing a domain would add where the reference replaces: a
+    // model it cannot solve is refused rather than solved as a different one.
+    auto f = make_box_fixture({0, 0, 0}, {1, 1, 1}, {1, 1, 1});
+    HeatTransferSolver ht(f.mesh, f.boundary, f.cells, 1);
+    ht.add_source({1}, constant_property(f.mesh, f.cells, 1.0));
+    REQUIRE_THROWS(ht.add_source({1, 2}, constant_property(f.mesh, f.cells, 1.0)));
+    // A source on a domain no other source holds is what the app solves.
+    ht.add_source({2}, constant_property(f.mesh, f.cells, 1.0));
 }
 
 TEST_CASE("SolidMechanics: blocked assembly — no load with Fixed gives u=0", "[app][physics]")

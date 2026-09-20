@@ -27,7 +27,12 @@ namespace hellofem::app {
         {
             rho_cp_ = std::move(rho_cp);
         }
-        void set_source(std::shared_ptr<CellProperty> Q) { Q_ = std::move(Q); }
+
+        /// A volumetric heat source `Q` on the given 1-based domain ids: the
+        /// source belongs to the domains its feature selects, and a domain no
+        /// feature selects carries none.
+        void add_source(const std::set<int>& domains,
+            std::shared_ptr<CellProperty> Q);
 
         /// Joule heating source from an electric solution: adds
         /// ∫ sigma |grad V|² phi to the heat load.
@@ -98,12 +103,19 @@ namespace hellofem::app {
             std::shared_ptr<CellProperty> k;
         };
 
+        /// A volumetric heat source over the domains it belongs to.
+        struct Source {
+            std::set<int> domains;
+            std::shared_ptr<CellProperty> Q;
+        };
+
         /// Assembly pieces shared by the steady and the transient path.
         void assemble_sources(la::Vector<double>& f) const;
 
-        std::shared_ptr<CellProperty> k_, rho_cp_, Q_;
+        std::shared_ptr<CellProperty> k_, rho_cp_;
         std::shared_ptr<const fem::Function<double>> joule_V_;
         std::shared_ptr<CellProperty> joule_sigma_;
+        std::vector<Source> sources_;
         std::map<int, ScalarExpression> temps_;
         std::vector<Convection> convections_;
         std::vector<ThinLayer> thin_layers_;

@@ -48,12 +48,13 @@ namespace hellofem::app {
                 // Dirichlet data (COMSOL 6.2 names the feature
                 // TemperatureBoundary), the convective heat flux and the
                 // initial values of a transient study ("Tinit").
-                auto source = ctx.zero_property();
                 for (const PhysicsFeature& feature : physics.features) {
                     if (feature.type == "HeatSource") {
-                        // A domain without a source keeps the zero one.
-                        for (int dom : feature.selection)
-                            source->set_expression(dom, feature.required("Q0"));
+                        // A source belongs to the domains its own feature
+                        // selects; a domain no feature selects carries none,
+                        // and a model with no source term carries none at all.
+                        solver_->add_source(feature.selection,
+                            ctx.uniform_property(feature.required("Q0")));
                     }
                     else if (feature.type == "TemperatureBoundary"
                         or feature.type == "Temperature") {
@@ -147,7 +148,6 @@ namespace hellofem::app {
                             + feature.tag + "' is of type '" + feature.type
                             + "', which the app does not solve");
                 }
-                solver_->set_source(source);
 
                 // The state the rest of the case reads this field at: the one
                 // the stepper samples, so that a coupling or a result at a
@@ -237,6 +237,23 @@ namespace hellofem::app {
     {
     }
 
+    void HeatTransferSolver::add_source(const std::set<int>& domains,
+        std::shared_ptr<CellProperty> Q)
+    {
+        // COMSOL lets a later feature override an earlier one on the same
+        // domain. The app integrates a source per feature, so two features
+        // sharing a domain would add where the reference replaces: a model it
+        // cannot solve is refused rather than summed.
+        for (const Source& source : sources_)
+            for (int dom : domains)
+                if (source.domains.contains(dom))
+                    throw std::runtime_error("heat: domain "
+                        + std::to_string(dom)
+                        + " carries two heat sources, which the app does not "
+                          "solve");
+        sources_.push_back({domains, std::move(Q)});
+    }
+
     void HeatTransferSolver::set_joule_source(
         std::shared_ptr<const fem::Function<double>> V,
         std::shared_ptr<CellProperty> sigma)
@@ -252,8 +269,8 @@ namespace hellofem::app {
             k_->update(t);
         if (rho_cp_)
             rho_cp_->update(t);
-        if (Q_)
-            Q_->update(t);
+        for (auto& source : sources_)
+            source.Q->update(t);
         if (joule_sigma_)
             joule_sigma_->update(t);
         for (auto& cv : convections_) {
@@ -282,8 +299,10 @@ namespace hellofem::app {
 
     void HeatTransferSolver::assemble_sources(la::Vector<double>& f) const
     {
-        if (Q_)
-            add_load(f, {Q_->function()}, kernels::load_scalar);
+        // A source is integrated over the domains it belongs to.
+        for (const Source& source : sources_)
+            add_load(f, {source.Q->function()}, kernels::load_scalar,
+                source.domains);
 
         // Joule heating: ∫ sigma |grad V|² phi.
         if (joule_V_ and joule_sigma_)
