@@ -17,9 +17,11 @@
 
 using Catch::Approx;
 using hellofem::app::Expression;
+using hellofem::app::from_si;
 using hellofem::app::parse_model_java;
 using hellofem::app::parse_si;
 using hellofem::app::parse_unit;
+using hellofem::app::to_si;
 
 TEST_CASE("parse_unit converts to SI", "[app][units]")
 {
@@ -42,6 +44,29 @@ TEST_CASE("parse_si handles bare numbers and unit literals", "[app][units]")
     REQUIRE(parse_si("110[GPa]") == Approx(1.1e11));
     REQUIRE(parse_si("293.15[K]") == Approx(293.15));
     REQUIRE(parse_si("7.407e5[S/m]") == Approx(740700.0));
+}
+
+TEST_CASE("to_si and from_si convert a quantity and are inverses", "[app][units]")
+{
+    // The one place a quantity crosses between the unit a model states it in
+    // and the SI the solver works in. A multiplicative unit is a factor; an
+    // absolute temperature scale is an offset, which no factor can express.
+    REQUIRE(to_si(2.5, "m") == Approx(2.5));
+    REQUIRE(to_si(2.5, "mm") == Approx(2.5e-3));
+    REQUIRE(to_si(2.5, "cm") == Approx(2.5e-2));
+    REQUIRE(to_si(1000.0, "mm") == Approx(1.0));
+    REQUIRE(to_si(20.0, "mV") == Approx(0.02));
+    REQUIRE(to_si(30.0, "degC") == Approx(303.15));
+    REQUIRE(to_si(32.0, "degF") == Approx(273.15));
+
+    REQUIRE(from_si(2.5e-3, "mm") == Approx(2.5));
+    REQUIRE(from_si(2.5e-2, "cm") == Approx(2.5));
+    REQUIRE(from_si(1.0, "m") == Approx(1.0));
+    REQUIRE(from_si(303.15, "degC") == Approx(30.0));
+    REQUIRE(from_si(273.15, "degF") == Approx(32.0));
+
+    for (const char* unit : {"m", "cm", "mm", "degC", "degF"})
+        REQUIRE(from_si(to_si(7.5, unit), unit) == Approx(7.5));
 }
 
 TEST_CASE("Expression evaluates params and coordinates", "[app][expr]")

@@ -44,8 +44,8 @@ int main(int argc, char* argv[])
         model.name, model.parameters.size(), model.materials.size(),
         model.physics.size(), model.couplings.size());
 
-    // Mesh, brought into SI with the model's geometry length unit.
-    LoadedMesh lm = load_mphtxt_mesh(mesh_path, model.length_scale());
+    // Mesh, converted into SI through the model's geometry length unit.
+    LoadedMesh lm = load_mphtxt_mesh(mesh_path, model.length_unit);
     spdlog::info("mesh: {} cells, {} domains, {} boundaries, order={}",
         lm.mesh->topology()->index_map(lm.mesh->topology()->dim())->size_local(),
         lm.num_domains, lm.num_boundaries, lm.order);

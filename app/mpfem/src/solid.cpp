@@ -26,8 +26,17 @@ namespace hellofem::app {
                 : solver_(std::make_shared<SolidMechanicsSolver>(
                       ctx.mesh().mesh, ctx.mesh().facet_tags, ctx.mesh().cell_tags,
                       ctx.element_order(physics, "displacement")))
-                , variables_ {Variable {"solid.disp", "(m)",
-                      [displacement = solver_->solution()](
+                // A displacement is a length, and COMSOL states one in the
+                // geometry's own length unit: its data export writes
+                // `solid.disp (mm)` for a millimetre geometry, the same unit
+                // its coordinates are in. The solver works in SI, so the
+                // value the export reads is converted through that unit — a
+                // model in millimetres whose displacement went out in metres
+                // would compare as a thousandth of its reference.
+                , variables_ {Variable {"solid.disp",
+                      "(" + ctx.model().length_unit + ")",
+                      [displacement = solver_->solution(),
+                          length_unit = ctx.model().length_unit](
                           std::span<const double> points,
                           std::span<const std::int32_t> cells,
                           std::span<double> values) {
@@ -35,10 +44,11 @@ namespace hellofem::app {
                           displacement->eval(points, {values.size(), 3}, cells,
                               components, {values.size(), 3});
                           for (std::size_t i = 0; i < values.size(); ++i)
-                              values[i] = std::sqrt(
-                                  components[3 * i] * components[3 * i]
-                                  + components[3 * i + 1] * components[3 * i + 1]
-                                  + components[3 * i + 2] * components[3 * i + 2]);
+                              values[i] = from_si(
+                                  std::sqrt(components[3 * i] * components[3 * i]
+                                      + components[3 * i + 1] * components[3 * i + 1]
+                                      + components[3 * i + 2] * components[3 * i + 2]),
+                                  length_unit);
                       }}}
             {
                 solver_->set_elastic(ctx.material_property("E"),

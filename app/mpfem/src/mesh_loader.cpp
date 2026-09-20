@@ -28,16 +28,15 @@ namespace hellofem::app {
     } // namespace
 
     LoadedMesh load_mphtxt_mesh(
-        const std::filesystem::path& filename, double length_scale)
+        const std::filesystem::path& filename, std::string_view length_unit)
     {
         io::MphtxtMesh raw = io::read_mphtxt(filename);
         LoadedMesh out;
         out.order = raw.order;
         // The file's coordinates are in the model's geometry length unit;
         // the app works in SI.
-        if (length_scale != 1.0)
-            for (double& x : raw.mesh.geometry().x())
-                x *= length_scale;
+        for (double& x : raw.mesh.geometry().x())
+            x = to_si(x, length_unit);
         out.mesh = std::make_shared<mesh::Mesh<double>>(
             raw.mesh.topology(), raw.mesh.geometry());
 

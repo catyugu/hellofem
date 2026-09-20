@@ -4,6 +4,7 @@
 
 #include "mesh/Mesh.h"
 #include "mesh/MeshTags.h"
+#include "units.h"
 
 #include <filesystem>
 #include <memory>
@@ -31,12 +32,12 @@ namespace hellofem::app {
     /// 1-based (matching COMSOL boundary selection numbers); domain ids are
     /// already 1-based and pass through unchanged.
     ///
-    /// The coordinates are scaled by `length_scale` — the model's geometry
-    /// length unit in SI metres — because COMSOL exports the mesh in that
-    /// unit while every material law and feature is stated in SI. The loaded
-    /// mesh is therefore always in metres.
-    LoadedMesh load_mphtxt_mesh(
-        const std::filesystem::path& filename, double length_scale = 1.0);
+    /// The coordinates are converted to SI through the model's geometry
+    /// length unit (`to_si`): COMSOL exports the mesh in that unit while every
+    /// material law and feature is stated in SI. The loaded mesh is therefore
+    /// always in metres.
+    LoadedMesh load_mphtxt_mesh(const std::filesystem::path& filename,
+        std::string_view length_unit = "m");
 
     /// Create the topology the app's fields read: the vertices of every cell
     /// (the points a result is exported at) and the facets with the cells

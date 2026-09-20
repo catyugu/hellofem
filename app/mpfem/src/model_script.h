@@ -122,13 +122,10 @@ namespace hellofem::app {
         /// The geometry — and the mesh COMSOL exports from it, and the
         /// coordinates of its data export — is in that unit, while every
         /// material law, parameter and feature the model states is in SI.
-        /// The app solves in SI, so the mesh is brought in with
-        /// `length_scale()` and the exported coordinates are written back in
-        /// this unit, which is what COMSOL's own export does.
+        /// The app solves in SI, so the mesh and the exported lengths are
+        /// converted through this unit (`to_si` / `from_si`), which is what
+        /// COMSOL's own export does.
         std::string length_unit = "m";
-
-        /// SI metres per `length_unit`.
-        double length_scale() const { return parse_unit(length_unit); }
 
         std::vector<Parameter> parameters;
         std::vector<Material> materials;

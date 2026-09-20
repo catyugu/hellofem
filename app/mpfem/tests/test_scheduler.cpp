@@ -331,3 +331,66 @@ TEST_CASE("CaseScheduler: a physics feature the app does not solve is an error",
     REQUIRE_THROWS_AS(CaseScheduler(model, loaded(box), TimeSettings {}),
         std::runtime_error);
 }
+
+TEST_CASE("CaseScheduler: a length-valued export follows the geometry's unit",
+    "[app][scheduler]")
+{
+    // A bar held at 393.15 K against a 293.15 K strain reference expands by
+    // alpha*DT*L = 1e-5 * 100 * 1 = 1e-3 in SI. COMSOL states a displacement
+    // in the geometry's own length unit — its export writes `solid.disp (mm)`
+    // for a millimetre model — so the same model written in millimetres has
+    // to export the same physical displacement as 1.0, and the column has to
+    // say which unit it is in. A solver that works in SI and exports the
+    // metre value under a millimetre header reports a thousandth of the
+    // displacement its reference does.
+    ModelScript model;
+    model.name = "expanded_bar";
+    model.length_unit = "mm";
+    model.materials.push_back(Material {"mat1", {1}, {}, 3,
+        {{"thermalconductivity", "1"},
+            {"density", "1"},
+            {"heatcapacity", "1"},
+            {"thermalexpansioncoefficient", "1e-5"},
+            {"E", "200e9"},
+            {"nu", "0.3"}}});
+    Physics heat;
+    heat.tag = "ht";
+    heat.type = "HeatTransfer";
+    heat.features = {
+        {"temp1", "TemperatureBoundary", {1}, {{"T0", "393.15"}}},
+        {"temp2", "TemperatureBoundary", {2}, {{"T0", "393.15"}}},
+        {"init1", "", {}, {{"Tinit", "393.15"}}},
+    };
+    Physics solid;
+    solid.tag = "solid";
+    solid.type = "SolidMechanics";
+    solid.features = {{"fix1", "Fixed", {1}, {}}};
+    model.physics = {heat, solid};
+    model.couplings.push_back(MultiphysicsCoupling {"te1", "ThermalExpansion", {1},
+        {{"minput_strainreferencetemperature", "293.15"}}});
+    model.export_config.expressions = {"solid.disp"};
+
+    auto box = test::make_box_fixture({0, 0, 0}, {1, 0.3, 0.3}, {10, 3, 3});
+    CaseScheduler scheduler(model, loaded(box), TimeSettings {});
+    scheduler.run();
+    const auto path = scratch_file("hellofem_length_unit_result.txt");
+    scheduler.export_result(path.string());
+
+    const std::string header = result_header(path);
+    REQUIRE(header.find("solid.disp (mm)") != std::string::npos);
+
+    // The x+ face's own displacement: the bar's free end, where the
+    // expansion is not held back by the clamped face's lateral constraint.
+    const std::vector<std::vector<double>> rows = result_rows(path);
+    REQUIRE(rows.size() > 0);
+    double ux_max = 0.0;
+    for (const std::vector<double>& row : rows) {
+        REQUIRE(row.size() == 4);
+        if (std::abs(row[0] - 1000.0) < 1e-9) // x = 1 m, written in mm
+            ux_max = std::max(ux_max, row[3]);
+    }
+    INFO("exported solid.disp at the bar's end = " << ux_max
+                                                  << " mm, against alpha*DT*L = 1.0 mm");
+    REQUIRE(ux_max > 0.9);
+    REQUIRE(ux_max < 1.1);
+}

@@ -350,10 +350,9 @@ namespace hellofem::app {
         for (std::size_t i = 0; i < nv; ++i) {
             // The coordinates go out in the model's geometry length unit,
             // which is what COMSOL's own data export writes.
-            const double s = model_.length_scale();
-            out << vertex_points_[3 * i] / s << "  "
-                << vertex_points_[3 * i + 1] / s << "  "
-                << vertex_points_[3 * i + 2] / s;
+            out << from_si(vertex_points_[3 * i], model_.length_unit) << "  "
+                << from_si(vertex_points_[3 * i + 1], model_.length_unit) << "  "
+                << from_si(vertex_points_[3 * i + 2], model_.length_unit);
             for (const Snapshot& snapshot : snapshots_)
                 for (std::size_t k = 0; k < nk; ++k)
                     out << "  " << snapshot.columns[i * nk + k];
