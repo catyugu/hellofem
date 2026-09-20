@@ -3,6 +3,8 @@
 
 #include "physics_field.h"
 
+#include <algorithm>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -46,6 +48,23 @@ namespace hellofem::app {
             if (kind.physics_type == physics_type)
                 return &kind;
         return nullptr;
+    }
+
+    double study_time_tolerance(const std::vector<Physics>& physics)
+    {
+        if (physics.empty())
+            throw std::runtime_error(
+                "study_time_tolerance: the model has no physics");
+        double tolerance = std::numeric_limits<double>::max();
+        for (const Physics& p : physics) {
+            const FieldKind* kind = field_kind(p.type);
+            if (not kind)
+                throw std::runtime_error(
+                    "study_time_tolerance: the physics '" + p.type
+                    + "' has no registered field");
+            tolerance = std::min(tolerance, kind->time_tolerance);
+        }
+        return tolerance;
     }
 
 } // namespace hellofem::app

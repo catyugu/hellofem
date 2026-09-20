@@ -78,6 +78,10 @@ namespace hellofem::app {
 
     struct FieldKind {
         std::string_view physics_type; // "HeatTransfer", "ConductiveMedia", ...
+        /// The relative time tolerance COMSOL's physics interface recommends
+        /// for a study step that leaves the tolerance to the physics (see
+        /// `defaults.h`).
+        double time_tolerance;
         FieldFactory create;
     };
 
@@ -89,6 +93,14 @@ namespace hellofem::app {
     /// The kind answering for `physics_type`, or nullptr.
     const FieldKind* field_kind(std::string_view physics_type);
 
+    /// The relative time tolerance a study over these physics interfaces
+    /// takes when its study step leaves the tolerance to the physics: the
+    /// tightest of the values the interfaces recommend (see `defaults.h`).
+    /// @param[in] physics The model's physics interfaces.
+    /// @throws std::runtime_error for an interface with no registered field,
+    ///   which the scheduler would refuse to build anyway.
+    double study_time_tolerance(const std::vector<Physics>& physics);
+
     /// Registration of a field kind at program start-up: a physics holds one
     /// of these next to the physics it binds, so that the app knows the
     /// field without naming it anywhere else.
@@ -99,9 +111,10 @@ namespace hellofem::app {
     /// load.
     class FieldRegistration {
     public:
-        FieldRegistration(std::string_view physics_type, FieldFactory create)
+        FieldRegistration(std::string_view physics_type, double time_tolerance,
+            FieldFactory create)
         {
-            register_field(FieldKind {physics_type, create});
+            register_field(FieldKind {physics_type, time_tolerance, create});
         }
     };
 

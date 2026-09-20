@@ -3,6 +3,8 @@
 
 #include "electric.h"
 
+#include "defaults.h"
+
 #include "kernels.h"
 #include "physics_field.h"
 
@@ -84,6 +86,7 @@ namespace hellofem::app {
         };
 
         const FieldRegistration electric_field {"ConductiveMedia",
+            electric_time_tolerance,
             [](const Physics& physics, CaseContext& ctx)
                 -> std::unique_ptr<PhysicsField> {
                 return std::make_unique<ElectricField>(physics, ctx);

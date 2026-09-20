@@ -129,6 +129,7 @@ namespace hellofem::app {
         };
 
         const FieldRegistration solid_field {"SolidMechanics",
+            solid_time_tolerance,
             [](const Physics& physics, CaseContext& ctx)
                 -> std::unique_ptr<PhysicsField> {
                 return std::make_unique<SolidField>(physics, ctx);

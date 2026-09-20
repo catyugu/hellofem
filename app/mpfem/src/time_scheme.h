@@ -119,13 +119,14 @@ namespace hellofem::app {
         /// held to `A + R |u_i|` per dof, and the step meets the tolerance
         /// while the weighted RMS norm of those ratios is at most one. It
         /// bounds the error of a step, so it is the accuracy of the time
-        /// discretization — not of the linear or the nonlinear solver. It
-        /// starts at the value the reference's own physics-controlled
-        /// tolerance takes for the physics the app solves, so that a run
-        /// measures the discretization rather than the difference between two
-        /// step controllers; a model that states its own tolerance replaces
-        /// it.
-        double tolerance = default_time_tolerance;
+        /// discretization — not of the linear or the nonlinear solver. A study
+        /// takes the value the reference's own physics-controlled tolerance
+        /// has for its physics (`study_time_tolerance`), so that a run measures
+        /// the discretization rather than the difference between two step
+        /// controllers, and a model that states its own tolerance replaces it.
+        /// The default is the tightest of the interfaces' values, which is
+        /// what a `TimeSettings` built without a model is held to.
+        double tolerance = solid_time_tolerance;
 
         /// The reference's absolute tolerance, which is `A = R *
         /// absolute_factor` under its `Factor` method (its default method, of

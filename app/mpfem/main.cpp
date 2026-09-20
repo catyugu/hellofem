@@ -4,6 +4,7 @@
 #include "case_scheduler.h"
 #include "java_parser.h"
 #include "mesh_loader.h"
+#include "physics_field.h"
 #include "time_scheme.h"
 
 #include "spdlog/spdlog.h"
@@ -51,12 +52,15 @@ int main(int argc, char* argv[])
         lm.num_domains, lm.num_boundaries, lm.order);
 
     // The time stepping is the model's own: the scheme and the order are the
-    // defaults the reference's solver runs at (see `TimeSettings`), and a
-    // study step that states a tolerance is held to that tolerance, which is
-    // what its reference solution was computed with.
+    // defaults the reference's solver runs at (see `TimeSettings`), and the
+    // accuracy its steps are held to is the reference's own physics-controlled
+    // tolerance — the tightest the model's physics interfaces recommend, or
+    // the tolerance a study step that states one asks for, which is what its
+    // reference solution was computed with.
     TimeSettings time;
-    if (model.study.tolerance)
-        time.tolerance = *model.study.tolerance;
+    time.tolerance = model.study.tolerance
+        ? *model.study.tolerance
+        : study_time_tolerance(model.physics);
 
     // Solve the model's study. A failing solve is reported where it happens:
     // an exception that escapes `main` ends the process without its message,

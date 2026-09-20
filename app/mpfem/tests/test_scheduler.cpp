@@ -140,6 +140,70 @@ TEST_CASE("CaseScheduler: a physics without a registered field is an error",
     REQUIRE_THROWS(CaseScheduler(model, loaded(box), TimeSettings {}));
 }
 
+TEST_CASE("A study takes the tightest time tolerance its physics recommend",
+    "[app][scheduler]")
+{
+    // The tolerance a study step that leaves the accuracy to the physics takes
+    // is the interfaces' own, and a study over several of them takes the
+    // tightest. Measured on the reference by reading its time solver node's
+    // `rtol` back: heat transfer and electric currents alone are held to 1e-2,
+    // the structural interface to 1e-3, and every combination of them to the
+    // tightest of its interfaces (see `defaults.h`).
+    const Physics heat {"ht", "HeatTransfer", {}, {}};
+    const Physics electric {"ec", "ConductiveMedia", {}, {}};
+    const Physics solid {"solid", "SolidMechanics", {}, {}};
+
+    REQUIRE(study_time_tolerance({heat}) == heat_time_tolerance);
+    REQUIRE(study_time_tolerance({electric}) == electric_time_tolerance);
+    REQUIRE(study_time_tolerance({solid}) == solid_time_tolerance);
+
+    // The combinations the app's own cases are: a heat-transfer-only transient,
+    // and the electric-thermal-structural set of the busbar and the packages.
+    REQUIRE(study_time_tolerance({heat}) == 1e-2);
+    REQUIRE(study_time_tolerance({electric, heat, solid}) == 1e-3);
+    REQUIRE(study_time_tolerance({heat, solid}) == 1e-3);
+    REQUIRE(study_time_tolerance({heat, electric}) == 1e-2);
+
+    // An interface with no registered field has no tolerance to recommend, and
+    // a study of no physics has none either.
+    REQUIRE_THROWS(study_time_tolerance({}));
+    REQUIRE_THROWS(study_time_tolerance({Physics {"ff", "FluidFlow", {}, {}}}));
+}
+
+TEST_CASE("A heat-only study is held to the physics' tolerance, not the tightest",
+    "[app][scheduler]")
+{
+    // The step count of a heat-transfer-only transient is the reference's own
+    // only while the study takes the tolerance that interface recommends. The
+    // app-wide 1e-3 it used to carry halved the steps: measured on
+    // TBlockNonlinTransient, 46 steps where its reference took 24 (14.4 s
+    // against 5 s), and 25 steps at 1e-2. This holds the resolution to that
+    // direction, on the same manufactured problem at both tolerances.
+    const int outputs = 4;
+    auto box = test::make_box_fixture({0, 0, 0}, {1, 0.2, 0.2}, {4, 1, 1});
+    const ModelScript model = manufactured_heat_model(outputs);
+
+    int runs = 0;
+    const auto steps_at = [&](double tolerance) {
+        TimeSettings settings;
+        settings.tolerance = tolerance;
+        settings.store = StoreMode::steps;
+        CaseScheduler scheduler(model, loaded(box), settings);
+        scheduler.run();
+        const auto path = scratch_file(
+            "hellofem_tolerance_result_" + std::to_string(++runs) + ".txt");
+        scheduler.export_result(path.string());
+        return result_times(result_header(path)).size();
+    };
+
+    REQUIRE(study_time_tolerance(model.physics) == heat_time_tolerance);
+    const std::size_t recommended = steps_at(study_time_tolerance(model.physics));
+    const std::size_t tightest = steps_at(solid_time_tolerance);
+    INFO("steps at the physics' tolerance = " << recommended
+                                              << ", at the tightest = " << tightest);
+    REQUIRE(recommended < tightest);
+}
+
 TEST_CASE("CaseScheduler: the model's physics drives the solved fields",
     "[app][scheduler]")
 {

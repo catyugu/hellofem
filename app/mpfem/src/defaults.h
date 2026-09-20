@@ -23,23 +23,35 @@ namespace hellofem::app {
     /// number, so that a comparison against a COMSOL reference measures the
     /// discretization rather than the difference between two step controllers.
     ///
-    /// COMSOL takes the value from the physics interfaces, and it differs
-    /// between them: measured on this install, a heat-transfer-only transient
-    /// is held to 1e-2, and the electric-thermal-structural set the app solves
-    /// to 1e-3 (each reproduced bit for bit by an explicit `rtol` of that
-    /// value, and changed by a tolerance an order below it). The app carries
-    /// one number, the tighter of the two, so its steps are never coarser than
-    /// COMSOL's for the same model; a case that needs another accuracy states
-    /// it in its own study step (`rtol`).
+    /// The value is the interfaces' own, and a study over several of them
+    /// takes the tightest (see `study_time_tolerance`). Measured on this
+    /// install (COMSOL 6.2.0.290) by reading the time solver node's own `rtol`
+    /// back after a run of a minimal model per set of interfaces, every set
+    /// the app can be asked for:
     ///
-    /// TODO: reproduce COMSOL's tolerance control in full — the value is the
-    /// physics interfaces' own (1e-2 for heat transfer alone, 1e-3 for the
-    /// three-physics set here), not one app-wide constant, and COMSOL then
-    /// scales the error estimate per dependent variable by that variable's own
-    /// tolerance factor rather than holding every dof of every field to the
-    /// same relative error. A single constant is what the app has; it is not
-    /// yet COMSOL's rule.
-    inline constexpr double default_time_tolerance = 1e-3;
+    ///     interfaces      rtol    time method     max BDF order
+    ///     ht              1e-2    BDF             2
+    ///     ec              1e-2    BDF             5
+    ///     solid           1e-3    generalized-α   5
+    ///     ht, ec          1e-2    BDF             2
+    ///     ht, solid       1e-3    generalized-α   2
+    ///     ec, solid       1e-3    BDF             5
+    ///     ec, ht, solid   1e-3    BDF             2
+    ///
+    /// Each row is the tightest of its interfaces' values, which is what fixes
+    /// the three numbers below. The two sets the app's own references were
+    /// solved with — heat transfer alone, and the electric-thermal-structural
+    /// set — are 1e-2 and 1e-3, the values the cases' own comparisons had
+    /// already identified.
+    ///
+    /// The order column is the reference's other physics-controlled setting: a
+    /// maximum BDF order of 2 for every set the app's references run, which is
+    /// what `TimeSettings::max_order` carries. A set of the electric and the
+    /// structural interface alone would be run at 5, and the app implements
+    /// the orders 1 and 2.
+    inline constexpr double heat_time_tolerance = 1e-2;
+    inline constexpr double electric_time_tolerance = 1e-2;
+    inline constexpr double solid_time_tolerance = 1e-3;
 
     // COMSOL's tolerance levels, and where the app carries each of them.
     //
@@ -49,7 +61,8 @@ namespace hellofem::app {
     //
     // 1. The study step. A time-dependent study's relative tolerance is the
     //    physics interfaces' own unless the study step overrides it
-    //    (`usertol`). That is `default_time_tolerance` above.
+    //    (`usertol`). Those are the three values above, combined by
+    //    `study_time_tolerance`.
     //
     // 2. The solver node (Stationary Solver / Time-Dependent Solver). Its
     //    "Relative tolerance" is `stol` (default 1e-3). It has two uses: it
@@ -74,8 +87,9 @@ namespace hellofem::app {
     //    The estimate COMSOL compares is a weighted Euclidean norm over every
     //    dof of every field, with the weight `max(|U_ij|, S_j)` and `S_j` the
     //    scale factor of the dependent variable's scaling method. The app
-    //    holds every dof of every field to one relative residual instead, so
-    //    it is not yet COMSOL's rule (the same gap the time tolerance notes).
+    //    holds every dof of every field to one relative residual instead: the
+    //    tolerance *level* above is now the reference's own, but its
+    //    per-variable weighting is not.
     //
     // 4. The linear solver. Its tolerance is the *operation node's* stol, not
     //    a separate number, and an iterative solve stops when the error
