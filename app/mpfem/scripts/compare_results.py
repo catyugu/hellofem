@@ -65,27 +65,60 @@ def parse_result(path: Path):
 
 
 def align(ref_rows, cur_rows, coord_tol=1e-7):
-    """Align by rounded coordinates; return parallel lists of value rows."""
-    scale = 1.0 / coord_tol
-    def key(r):
-        return (round(r[0] * scale), round(r[1] * scale), round(r[2] * scale))
-    ref_map = {}
-    for r in ref_rows:
-        k = key(r)
-        if k in ref_map:
-            raise ValueError(f"duplicate reference coordinate {r[:3]}")
-        ref_map[k] = r
-    cur_map = {}
-    for r in cur_rows:
-        k = key(r)
-        if k in cur_map:
-            raise ValueError(f"duplicate current coordinate {r[:3]}")
-        cur_map[k] = r
-    missing = [k for k in ref_map if k not in cur_map]
-    if missing:
-        raise ValueError(f"current file missing {len(missing)} reference points")
-    keys = sorted(ref_map)
-    return [ref_map[k] for k in keys], [cur_map[k] for k in keys]
+    """Pair each reference point with the current point at the same location.
+
+    The pairing is by proximity, not by quantizing the coordinates to a grid:
+    two exports of one mesh state a coordinate to the last bit differently
+    (COMSOL's Data export and the mesh the app loaded from the same model wrote
+    `-1.2007812500000001` and `-1.20078125`), and a value that lands exactly on
+    a quantum's boundary then rounds to either side and reads as a point the
+    other file does not have. `coord_tol` is an absolute distance in the files'
+    own coordinate unit, and a point with no counterpart within it is refused
+    rather than paired with its nearest neighbour.
+
+    Returns the two files' value rows in the reference file's own order.
+    """
+    # One bucket per `coord_tol` cell, so a point's neighbours are in its own
+    # cell or one of the 26 around it and the search stays linear.
+    def cell(row):
+        return (math.floor(row[0] / coord_tol), math.floor(row[1] / coord_tol),
+                math.floor(row[2] / coord_tol))
+
+    grid: dict[tuple[int, int, int], list[int]] = {}
+    for i, row in enumerate(cur_rows):
+        grid.setdefault(cell(row), []).append(i)
+
+    ref_aligned = []
+    cur_aligned = []
+    taken: set[int] = set()
+    for row in ref_rows:
+        base = cell(row)
+        best = None
+        best_sq = coord_tol * coord_tol
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    for i in grid.get((base[0] + dx, base[1] + dy, base[2] + dz),
+                                      ()):
+                        other = cur_rows[i]
+                        sq = ((other[0] - row[0]) ** 2 + (other[1] - row[1]) ** 2
+                              + (other[2] - row[2]) ** 2)
+                        if sq <= best_sq:
+                            best, best_sq = i, sq
+        if best is None:
+            raise ValueError(
+                f"current file has no point at {row[:3]} (within {coord_tol})")
+        if best in taken:
+            raise ValueError(
+                f"duplicate current coordinate {cur_rows[best][:3]}")
+        taken.add(best)
+        ref_aligned.append(row)
+        cur_aligned.append(cur_rows[best])
+
+    if len(taken) != len(cur_rows):
+        raise ValueError(f"current file has {len(cur_rows) - len(taken)} points "
+                         f"the reference does not")
+    return ref_aligned, cur_aligned
 
 
 def metrics(ref, cur):
