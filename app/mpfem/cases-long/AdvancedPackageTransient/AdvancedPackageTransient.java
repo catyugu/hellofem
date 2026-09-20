@@ -22,11 +22,17 @@ import com.comsol.model.util.ModelUtil;
  * thermal expansion (the die's and the board's strain reference is the initial
  * temperature). The terminal is the peripheral ring the die leaves exposed on
  * the die metal, the ground is the ring the underfill leaves exposed on the
- * substrate copper, and every other exterior face convects to the initial
- * temperature. The board's underside is the mounting face: it is held at the
- * initial temperature and is the fixed support, which is what gives the die's
- * power a path out of the package. The die carries a volumetric source of its
- * own (chip power), the one heat input that is not the Joule term.
+ * substrate copper, and every other exterior face — the board's underside
+ * included — convects to the initial temperature: the package is cooled by
+ * natural convection alone. The die carries a volumetric source of its own
+ * (chip power, 3e7 W/m3 over 26.64 mm3 = 0.80 W, 2.2 W/cm2), and the current
+ * adds its Joule heat through the same path (2 mV over the package's 37.9 uohm
+ * = 0.11 W over 9 bumps). The two are generated in different places and leave
+ * through different paths — measured on this model, the bumps' heat through
+ * 37.6 K/W and the die's own through 79.1 K/W — so the junction they drive
+ * together (86 degC) is set by the bump array rather than by the board. The
+ * board's underside is also the mechanical support, so the displacement is
+ * fixed there.
  *
  * <p>What the case adds to the verification. The current enters the package on
  * a ring, spreads through the die metal, splits over the 9 bumps in parallel
@@ -87,9 +93,27 @@ public class AdvancedPackageTransient {
         model.param().set("Td", "0.74[mm]", "die thickness");
 
         // ---- Physics, in SI units (the geometry unit does not apply) ----
-        model.param().set("Vtot", "8[mV]", "terminal voltage");
+        // The operating point. The package's current path is 37.9 uohm (die
+        // metal 4.1, the nine bumps in parallel 27.1, substrate 6.7), so the
+        // terminal voltage sets the current: 2 mV drives 52.8 A, i.e. 5.9 A
+        // through each bump, and the Joule term is 0.106 W against the die's
+        // own 0.27 W. A larger voltage would put the package far above the
+        // current a 3 x 3 array carries: 8 mV would drive 211 A and 23.5 A per
+        // bump, and the Joule heat alone (1.69 W) would take the junction to
+        // 105 degC.
+        model.param().set("Vtot", "2[mV]", "terminal voltage");
+        // The die's own power: 3e7 W/m3 over its 26.64 mm3 is 0.80 W, i.e.
+        // 2.2 W/cm2 over its 36 mm2 face — the power density of a chip a
+        // package's thermal design is sized for. The two heat inputs see very
+        // different paths out of the assembly, measured on this model: the
+        // current's Joule heat is generated in the bumps, right above the
+        // board, and leaves through 37.6 K/W, while the die's own power has to
+        // cross the die, the die metal, the bump array and the board and
+        // leaves through 79.1 K/W. Together they put the junction at 86 degC:
+        // warm enough that the thermal path is the binding constraint, and
+        // below the 125 degC a silicon junction is limited to.
         model.param().set("q_chip", "3e7[W/m^3]", "chip power density");
-        model.param().set("hconv", "20[W/(m^2*K)]", "convective coefficient");
+        model.param().set("hconv", "50[W/(m^2*K)]", "convective coefficient");
         model.param().set("T0", "293.15[K]", "ambient and strain reference temperature");
         model.param().set("tend", "100[s]", "end time");
         model.param().set("dtout", "10[s]", "output interval");
@@ -278,7 +302,7 @@ public class AdvancedPackageTransient {
 
         java.util.List<Integer> terminal = new java.util.ArrayList<Integer>();
         java.util.List<Integer> ground = new java.util.ArrayList<Integer>();
-        java.util.List<Integer> sink = new java.util.ArrayList<Integer>();
+        java.util.List<Integer> mount = new java.util.ArrayList<Integer>();
         for (int f = 1; f <= nFace; f++) {
             if (!exterior[f]) continue;
             double[][] points = sampleFace(gi, f, 3);
@@ -289,7 +313,7 @@ public class AdvancedPackageTransient {
             else if (owner[f] == substrate[0] && allAt(points, 2, zSubstrate, tol))
                 ground.add(f);
             else if (owner[f] == board[0] && allAt(points, 2, zBoard, tol))
-                sink.add(f);
+                mount.add(f);
         }
         // The terminal and the ground are rings around the face the die, and
         // the underfill, leave exposed: whatever way COMSOL splits such a ring
@@ -297,22 +321,23 @@ public class AdvancedPackageTransient {
         // the current would enter the layer over part of its edge only. The
         // ring of the die metal is `Lu` wide and the die `Ld`, so the exposed
         // band is (Lu-Ld)/2 = 0.5 mm; the substrate's is (Ls-Lu)/2 = 1 mm.
-        if (terminal.isEmpty() || ground.isEmpty() || sink.isEmpty()
+        if (terminal.isEmpty() || ground.isEmpty() || mount.isEmpty()
             || !reachesSides(terminal, gi, sideDieMetal, tol)
             || !reachesSides(ground, gi, sideSubstrate, tol))
             throw new IllegalStateException("boundary identification failed: terminal="
-                + terminal + " ground=" + ground + " sink=" + sink.size());
+                + terminal + " ground=" + ground + " mount=" + mount.size());
 
-        // Every other exterior face convects; the sink face does not, because
-        // the temperature node overrides the flux on it.
+        // The package is cooled by natural convection alone, on every exterior
+        // face the current does not enter on. The board's underside is one of
+        // them: a board in still air convects from both of its faces.
         java.util.List<Integer> convection = new java.util.ArrayList<Integer>();
         for (int f = 1; f <= nFace; f++) {
             if (!exterior[f]) continue;
-            if (terminal.contains(f) || ground.contains(f) || sink.contains(f)) continue;
+            if (terminal.contains(f) || ground.contains(f)) continue;
             convection.add(f);
         }
-        System.out.println("TERMINAL=" + terminal + " GROUND=" + ground + " SINK="
-            + sink.size() + " CONV=" + convection.size() + " of " + nExterior);
+        System.out.println("TERMINAL=" + terminal + " GROUND=" + ground + " MOUNT="
+            + mount.size() + " CONV=" + convection.size() + " of " + nExterior);
 
         // ---- Materials ----
         setMaterial(model, comp, "mat_FR4", "FR4 (Circuit Board)", board,
@@ -353,20 +378,15 @@ public class AdvancedPackageTransient {
         model.component(comp).physics("ht").feature("hf1").set("h", "hconv");
         model.component(comp).physics("ht").feature("hf1").set("Text", "T0");
 
-        // The board's underside is the package's mounting face: the heat sink
-        // it sits on holds it at the ambient temperature, and it is the
-        // mechanical support as well. Without it the die's power has nowhere
-        // to go but 1.6 mm of FR4 (k = 0.3 W/(m*K)) and the package's own
-        // free convection, and the junction settles at a temperature no real
-        // assembly reaches.
-        model.component(comp).physics("ht").create("temp1", "TemperatureBoundary", 2);
-        model.component(comp).physics("ht").feature("temp1").selection().set(ints(sink));
-        model.component(comp).physics("ht").feature("temp1").set("T0", "T0");
-
+        // The board's underside is the mechanical support: the package is held
+        // there, and nothing else constrains its rigid-body motion. It is a
+        // convection face like the rest — a board in still air loses heat from
+        // both of its faces — so the mechanical support is the only thing this
+        // face carries.
         model.component(comp).physics("solid").feature("lemm1").set("E_mat", "from_mat");
         model.component(comp).physics("solid").feature("lemm1").set("nu_mat", "from_mat");
         model.component(comp).physics("solid").create("fix1", "Fixed", 2);
-        model.component(comp).physics("solid").feature("fix1").selection().set(ints(sink));
+        model.component(comp).physics("solid").feature("fix1").selection().set(ints(mount));
 
         model.component(comp).multiphysics().create("emh1", "ElectromagneticHeating");
         model.component(comp).multiphysics("emh1").set("EMHeat_physics", "ec");
