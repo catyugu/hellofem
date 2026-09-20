@@ -11,6 +11,10 @@ Usage:
     python run_case.py run <case-dir> [--no-comsol] [--no-clean]
     python run_case.py clean <case-dir>            # Stage 2 only
 
+A case directory is named by its path, or by its name alone when it lives in
+`app/mpfem/cases` (the regression set) — the long-running cases kept in
+`app/mpfem/cases-long` are run by path.
+
 The run action reuses a COMSOL reference only when its SHA-256 manifest matches
 both the hand-written Java source and every exported reference artifact.
 """
@@ -32,6 +36,7 @@ COMCOL = shutil.which("comsolcompile")
 COMSOLBATCH = shutil.which("comsolbatch")
 REFERENCE_MANIFEST = ".comsol-reference.json"
 REFERENCE_OUTPUTS = ("generated_model.java", "mesh.mphtxt", "result.txt")
+COMSOL_THREADS = 8
 
 
 def _sha256(path: Path) -> str:
@@ -233,7 +238,7 @@ def stage1_comsol(case_dir: Path, case_name: str):
             "-study",
             "std1",
             "-np",
-            "1",
+            str(COMSOL_THREADS),
         ],
         cwd=case_dir,
     )
@@ -321,7 +326,7 @@ def main():
     args = ap.parse_args()
 
     case_dir = args.case
-    if not case_dir.is_absolute():
+    if not case_dir.exists():
         case_dir = APP / "cases" / case_dir
     case_dir = case_dir.resolve()
     if not case_dir.exists():
