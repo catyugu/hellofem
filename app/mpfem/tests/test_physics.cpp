@@ -432,11 +432,10 @@ namespace {
         ht.add_thin_layer(
             constant_facet_property(f.mesh, boundary, layer_boundary, ds),
             constant_facet_property(f.mesh, boundary, layer_boundary, k));
-        ht.refresh(0.0);
         la::MatrixCSR<double> A(ht.pattern());
         la::Vector<double> b(ht.solution()->x()->index_map(),
             ht.solution()->x()->bs());
-        ht.assemble_steady(A, b, 0.0);
+        ht.assemble_system(A, b, 0.0);
         return A;
     }
 
@@ -583,7 +582,6 @@ TEST_CASE("HeatTransfer: a thin layer takes the material of its own boundary",
 
     LoadedMesh lm;
     lm.mesh = f.mesh;
-    lm.order = 1;
     lm.cell_tags = f.cells;
     lm.facet_tags = f.boundary;
     lm.num_domains = 1;
@@ -625,7 +623,6 @@ TEST_CASE("HeatTransfer: a thin layer takes the material of its own boundary",
     reference.add_thin_layer(
         constant_facet_property(f.mesh, f.boundary, 6, thickness),
         constant_facet_property(f.mesh, f.boundary, 6, k_upper));
-    reference.refresh(0.0);
     reference.solve_steady(0.0);
 
     // The app's own binding of the model.
@@ -684,7 +681,6 @@ TEST_CASE("HeatTransfer: a thin layer takes the material of its own boundary",
     single.add_thin_layer(
         constant_facet_property(f.mesh, f.boundary, 6, thickness),
         constant_facet_property(f.mesh, f.boundary, 6, k_lower));
-    single.refresh(0.0);
     single.solve_steady(0.0);
     const double against_single = worst_from(
         read(scalar_variable("T", "(K)", single.solution())));
@@ -715,7 +711,6 @@ TEST_CASE("HeatTransfer: a source is integrated over the domains it belongs to",
 
     LoadedMesh lm;
     lm.mesh = f.mesh;
-    lm.order = 1;
     lm.cell_tags = cells;
     lm.facet_tags = f.boundary;
     lm.num_domains = 2;
@@ -753,7 +748,6 @@ TEST_CASE("HeatTransfer: a source is integrated over the domains it belongs to",
     reference.add_source({1}, uniform(2.0));
     reference.add_source({2}, uniform(1.0));
     reference.add_temperature_bc(1, ScalarExpression(0.0));
-    reference.refresh(0.0);
     reference.solve_steady(0.0);
 
     const FieldKind* kind = field_kind("HeatTransfer");
@@ -802,7 +796,6 @@ TEST_CASE("HeatTransfer: a source is integrated over the domains it belongs to",
     swapped.add_source({1}, uniform(1.0));
     swapped.add_source({2}, uniform(2.0));
     swapped.add_temperature_bc(1, ScalarExpression(0.0));
-    swapped.refresh(0.0);
     swapped.solve_steady(0.0);
     const double against_swapped = worst_from(
         read(scalar_variable("T", "(K)", swapped.solution())));
@@ -922,12 +915,11 @@ TEST_CASE("SolidMechanics: a varying temperature's load is the exact integral",
         T->x()->array()[static_cast<std::size_t>(d)]
             = Tref + g * Tcoords[static_cast<std::size_t>(3 * d)];
     sm.set_thermal_expansion(T, constant_property(f.mesh, f.cells, alpha), Tref);
-    sm.refresh(0.0);
 
     la::MatrixCSR<double> A(sm.pattern());
     la::Vector<double> b(sm.solution()->x()->index_map(),
         sm.solution()->x()->bs());
-    sm.assemble_steady(A, b, 0.0);
+    sm.assemble_system(A, b, 0.0);
 
     // The load against v = (x, y, z): physical dof i is component i % 3 of its
     // node, whose coordinate is at coords[3 * i + (i % 3)].
@@ -960,12 +952,11 @@ TEST_CASE("SolidMechanics: AMG preconditioning keeps the block structure",
     sm.set_thermal_expansion(T->function(), alpha, 293.15);
     sm.add_fixed_bc(1); // x- face clamped
     sm.add_fixed_bc(2); // x+ face clamped
-    sm.refresh(0.0);
 
     la::MatrixCSR<double> A(sm.pattern());
     la::Vector<double> b(sm.solution()->function_space()->dofmap()->index_map,
         sm.solution()->function_space()->dofmap()->index_map_bs());
-    sm.assemble_steady(A, b, 0.0);
+    sm.assemble_system(A, b, 0.0);
 
     // The AMG-preconditioned CG solve of a matrix, from a zero guess.
     auto solve = [](const la::MatrixCSR<double>& M, const la::Vector<double>& rhs,
@@ -1164,7 +1155,6 @@ TEST_CASE("SolidMechanics: a linear displacement is exact on a tetrahedral mesh"
         sm.set_elastic(constant_property(mesh, cell_tags, 200e9),
             constant_property(mesh, cell_tags, 0.3));
         sm.add_fixed_bc(1); // x- face clamped
-        sm.refresh(0.0);
 
         auto u = sm.solution();
         const std::int32_t nnodes = sm.solution()->function_space()->dofmap()->index_map->size_local();
@@ -1181,7 +1171,7 @@ TEST_CASE("SolidMechanics: a linear displacement is exact on a tetrahedral mesh"
 
         la::MatrixCSR<double> A(sm.pattern());
         la::Vector<double> b(u->x()->index_map(), u->x()->bs());
-        sm.assemble_steady(A, b, 0.0);
+        sm.assemble_system(A, b, 0.0);
         A.mult(exact, b); // solve for the field we already know
 
         la::Vector<double> sol(u->x()->index_map(), u->x()->bs());
@@ -1214,12 +1204,11 @@ namespace {
         es.set_conductivity(constant_property(f.mesh, f.cells, 1.0));
         es.add_voltage_bc(2, ScalarExpression(1.0));
         es.add_voltage_bc(1, ScalarExpression(0.0));
-        es.refresh(0.0);
 
         auto x = es.solution()->x();
         la::MatrixCSR<double> A(es.pattern());
         la::Vector<double> b(x->index_map(), x->bs());
-        es.assemble_steady(A, b, 0.0);
+        es.assemble_system(A, b, 0.0);
 
         la::KrylovSolver<double> solver;
         solver.set_operator(A);

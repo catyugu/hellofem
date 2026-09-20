@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "case_scheduler.h"
+#include "defaults.h"
 #include "catch2/catch_approx.hpp"
 #include "catch2/catch_test_macros.hpp"
 #include "fixture.h"
@@ -26,7 +27,6 @@ namespace {
     {
         LoadedMesh lm;
         lm.mesh = box.mesh;
-        lm.order = 1;
         lm.cell_tags = box.cells;
         lm.facet_tags = box.boundary;
         lm.num_domains = 1;

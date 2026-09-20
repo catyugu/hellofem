@@ -4,8 +4,6 @@
 #include "case_scheduler.h"
 #include "java_parser.h"
 #include "mesh_loader.h"
-#include "physics_field.h"
-#include "time_scheme.h"
 
 #include "spdlog/spdlog.h"
 
@@ -45,28 +43,23 @@ int main(int argc, char* argv[])
         model.name, model.parameters.size(), model.materials.size(),
         model.physics.size(), model.couplings.size());
 
-    // Mesh, converted into SI through the model's geometry length unit.
+    // The mesh, converted into SI through the model's geometry length unit.
     LoadedMesh lm = load_mphtxt_mesh(mesh_path, model.length_unit);
-    spdlog::info("mesh: {} cells, {} domains, {} boundaries, order={}",
+    spdlog::info("mesh: {} cells, {} domains, {} boundaries",
         lm.mesh->topology()->index_map(lm.mesh->topology()->dim())->size_local(),
-        lm.num_domains, lm.num_boundaries, lm.order);
+        lm.num_domains, lm.num_boundaries);
 
-    // The time stepping is the model's own: the scheme and the order are the
-    // defaults the reference's solver runs at (see `TimeSettings`), and the
-    // accuracy its steps are held to is the reference's own physics-controlled
-    // tolerance — the tightest the model's physics interfaces recommend, or
-    // the tolerance a study step that states one asks for, which is what its
-    // reference solution was computed with.
-    TimeSettings time;
-    time.tolerance = model.study.tolerance
-        ? *model.study.tolerance
-        : study_time_tolerance(model.physics);
-
-    // Solve the model's study. A failing solve is reported where it happens:
-    // an exception that escapes `main` ends the process without its message,
-    // which reads as a crash rather than as the solver's own complaint.
+    // Solve the model's study. The time stepping is the model's own: the
+    // scheme and the order are the defaults the reference's solver runs at,
+    // and the accuracy its steps are held to is the reference's own
+    // physics-controlled tolerance, which the scheduler resolves from the
+    // model (see `TimeSettings`).
+    //
+    // A failing solve is reported where it happens: an exception that escapes
+    // `main` ends the process without its message, which reads as a crash
+    // rather than as the solver's own complaint.
     try {
-        CaseScheduler scheduler(model, lm, time);
+        CaseScheduler scheduler(std::move(model), std::move(lm));
         scheduler.run();
         scheduler.export_result(result_path);
     }

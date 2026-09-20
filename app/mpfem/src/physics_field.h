@@ -33,6 +33,13 @@ namespace hellofem::app {
     Variable scalar_variable(std::string name, std::string unit,
         std::shared_ptr<const fem::Function<double>> field);
 
+    /// Refuse a physics feature the app does not solve. A feature the model
+    /// creates is a condition the app has to solve, and one it skips is
+    /// invisible in a comparison of the result: the solve succeeds and the
+    /// field is of the wrong problem.
+    [[noreturn]] void unsupported_feature(
+        std::string_view physics, const PhysicsFeature& feature);
+
     /// One physics field of a case: the solver behind it, the variables it
     /// exports and the one-level step of the study. A field is built from one
     /// COMSOL physics interface of the model and registers its kind with

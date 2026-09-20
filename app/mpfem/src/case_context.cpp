@@ -29,10 +29,9 @@ namespace hellofem::app {
                                                  : it->second;
     }
 
-    CaseContext::CaseContext(const ModelScript& model, const LoadedMesh& mesh,
-        TimeSettings time)
-        : model_(model)
-        , mesh_(mesh)
+    CaseContext::CaseContext(ModelScript model, LoadedMesh mesh, TimeSettings time)
+        : model_(std::move(model))
+        , mesh_(std::move(mesh))
         , time_(std::move(time))
     {
         for (const auto& p : model_.parameters)
@@ -97,10 +96,16 @@ namespace hellofem::app {
         return coefficient;
     }
 
-    void CaseContext::publish(std::string_view symbol,
+    void CaseContext::bind_solution(std::string_view symbol,
         std::shared_ptr<const fem::Function<double>> solution)
     {
         solutions_[std::string(symbol)] = std::move(solution);
+    }
+
+    void CaseContext::publish_state(std::string_view symbol,
+        std::shared_ptr<const fem::Function<double>> state)
+    {
+        solutions_[std::string(symbol)] = std::move(state);
     }
 
     std::shared_ptr<const fem::Function<double>> CaseContext::solution(

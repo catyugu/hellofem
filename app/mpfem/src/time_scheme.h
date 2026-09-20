@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-#include "defaults.h"
 #include "la/Vector.h"
 
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -124,9 +124,15 @@ namespace hellofem::app {
         /// has for its physics (`study_time_tolerance`), so that a run measures
         /// the discretization rather than the difference between two step
         /// controllers, and a model that states its own tolerance replaces it.
-        /// The default is the tightest of the interfaces' values, which is
-        /// what a `TimeSettings` built without a model is held to.
-        double tolerance = solid_time_tolerance;
+        ///
+        /// It is resolved from the model rather than defaulted here: an
+        /// app-wide default would hold a heat-only study to the structural
+        /// interface's number, and a test to a different accuracy than the run
+        /// it stands for. `CaseScheduler` fills it from the model — the study
+        /// step's `rtol` where `usertol=on`, and the tightest of its physics
+        /// interfaces' recommended values otherwise — and a caller that drives
+        /// a `TimeStepper` itself states it.
+        std::optional<double> tolerance;
 
         /// The reference's absolute tolerance, which is `A = R *
         /// absolute_factor` under its `Factor` method (its default method, of

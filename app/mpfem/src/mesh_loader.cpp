@@ -4,6 +4,7 @@
 #include "mesh_loader.h"
 
 #include "io/mphtxt.h"
+#include "units.h"
 
 #include <algorithm>
 #include <set>
@@ -32,7 +33,6 @@ namespace hellofem::app {
     {
         io::MphtxtMesh raw = io::read_mphtxt(filename);
         LoadedMesh out;
-        out.order = raw.order;
         // The file's coordinates are in the model's geometry length unit;
         // the app works in SI.
         for (double& x : raw.mesh.geometry().x())

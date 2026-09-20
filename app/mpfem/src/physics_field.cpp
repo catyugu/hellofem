@@ -42,6 +42,13 @@ namespace hellofem::app {
         kind_table().push_back(std::move(kind));
     }
 
+    void unsupported_feature(std::string_view physics, const PhysicsFeature& feature)
+    {
+        throw std::runtime_error(std::string(physics) + ": the feature '"
+            + feature.tag + "' is of type '" + feature.type
+            + "', which the app does not solve");
+    }
+
     const FieldKind* field_kind(std::string_view physics_type)
     {
         for (const FieldKind& kind : kind_table())

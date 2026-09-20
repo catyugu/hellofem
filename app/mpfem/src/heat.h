@@ -70,17 +70,19 @@ namespace hellofem::app {
         /// time `t0`.
         void apply_initial_condition(double t0);
 
+        void constrain_solution(double t) override;
+
+    private:
         void refresh(double t) override;
         void assemble_steady(la::MatrixCSR<double>& A,
-            la::Vector<double>& b, double t) const override;
-        void constrain_solution(double t) override;
+            la::Vector<double>& b, double t) override;
 
         /// Assemble one time step of the heat equation with the scheme
         /// weights `w`:
         ///   A = a0 M + b0 K,
         ///   b = f - Σ_{k>=1} (a_k M + b_k K) u_k
         void assemble_step(la::MatrixCSR<double>& A, la::Vector<double>& b,
-            const TimeLevel& level) const override;
+            const TimeLevel& level) override;
 
     private:
         struct Convection {

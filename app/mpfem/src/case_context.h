@@ -20,12 +20,17 @@ namespace hellofem::app {
     /// variables of the model (a conductivity `k(T)`), which is COMSOL's own
     /// scoping rule: inside a physics-owned expression the dependent variable
     /// wins over a model parameter of the same name.
+    ///
+    /// The context owns the model and the mesh it was built from: the data a
+    /// physics binds itself against — a coefficient reading a material law, a
+    /// boundary value — is built from them and outlives the binding call.
     class CaseContext {
     public:
+        /// @param[in] model The model, taken by value.
+        /// @param[in] mesh The mesh, taken by value.
         /// @param[in] time Time stepping scheme and tolerance of a transient
         /// study (see `TimeSettings`).
-        CaseContext(const ModelScript& model, const LoadedMesh& mesh,
-            TimeSettings time);
+        CaseContext(ModelScript model, LoadedMesh mesh, TimeSettings time);
 
         const ModelScript& model() const { return model_; }
         const LoadedMesh& mesh() const { return mesh_; }
@@ -66,18 +71,25 @@ namespace hellofem::app {
         std::shared_ptr<FacetProperty> facet_property(
             std::string_view text, int boundary) const;
 
-        /// Publish the state the rest of the case reads a field at, under
-        /// `symbol`, the COMSOL dependent-variable name every model
-        /// expression refers to it by: the sampled state of a field the study
-        /// advances in time (see `TimeStepper::sample`), and the solution of
-        /// one it does not.
-        ///
-        /// A physics publishes its own solution before its coefficients, so
-        /// that a law of the physics reads the field it solves; the state
-        /// above is what a coupling of another physics — and the result
-        /// export — reads it at.
-        void publish(std::string_view symbol,
+        /// Publish the solution a physics solves under `symbol`, the COMSOL
+        /// dependent-variable name every model expression refers to it by, so
+        /// that the coefficients built after this call may read it. A physics
+        /// calls this before building its own coefficients, so that a law of
+        /// the physics reads the field it solves.
+        void bind_solution(std::string_view symbol,
             std::shared_ptr<const fem::Function<double>> solution);
+
+        /// Set the state the rest of the case reads the field at, under the
+        /// same symbol: the sampled state of a field the study advances in
+        /// time (see `TimeStepper::sample`), and the solution of one it does
+        /// not. This is what a coupling of another physics — and the result
+        /// export — reads (see `CaseScheduler::bring_to`).
+        ///
+        /// The two are separate calls because they answer different questions:
+        /// a field's own law reads the field it solves, and the rest of the
+        /// case reads the state the scheduler brought it to.
+        void publish_state(std::string_view symbol,
+            std::shared_ptr<const fem::Function<double>> state);
 
         /// The solution published under `symbol`, or nullptr.
         std::shared_ptr<const fem::Function<double>> solution(
@@ -89,8 +101,10 @@ namespace hellofem::app {
         /// lookups start from it and fill it per domain.
         std::shared_ptr<DomainProperty> zero_property() const;
 
-        const ModelScript& model_;
-        const LoadedMesh& mesh_;
+        /// The model and the mesh the context owns, and the time stepping of
+        /// the study (its tolerance resolved, see `CaseScheduler`).
+        ModelScript model_;
+        LoadedMesh mesh_;
         TimeSettings time_;
         std::unordered_map<std::string, double> params_;
         std::unordered_map<std::string,

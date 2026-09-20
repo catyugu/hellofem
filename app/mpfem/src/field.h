@@ -36,24 +36,20 @@ namespace hellofem::app {
             int value_dim);
         virtual ~FieldSolver() = default;
 
-        /// Evaluate the model data that depends on time or on the solution
-        /// (material properties, boundary values, source terms) at time `t`,
-        /// taking the current solution as the field state. Call before
-        /// assembling a system.
-        virtual void refresh(double t) = 0;
-
-        /// Assemble the linearized steady system `A u = b` at the current
-        /// state, with the Dirichlet conditions imposed. `t` is the time the
-        /// model data that depends on it (boundary values) is evaluated at.
-        virtual void assemble_steady(la::MatrixCSR<double>& A,
-            la::Vector<double>& b, double t) const = 0;
-
         /// Solve the steady system at time `t`, starting from the current
         /// solution (the previous level, or the previous linearization — both
         /// are good initial guesses). A solution-dependent material law makes
-        /// the system nonlinear, and the solve iterates it to convergence.
+        /// the system nonlinear, and the solve iterates it to convergence,
+        /// refreshing the model data of `t` before every iteration.
         /// @return Iterations used (0 for the single solve of a linear one).
         int solve_steady(double t);
+
+        /// Assemble the linearized steady system of time `t` into a matrix and
+        /// a vector the caller built on `pattern()`, with the model data of
+        /// `t` refreshed first. This is the operator `solve_steady` solves,
+        /// for a caller that inspects it.
+        void assemble_system(la::MatrixCSR<double>& A, la::Vector<double>& b,
+            double t);
 
         /// Impose the Dirichlet data of time `t` on the current solution. A
         /// state that is not the result of a solve (the initial one of a
@@ -70,6 +66,7 @@ namespace hellofem::app {
         /// All cells, the assembly range.
         std::vector<std::int32_t> cells() const;
 
+    protected:
         /// Solve the system `assemble` builds for the unknown `x`, with this
         /// field's own solver and settings (see `solve_system`). The solver
         /// is the field's, so it keeps what it built for an operator across
@@ -80,7 +77,18 @@ namespace hellofem::app {
                 la::MatrixCSR<double>&, la::Vector<double>&)>& assemble,
             la::Vector<double>& x);
 
-    protected:
+        /// Evaluate the model data that depends on time or on the solution
+        /// (material properties, boundary values, source terms) at time `t`,
+        /// taking the current solution as the field state. The assembly
+        /// entries call it, so no assembly reads the data of another time.
+        virtual void refresh(double t) = 0;
+
+        /// Assemble the linearized steady system `A u = b` at the current
+        /// state, with the Dirichlet conditions imposed. `t` is the time the
+        /// model data that depends on it (boundary values) is evaluated at.
+        virtual void assemble_steady(la::MatrixCSR<double>& A,
+            la::Vector<double>& b, double t) = 0;
+
         /// Dofs on the facets carrying the given 1-based boundary ids.
         std::vector<std::int32_t> boundary_dofs(const std::set<int>& ids) const;
 
@@ -198,11 +206,17 @@ namespace hellofem::app {
         {
         }
 
+        /// Assemble and solve one time step of the field's equation with the
+        /// scheme weights of `level`, from the current state; the model data
+        /// is refreshed at the level time first.
+        /// @return Iterations used.
+        int solve_step(const TimeLevel& level);
+
         /// Assemble one time step of the field's equation with the scheme
         /// weights of `level`; the Dirichlet data is taken at the level
         /// time.
         virtual void assemble_step(la::MatrixCSR<double>& A,
-            la::Vector<double>& b, const TimeLevel& level) const = 0;
+            la::Vector<double>& b, const TimeLevel& level) = 0;
     };
 
 } // namespace hellofem::app

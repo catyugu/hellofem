@@ -29,10 +29,15 @@ namespace hellofem::app {
     /// time come from the field kinds that registered themselves.
     class CaseScheduler {
     public:
-        /// @param[in] time Time stepping of a transient study: its scheme
-        /// and the tolerance its steps are held to (see `TimeSettings`).
-        CaseScheduler(const ModelScript& model, const LoadedMesh& mesh,
-            TimeSettings time);
+        /// @param[in] model The model to run, taken by value: the scheduler
+        /// owns the model and the mesh for the whole run (see `CaseContext`).
+        /// @param[in] mesh The mesh the model is solved on, taken by value.
+        /// @param[in] time Time stepping of a transient study. Its tolerance
+        /// may be left unset, and is then the model's own: the study step's
+        /// `rtol` where `usertol=on`, and the tightest of its physics
+        /// interfaces' recommended values otherwise (`defaults.h`) — the
+        /// accuracy the case's COMSOL reference was computed with.
+        CaseScheduler(ModelScript model, LoadedMesh mesh, TimeSettings time = {});
 
         /// Run the study.
         void run();
@@ -43,6 +48,14 @@ namespace hellofem::app {
         void export_result(const std::string& path) const;
 
     private:
+        /// The model and the mesh of the run, which the context owns.
+        const ModelScript& model() const { return ctx_.model(); }
+        const LoadedMesh& mesh() const { return ctx_.mesh(); }
+
+        /// The tolerance the run is held to: the one the caller stated, or the
+        /// model's own, resolved at construction (see `resolved_time`).
+        double tolerance() const { return *time_.tolerance; }
+
         /// The variable the model's export expression `name` refers to, or
         /// nullptr when no field exports it.
         const Variable* variable(std::string_view name) const;
@@ -91,7 +104,7 @@ namespace hellofem::app {
         /// level is that level itself — and one it does not is solved against
         /// that state. This is what makes a coupling or a result read the
         /// fields at one time: the sampled state is the one the case reads
-        /// them at (see `CaseContext::publish`).
+        /// them at (see `CaseContext::publish_state`).
         void bring_to(double t);
 
         /// Store the export expressions as the fields stand (see
@@ -104,11 +117,9 @@ namespace hellofem::app {
         void record_at(double t);
 
         // --- data ---
-        ModelScript model_;
         TimeSettings time_;
         CaseContext ctx_;
 
-        std::shared_ptr<const mesh::Mesh<double>> mesh_;
         std::vector<std::unique_ptr<PhysicsField>> fields_;
         std::vector<Snapshot> snapshots_;
 

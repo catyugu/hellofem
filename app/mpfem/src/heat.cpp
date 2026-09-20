@@ -27,8 +27,8 @@ namespace hellofem::app {
                       ctx.element_order(physics, "temperature")))
             {
                 // A material law of this physics reads the field's own
-                // solution: publish it before the coefficients are built.
-                ctx.publish("T", solver_->solution());
+                // solution: declare it before the coefficients are built.
+                ctx.bind_solution("T", solver_->solution());
                 solver_->set_conductivity(
                     ctx.material_property("thermalconductivity"));
                 // The transient heat operator needs the product of the two
@@ -139,9 +139,7 @@ namespace hellofem::app {
                                 ctx.expression(feature.required("Tinit")));
                     }
                     else
-                        throw std::runtime_error("heat: the feature '"
-                            + feature.tag + "' is of type '" + feature.type
-                            + "', which the app does not solve");
+                        unsupported_feature("heat", feature);
                 }
 
                 // The state the rest of the case reads this field at: the one
@@ -153,7 +151,7 @@ namespace hellofem::app {
                 const std::shared_ptr<const fem::Function<double>> state
                     = stepper_ ? stepper_->sampled() : solver_->solution();
                 variables_ = {scalar_variable("T", "(K)", state)};
-                ctx.publish("T", state);
+                ctx.publish_state("T", state);
                 spdlog::info("heat: bound heat transfer");
             }
 
@@ -332,7 +330,7 @@ namespace hellofem::app {
     }
 
     void HeatTransferSolver::assemble_step(la::MatrixCSR<double>& A,
-        la::Vector<double>& b, const TimeLevel& level) const
+        la::Vector<double>& b, const TimeLevel& level)
     {
         const TimeWeights& w = level.weights;
         const double t = level.time;
@@ -402,7 +400,7 @@ namespace hellofem::app {
     }
 
     void HeatTransferSolver::assemble_steady(la::MatrixCSR<double>& A,
-        la::Vector<double>& b, double t) const
+        la::Vector<double>& b, double t)
     {
         // The steady problem is the degenerate one-level scheme: K u = f.
         assemble_step(A, b, steady_level(t));

@@ -31,12 +31,13 @@ namespace hellofem::app {
         /// Zero displacement on a boundary.
         void add_fixed_bc(int boundary_id) { fixed_.insert(boundary_id); }
 
-        void refresh(double t) override;
-        void assemble_steady(la::MatrixCSR<double>& A,
-            la::Vector<double>& b, double t) const override;
         void constrain_solution(double t) override;
 
     private:
+        void refresh(double t) override;
+        void assemble_steady(la::MatrixCSR<double>& A,
+            la::Vector<double>& b, double t) override;
+
         /// Zero-displacement conditions of the fixed boundaries, expanded to
         /// every component of their dofs.
         std::vector<fem::DirichletBC<double>> fixed_bcs() const;

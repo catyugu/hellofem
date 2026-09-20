@@ -7,15 +7,30 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <utility>
 
 namespace hellofem::app {
+    namespace {
+
+        /// The tolerance the stepping is held to. A settings that carries none
+        /// is one nobody resolved (see `TimeSettings::tolerance`): the accuracy
+        /// of a run is its model's, not an app-wide default.
+        double resolved_tolerance(const TimeSettings& settings)
+        {
+            if (not settings.tolerance)
+                throw std::runtime_error("TimeStepper: the time tolerance is "
+                                         "not set (see TimeSettings)");
+            return *settings.tolerance;
+        }
+
+    } // namespace
 
     TimeStepper::TimeStepper(TimeDependentField& field, const TimeSettings& settings)
         : field_(field)
         , sample_(std::make_shared<fem::Function<double>>(
               field.solution()->function_space()))
-        , tolerance_(settings.tolerance)
+        , tolerance_(resolved_tolerance(settings))
         , absolute_factor_(settings.absolute_factor)
         , max_order_(settings.max_order)
         , keep_levels_(static_cast<std::size_t>(settings.max_order) + 2)
@@ -61,12 +76,7 @@ namespace hellofem::app {
         level.weights = w;
         level.time = t;
         level.history = history;
-        const int iterations = field_.solve(
-            [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
-                field_.refresh(t);
-                field_.assemble_step(A, b, level);
-            },
-            *field_.solution()->x());
+        const int iterations = field_.solve_step(level);
 
         spdlog::debug("stepping to t = {} s (dt = {} s, order {}, {} iterations)",
             t, steps.dt, static_cast<int>(w.a.size()) - 1, iterations);

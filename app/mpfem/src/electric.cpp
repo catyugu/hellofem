@@ -26,8 +26,8 @@ namespace hellofem::app {
                 , variables_ {scalar_variable("V", "(V)", solver_->solution())}
             {
                 // A material law of this physics may read its own dependent
-                // variable: publish the solution before its coefficients.
-                ctx.publish("V", solver_->solution());
+                // variable: declare the solution before its coefficients.
+                ctx.bind_solution("V", solver_->solution());
                 solver_->set_conductivity(
                     ctx.material_property("electricconductivity"));
 
@@ -57,9 +57,7 @@ namespace hellofem::app {
                         for (int id : feature.selection)
                             solver_->add_voltage_bc(id, ScalarExpression(0.0));
                     else if (not feature.type.empty())
-                        throw std::runtime_error("electric: the feature '"
-                            + feature.tag + "' is of type '" + feature.type
-                            + "', which the app does not solve");
+                        unsupported_feature("electric", feature);
                 }
                 spdlog::info("electric: bound conductive media");
             }
@@ -114,7 +112,7 @@ namespace hellofem::app {
     }
 
     void ElectrostaticsSolver::assemble_steady(la::MatrixCSR<double>& A,
-        la::Vector<double>& b, double t) const
+        la::Vector<double>& b, double t)
     {
         auto bcs = make_bcs(voltages_, t);
         auto rows = marked_rows(bcs);

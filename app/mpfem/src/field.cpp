@@ -439,8 +439,24 @@ namespace hellofem::app {
     {
         return solve(
             [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
-                refresh(t);
-                assemble_steady(A, b, t);
+                assemble_system(A, b, t);
+            },
+            *u_->x());
+    }
+
+    void FieldSolver::assemble_system(la::MatrixCSR<double>& A,
+        la::Vector<double>& b, double t)
+    {
+        refresh(t);
+        assemble_steady(A, b, t);
+    }
+
+    int TimeDependentField::solve_step(const TimeLevel& level)
+    {
+        return solve(
+            [&](la::MatrixCSR<double>& A, la::Vector<double>& b) {
+                refresh(level.time);
+                assemble_step(A, b, level);
             },
             *u_->x());
     }

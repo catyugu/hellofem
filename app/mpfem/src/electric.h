@@ -27,12 +27,13 @@ namespace hellofem::app {
             voltages_[boundary_id] = std::move(value);
         }
 
-        void refresh(double t) override;
-        void assemble_steady(la::MatrixCSR<double>& A,
-            la::Vector<double>& b, double t) const override;
         void constrain_solution(double t) override;
 
     private:
+        void refresh(double t) override;
+        void assemble_steady(la::MatrixCSR<double>& A,
+            la::Vector<double>& b, double t) override;
+
         std::shared_ptr<DomainProperty> sigma_;
         std::map<int, ScalarExpression> voltages_;
     };

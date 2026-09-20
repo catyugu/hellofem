@@ -91,6 +91,7 @@ namespace {
 
         TimeSettings settings;
         settings.max_order = order;
+        settings.tolerance = 1e-3;
         TimeStepper stepper(*solver, settings);
         stepper.start(0.0);
         const int steps = static_cast<int>(std::llround(t_end / dt));
@@ -118,6 +119,7 @@ namespace {
     {
         TimeSettings settings;
         settings.max_order = 2;
+        settings.tolerance = 1e-3;
         auto solver = manufactured_solver(problem);
         TimeStepper stepper(*solver, settings);
         stepper.start(0.0);
@@ -415,8 +417,12 @@ TEST_CASE("BDF: the weights follow the steps, the controller the estimates",
 
     // The orders above the app's range are refused rather than silently
     // stepped at the highest one it implements.
-    REQUIRE_THROWS(BdfController(TimeSettings {1, 3}, span));
-    REQUIRE_THROWS(BdfController(TimeSettings {3, 2}, span));
+    TimeSettings too_high;
+    too_high.max_order = 3;
+    REQUIRE_THROWS(BdfController(too_high, span));
+    TimeSettings inverted;
+    inverted.min_order = 3;
+    REQUIRE_THROWS(BdfController(inverted, span));
 }
 
 TEST_CASE("Transient heat: time scheme order on a manufactured solution", "[app][transient]")
@@ -585,7 +591,9 @@ TEST_CASE("Transient heat: a solution-independent nonlinear law matches the line
         solver->set_initial_temperature(ScalarExpression(0.0));
         solver->apply_initial_condition(0.0);
 
-        TimeStepper stepper(*solver, TimeSettings {});
+        TimeSettings settings;
+        settings.tolerance = 1e-3;
+        TimeStepper stepper(*solver, settings);
         stepper.start(0.0);
         for (int n = 1; n <= 20; ++n)
             stepper.step(0.05 * n, 2);

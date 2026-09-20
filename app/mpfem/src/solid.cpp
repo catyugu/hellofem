@@ -5,6 +5,7 @@
 
 #include "defaults.h"
 #include "kernels.h"
+#include "units.h"
 #include "physics_field.h"
 
 #include <spdlog/spdlog.h>
@@ -63,9 +64,7 @@ namespace hellofem::app {
                         for (int id : feature.selection)
                             solver_->add_fixed_bc(id);
                     else if (not feature.type.empty())
-                        throw std::runtime_error("solid: the feature '"
-                            + feature.tag + "' is of type '" + feature.type
-                            + "', which the app does not solve");
+                        unsupported_feature("solid", feature);
                     // The elastic material feature states where its E and nu
                     // come from; the app takes them from the model's material,
                     // so one that states its own is a material it does not
@@ -175,7 +174,7 @@ namespace hellofem::app {
     }
 
     void SolidMechanicsSolver::assemble_steady(la::MatrixCSR<double>& A,
-        la::Vector<double>& b, double t) const
+        la::Vector<double>& b, double t)
     {
         (void)t; // the elastic law and the fixed boundaries carry no time
         auto bcs = fixed_bcs();

@@ -30,7 +30,8 @@ namespace hellofem::app {
     public:
         /// Advance `field` at the accuracy of `settings` (its relative and
         /// absolute tolerance, and the order range whose level history the
-        /// error estimates reach over).
+        /// error estimates reach over). The tolerance must be resolved (see
+        /// `TimeSettings`).
         TimeStepper(TimeDependentField& field, const TimeSettings& settings);
 
         /// Record the current solution (the initial state, already prepared

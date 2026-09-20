@@ -5,6 +5,7 @@
 
 #include "mesh/utils.h"
 #include "spdlog/spdlog.h"
+#include "units.h"
 
 #include <algorithm>
 #include <fstream>
@@ -14,17 +15,31 @@
 #include <utility>
 
 namespace hellofem::app {
+    namespace {
 
-    CaseScheduler::CaseScheduler(const ModelScript& model, const LoadedMesh& lm,
-        TimeSettings time)
-        : model_(model)
-        , time_(std::move(time))
-        , ctx_(model_, lm, time_)
-        , mesh_(lm.mesh)
+        /// The time stepping of a study: the tolerance the caller states, or
+        /// the model's own — the study step's `rtol` where `usertol=on`, and
+        /// the tightest of its physics interfaces' recommended values
+        /// otherwise, which is the accuracy its COMSOL reference was computed
+        /// with (see `defaults.h`).
+        TimeSettings resolved_time(TimeSettings time, const ModelScript& model)
+        {
+            if (not time.tolerance)
+                time.tolerance = model.study.tolerance
+                    ? *model.study.tolerance
+                    : study_time_tolerance(model.physics);
+            return time;
+        }
+
+    } // namespace
+
+    CaseScheduler::CaseScheduler(ModelScript model, LoadedMesh mesh, TimeSettings time)
+        : time_(resolved_time(std::move(time), model))
+        , ctx_(std::move(model), std::move(mesh), time_)
     {
         // One field per physics interface of the model, in the model's own
         // order: that order is the solve order of a level.
-        for (const Physics& physics : model_.physics) {
+        for (const Physics& physics : ctx_.model().physics) {
             const FieldKind* kind = field_kind(physics.type);
             if (not kind)
                 throw std::runtime_error(
@@ -41,7 +56,7 @@ namespace hellofem::app {
         // The variables the model's Data export writes, in its own order. An
         // expression no field provides is refused here: written as a column
         // of zeros it would read as a solved field that is uniformly zero.
-        for (const std::string& name : model_.export_config.expressions) {
+        for (const std::string& name : ctx_.model().export_config.expressions) {
             const Variable* found = variable(name);
             if (not found)
                 throw std::runtime_error(
@@ -55,7 +70,7 @@ namespace hellofem::app {
 
     void CaseScheduler::resolve_vertices()
     {
-        auto [vc, vshape] = mesh::compute_vertex_coords(*mesh_);
+        auto [vc, vshape] = mesh::compute_vertex_coords(*mesh().mesh);
         const std::size_t nv = vshape[1];
 
         // The vertex coordinates are component-major; the evaluator wants
@@ -66,8 +81,8 @@ namespace hellofem::app {
                 vertex_points_[i * 3 + static_cast<std::size_t>(q)]
                     = vc[q * nv + i];
 
-        const int tdim = mesh_->topology()->dim();
-        auto c_to_v = mesh_->topology()->connectivity(tdim, 0);
+        const int tdim = mesh().mesh->topology()->dim();
+        auto c_to_v = mesh().mesh->topology()->connectivity(tdim, 0);
         vertex_cells_.assign(nv, -1);
         for (std::int32_t c = 0;
             c < static_cast<std::int32_t>(c_to_v->num_nodes()); ++c)
@@ -78,14 +93,14 @@ namespace hellofem::app {
 
     void CaseScheduler::run()
     {
-        const std::vector<double>& times = model_.study.times;
-        if (model_.study.transient and times.size() < 2)
+        const std::vector<double>& times = model().study.times;
+        if (model().study.transient and times.size() < 2)
             throw std::runtime_error(
                 "CaseScheduler: a transient study needs at least two output times");
-        if (model_.study.transient)
+        if (model().study.transient)
             spdlog::info("transient: {} output times, steps held to a local error "
                          "of {} relative",
-                times.size(), time_.tolerance);
+                times.size(), tolerance());
 
         // The first level is the state the fields prepare for themselves: the
         // initial values of a field the study advances, and the constraints
@@ -94,8 +109,7 @@ namespace hellofem::app {
         const double t0 = times.empty() ? 0.0 : times.front();
         for (const auto& field : fields_)
             field->initialize(t0);
-        bring_to(t0);
-        record(t0);
+        record_at(t0);
 
         std::vector<TimeStepper*> steppers;
         for (const auto& field : fields_)
@@ -104,7 +118,7 @@ namespace hellofem::app {
 
         // A transient study is stepped by the error test of its scheme: the
         // output times are the times its steps are held to, not its steps.
-        if (model_.study.transient)
+        if (model().study.transient)
             advance_adaptive(steppers, times);
     }
 
@@ -181,7 +195,7 @@ namespace hellofem::app {
                             + std::to_string(control.step_size())
                             + " s and the local error is still "
                             + std::to_string(error.at) + "; the tolerance "
-                            + std::to_string(time_.tolerance)
+                            + std::to_string(tolerance())
                             + " cannot be met on this interval");
                     continue;
                 }
@@ -323,13 +337,13 @@ namespace hellofem::app {
         const std::size_t nt = snapshots_.size();
         if (nt == 0)
             throw std::runtime_error("CaseScheduler: no result to export");
-        const bool per_time = model_.study.transient;
+        const bool per_time = model().study.transient;
 
         std::ofstream out(path);
         if (!out)
             throw std::runtime_error("cannot open " + path);
         out << std::setprecision(17);
-        out << "% Model:              " << model_.name << ".mph\n";
+        out << "% Model:              " << model().name << ".mph\n";
         out << "% Version:            COMSOL 6.2.0.290\n";
         out << "% Dimension:          3\n";
         out << "% Nodes:              " << nv << "\n";
@@ -337,7 +351,7 @@ namespace hellofem::app {
         out << "% Description:        ";
         for (std::size_t k = 0; k < nk; ++k)
             out << (k ? ", " : "") << columns_[k]->name;
-        out << "% Length unit:        " << model_.length_unit << "\n";
+        out << "% Length unit:        " << model().length_unit << "\n";
         out << "% x                       y                        z                        ";
         for (const Snapshot& snapshot : snapshots_)
             for (std::size_t k = 0; k < nk; ++k) {
@@ -350,9 +364,9 @@ namespace hellofem::app {
         for (std::size_t i = 0; i < nv; ++i) {
             // The coordinates go out in the model's geometry length unit,
             // which is what COMSOL's own data export writes.
-            out << from_si(vertex_points_[3 * i], model_.length_unit) << "  "
-                << from_si(vertex_points_[3 * i + 1], model_.length_unit) << "  "
-                << from_si(vertex_points_[3 * i + 2], model_.length_unit);
+            out << from_si(vertex_points_[3 * i], model().length_unit) << "  "
+                << from_si(vertex_points_[3 * i + 1], model().length_unit) << "  "
+                << from_si(vertex_points_[3 * i + 2], model().length_unit);
             for (const Snapshot& snapshot : snapshots_)
                 for (std::size_t k = 0; k < nk; ++k)
                     out << "  " << snapshot.columns[i * nk + k];
